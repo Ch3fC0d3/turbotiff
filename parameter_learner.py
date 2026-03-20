@@ -116,7 +116,7 @@ class ParameterLearner:
     def get_learned_params(self, curve_type: str) -> Dict[str, float]:
         """Get learned parameters with confidence"""
         if curve_type not in self.learned_params:
-            self.learn_params(curve_type)
+            self.learn_parameters(curve_type)
         
         return {
             'parameters': self.learned_params[curve_type],

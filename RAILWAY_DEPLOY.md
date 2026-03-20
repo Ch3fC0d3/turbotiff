@@ -12,12 +12,12 @@ Railway.app is better for your TurboTIFFLAS app because:
 
 1. **Push code to GitHub** (if not already):
    ```bash
-   cd D:\Users\gabep\Desktop\turbotifflas
+   cd D:\Users\gabep\Desktop\TurboTIFFLAS
    git init
    git add .
    git commit -m "TIFF to LAS web app"
    git branch -M main
-   git remote add origin https://github.com/yourusername/turbotifflas.git
+   git remote add origin https://github.com/Ch3fC0d3/TurboTIFFLAS.git
    git push -u origin main
    ```
 
@@ -25,11 +25,11 @@ Railway.app is better for your TurboTIFFLAS app because:
    - Go to https://railway.app
    - Click "Start a New Project"
    - Choose "Deploy from GitHub repo"
-   - Select your `turbotifflas` repository
+   - Select your `TurboTIFFLAS` repository
    - Railway auto-detects Python and deploys!
 
 3. **Get your URL**:
-   - Railway gives you a URL like: `https://turbotifflas-production.up.railway.app`
+   - Railway gives you a URL like: `https://TurboTIFFLAS-production.up.railway.app`
    - Share this with users!
 
 ### Option 2: Deploy from CLI
@@ -41,7 +41,7 @@ Railway.app is better for your TurboTIFFLAS app because:
 
 2. **Login and deploy**:
    ```bash
-   cd D:\Users\gabep\Desktop\turbotifflas
+   cd D:\Users\gabep\Desktop\TurboTIFFLAS
    railway login
    railway init
    railway up
@@ -68,7 +68,7 @@ Railway uses these files (already created):
 - `requirements.txt` - Python dependencies
 - `web_app.py` - Flask app (runs on port from $PORT env var)
 - `railway.json` - Deployment config (optional)
-- `deploy_models/testtiflas_black_seg_v2_pairs_wvgs.pt` - tracked fallback black model used on GitHub deploys
+- `deploy_models/TurboTIFFLAS_black_seg_v2_pairs_wvgs.pt` - tracked fallback black model used on GitHub deploys
 
 ## 💰 Cost Estimate
 
@@ -97,7 +97,7 @@ If you want `Save bad black segment`, `Save corrected black segment`, and the ne
 3. Add this variable:
 
 ```env
-TURBOTIFFLAS_TRAINING_CAPTURES_DIR=/data/training_captures
+TurboTIFFLAS_TRAINING_CAPTURES_DIR=/data/training_captures
 ```
 
 Optional if you later want to load a model from the volume:

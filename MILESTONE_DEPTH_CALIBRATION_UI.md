@@ -2,7 +2,7 @@
 
 **Date Completed:** November 23, 2024  
 **Commit:** `8e542ae`  
-**Repository:** <https://github.com/Ch3fC0d3/turbotifflas>
+**Repository:** <https://github.com/Ch3fC0d3/TurboTIFFLAS>
 
 ---
 

@@ -4,7 +4,7 @@
 
 Your TurboTIFFLAS web app is ready with:
 - ✅ 100MB file upload support
-- ✅ Code pushed to GitHub: https://github.com/Ch3fC0d3/turbotifflas
+- ✅ Code pushed to GitHub: https://github.com/Ch3fC0d3/TurboTIFFLAS
 - ✅ Google Vision API integration (optional OCR)
 - ✅ Ready to deploy to Railway
 
@@ -16,12 +16,12 @@ Your TurboTIFFLAS web app is ready with:
 1. Go to https://railway.app
 2. Click "Start a New Project"
 3. Choose "Deploy from GitHub repo"
-4. Select `Ch3fC0d3/turbotifflas`
+4. Select `Ch3fC0d3/TurboTIFFLAS`
 5. Done! Railway gives you a live URL
 
 **Option B: Via CLI**
 ```bash
-cd D:\Users\gabep\Desktop\turbotifflas
+cd D:\Users\gabep\Desktop\TurboTIFFLAS
 railway login
 railway init
 railway up
@@ -58,7 +58,7 @@ Follow the detailed guide: `GOOGLE_VISION_SETUP.md`
 ## 📁 Project Structure
 
 ```
-turbotifflas/
+TurboTIFFLAS/
 ├── web_app.py              # Main Flask app (100MB support)
 ├── templates/index.html    # Web interface
 ├── requirements.txt        # Python dependencies
@@ -98,7 +98,7 @@ turbotifflas/
 
 ## 🎯 Your URLs
 
-**GitHub:** https://github.com/Ch3fC0d3/turbotifflas
+**GitHub:** https://github.com/Ch3fC0d3/TurboTIFFLAS
 **Railway:** (will be provided after deployment)
 
 ## 🆘 Troubleshooting
@@ -120,7 +120,7 @@ turbotifflas/
 
 - Railway docs: https://docs.railway.app
 - Google Vision docs: https://cloud.google.com/vision/docs
-- GitHub issues: https://github.com/Ch3fC0d3/turbotifflas/issues
+- GitHub issues: https://github.com/Ch3fC0d3/TurboTIFFLAS/issues
 
 ## 🎉 Ready to Deploy!
 

@@ -63,7 +63,7 @@
    - A JSON file will download automatically
    - File name: something like `turbotifflas-ocr-abc123.json`
    - **IMPORTANT**: Save this file securely - it's your API credential!
-   - Suggested location: `D:\Users\gabep\Desktop\turbotifflas\google-vision-key.json`
+   - Suggested location: `D:\Users\gabep\Desktop\TurboTIFFLAS\google-vision-key.json`
 
 ### Step 6: Add Key to .gitignore (Security!)
 
@@ -83,7 +83,7 @@ If not, add it now to prevent accidentally pushing your key to GitHub.
 
 1. **Set environment variable** (Windows PowerShell):
    ```powershell
-$env:GOOGLE_APPLICATION_CREDENTIALS="D:\Users\gabep\Desktop\turbotifflas\google-vision-key.json"
+$env:GOOGLE_APPLICATION_CREDENTIALS="D:\Users\gabep\Desktop\TurboTIFFLAS\google-vision-key.json"
    python web_app.py
    ```
 
@@ -91,7 +91,7 @@ $env:GOOGLE_APPLICATION_CREDENTIALS="D:\Users\gabep\Desktop\turbotifflas\google-
    Edit `web_app.py` and add after imports:
    ```python
    import os
-os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = r'D:\Users\gabep\Desktop\turbotifflas\google-vision-key.json'
+os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = r'D:\Users\gabep\Desktop\TurboTIFFLAS\google-vision-key.json'
    ```
 
 #### For Railway Deployment:

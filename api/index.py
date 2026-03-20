@@ -16,6 +16,7 @@ from typing import Dict, List, Tuple
 
 from web_app import write_las_simple as write_las_simple_v12
 from web_app import build_las_filename_from_metadata
+from app.services.image_processing import preprocess_curve_track
 
 app = Flask(__name__, template_folder='../templates', static_folder='../static')
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
@@ -70,15 +71,23 @@ def auto_detect_tracks(image_array):
     for i in range(1, len(vertical_sum)-1):
         if vertical_sum[i] > threshold and vertical_sum[i] > vertical_sum[i-1] and vertical_sum[i] > vertical_sum[i+1]:
             peaks.append(i)
+            
+    # Filter peaks that are too close to each other (e.g., edges of the same thick line)
+    w = image_array.shape[1]
+    min_dist = w * 0.05  # Assume a track is at least 5% of image width
     
-    # Group into tracks
-    if len(peaks) >= 2:
-        tracks = [(peaks[i], peaks[i+1]) for i in range(0, len(peaks)-1, 2)]
+    filtered_peaks = []
+    for p in peaks:
+        if not filtered_peaks or (p - filtered_peaks[-1]) >= min_dist:
+            filtered_peaks.append(p)
+            
+    # Group into tracks (a track is between two consecutive lines)
+    if len(filtered_peaks) >= 2:
+        tracks = [(int(filtered_peaks[i]), int(filtered_peaks[i+1])) for i in range(len(filtered_peaks)-1)]
     else:
         # Fallback: divide into 3 equal sections
-        w = image_array.shape[1]
         section_width = w // 3
-        tracks = [(i*section_width, (i+1)*section_width) for i in range(3)]
+        tracks = [(int(i*section_width), int((i+1)*section_width)) for i in range(3)]
     
     return tracks
 
@@ -166,6 +175,7 @@ def digitize():
         base_depth = compute_depth_vector(nrows, top_depth, bottom_depth)
         
         curve_data = {}
+        traces = {}
         
         for c in curves:
             name = c['name']
@@ -181,19 +191,19 @@ def digitize():
                 bb = blur + 1 if blur % 2 == 0 else blur
                 roi = cv2.GaussianBlur(roi, (bb, bb), 0)
             
-            if mode == 'red':
-                hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-                mask = hsv_red_mask(hsv)
-            else:
-                gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-                mask = black_mask(gray)
-            
-            kernel = np.ones((3, 3), np.uint8)
-            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, 1)
-            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, 1)
+            mask = preprocess_curve_track(roi, mode)
             
             xs = pick_curve_x_per_row(mask, min_run)
             xs = smooth_nanmedian(xs, smooth_window)
+            
+            # Create trace points for overlay (x_dom, y_dom)
+            trace_points = []
+            for y_idx, x_val in enumerate(xs):
+                if not np.isnan(x_val):
+                    # x_val is relative to left_px of roi, y_idx is relative to top
+                    trace_points.append([float(x_val + left_px), float(y_idx + top)])
+            
+            traces[name] = trace_points
             
             width_px = mask.shape[1]
             vals = np.full(xs.shape, np.nan, dtype=np.float32)
@@ -209,7 +219,8 @@ def digitize():
         return jsonify({
             'success': True,
             'las_content': las_content,
-            'filename': build_las_filename_from_metadata(header_metadata, default_name='digitized_log.las')
+            'filename': build_las_filename_from_metadata(header_metadata, default_name='digitized_log.las'),
+            'curve_traces': traces
         })
     except Exception as e:
         return jsonify({'error': f'Server error: {str(e)}'}), 500

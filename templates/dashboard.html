@@ -844,7 +844,7 @@
             </ol>
             <p style="font-size: 0.85em; color: #555;">Tip: The AI never overwrites your choices. Treat suggestions as starting points, especially for depth anchors and curve labels.</p>
             <p style="font-size: 0.85em; color: #555; margin-top: 4px;">More details (QuickSyn expectations, examples, troubleshooting):
-                <a href="https://github.com/Ch3fC0d3/turbotifflas#readme" target="_blank" rel="noopener noreferrer">see the full README on GitHub</a>.
+                <a href="https://github.com/Ch3fC0d3/TurboTIFFLAS#readme" target="_blank" rel="noopener noreferrer">see the full README on GitHub</a>.
             </p>
             <div class="intro-modal-actions">
                 <button type="button" class="btn" style="padding: 8px 16px; font-size: 0.9em;" onclick="closeIntroModal()">Got it</button>
@@ -854,7 +854,7 @@
 
     <div class="container">
         <div class="header">
-            <h1>TurboTIFFLAS</h1>
+            <img src="/static/images/logo.svg" alt="TifLAS Logo" style="height: 60px; margin-bottom: 10px; display: inline-block;">
             <p>Convert legacy well log images to standard LAS files using Computer Vision</p>
             <a href="/las_viewer" class="las-viewer-btn" onclick="openLasViewerWithData(event)">📈 LAS Viewer</a>
             <a href="/logout" class="logout-btn">Logout</a>
@@ -1969,9 +1969,9 @@
             const tracks = (typeof getTrackCalibrationsSnapshot === 'function')
                 ? getTrackCalibrationsSnapshot()
                 : null;
-            const applyToCurve = (curveId) => {
+            const applyToCurve = (curveId, force = false) => {
                 const s = getOverlaySettingsForCurve(curveId);
-                if (s.locked) return false;
+                if (!force && s.locked) return false;
                 if (Number.isFinite(next.lineWidth)) s.lineWidth = next.lineWidth;
                 if (Number.isFinite(next.lineLength)) s.lineLength = next.lineLength;
                 if (Number.isFinite(next.lineHeight)) s.lineHeight = next.lineHeight;
@@ -1986,19 +1986,67 @@
                 } else {
                     applyToCurve(target);
                 }
-            } else if (tracks && Array.isArray(tracks)) {
-                for (const t of tracks) {
-                    if (!t || !t.id) continue;
-                    applyToCurve(t.id);
+            } else {
+                // Apply to all known traces (union of tracks, traces, and existing settings)
+                const allIds = new Set();
+                
+                // 1. From Configured Tracks
+                if (tracks && Array.isArray(tracks)) {
+                    for (const t of tracks) {
+                        if (t && t.id) allIds.add(String(t.id).trim());
+                    }
                 }
-            } else if (lastCurveTraces && typeof lastCurveTraces === 'object') {
-                for (const k of Object.keys(lastCurveTraces)) {
-                    applyToCurve(k);
+                
+                // 2. From Rendered Traces
+                if (lastCurveTraces && typeof lastCurveTraces === 'object') {
+                    for (const k of Object.keys(lastCurveTraces)) {
+                        if (k) allIds.add(String(k).trim());
+                    }
+                }
+
+                // 3. From Existing Settings (History)
+                if (overlaySettingsByCurveId && typeof overlaySettingsByCurveId === 'object') {
+                    for (const k of Object.keys(overlaySettingsByCurveId)) {
+                        if (k) allIds.add(String(k).trim());
+                    }
+                }
+
+                console.log('[updateOverlaySize] Target is All. Updating curves:', Array.from(allIds));
+                console.log('[updateOverlaySize] Global settings:', { 
+                    lineWidth: overlayLineWidth, 
+                    lineLength: overlayLineLength, 
+                    lineHeight: overlayLineHeight, 
+                    pointSize: overlayPointSize 
+                });
+
+                let updatedCount = 0;
+                for (const id of allIds) {
+                    try {
+                        // Force update for "All" selection, ignoring individual locks
+                        const updated = applyToCurve(id, true);
+                        if (updated) updatedCount++;
+                    } catch (err) {
+                        console.warn(`[updateOverlaySize] Error updating curve ${id}:`, err);
+                    }
+                }
+                // Optional: show status to confirm batch update
+                const idList = Array.from(allIds).join(', ');
+                if (updatedCount > 0) {
+                    // showStatus(`Updated ${updatedCount} curves: ${idList}`, 'info');
+                } else {
+                    console.warn('[updateOverlaySize] No curves were updated despite "All" selection.');
                 }
             }
 
-            if (lastCurveTraces) {
-                renderCurveTraceOverlays(lastCurveTraces);
+            try {
+                if (lastCurveTraces) {
+                    renderCurveTraceOverlays(lastCurveTraces);
+                } else if (window.lastCurveTraces) {
+                    renderCurveTraceOverlays(window.lastCurveTraces);
+                }
+            } catch (err) {
+                console.error('Render failed in updateOverlaySize:', err);
+                showStatus('Overlay render error: ' + err.message, 'error');
             }
 
             saveOverlaySettingsToStorage();
@@ -2407,6 +2455,8 @@
             const numCurvesInput = document.getElementById('numCurves');
             const numCurves = numCurvesInput ? (parseInt(numCurvesInput.value) || 0) : 0;
             const tracks = [];
+            const usedIds = {};
+
             for (let i = 0; i < numCurves; i++) {
                 const leftPxEl = document.getElementById(`leftPx${i}`);
                 const rightPxEl = document.getElementById(`rightPx${i}`);
@@ -2434,14 +2484,25 @@
                 const unitEl = document.getElementById(`unit${i}`);
                 const lasUnitEl = document.getElementById(`lasUnit${i}`);
 
-                const id = (lasMnemonicEl && lasMnemonicEl.value
+                let baseId = (lasMnemonicEl && lasMnemonicEl.value
                     ? lasMnemonicEl.value.trim()
                     : (typeEl && typeEl.value ? typeEl.value : `CURVE${i + 1}`));
+                
+                baseId = baseId.toUpperCase();
+                let uniqueId = baseId;
+                
+                if (usedIds[baseId]) {
+                    const n = usedIds[baseId] + 1;
+                    usedIds[baseId] = n;
+                    uniqueId = `${baseId}_${n}`;
+                } else {
+                    usedIds[baseId] = 1;
+                }
 
                 tracks.push({
-                    id: id.toUpperCase(),
+                    id: uniqueId,
                     index: i,
-                    name: typeEl && typeEl.value ? typeEl.value : id,
+                    name: typeEl && typeEl.value ? typeEl.value : baseId,
                     displayName: nameEl && nameEl.value ? nameEl.value : '',
                     leftX: leftXAdj,
                     rightX: rightXAdj,
@@ -8007,12 +8068,36 @@
                 : null;
 
             const curveNames = Object.keys(curveTraces);
+            const globalTarget = getOverlayTargetCurveId();
+            const isAllUnlocked = globalTarget === '__all_unlocked__';
+
             for (const name of curveNames) {
                 const points = curveTraces[name] || [];
                 if (!points.length) continue;
 
                 ensureOverlaySettingsForCurve(name);
                 const curveSettings = getOverlaySettingsForCurve(name);
+                const isLocked = !!(curveSettings && curveSettings.locked);
+
+                // If "All (unlocked)" is selected, strictly enforce the global slider values for rendering
+                // regardless of individual lock state. This matches user expectation that the
+                // global slider controls everything visible.
+                
+                let effectiveLineWidth = (curveSettings && Number.isFinite(curveSettings.lineWidth)) ? curveSettings.lineWidth : (overlayLineWidth || 2);
+                let effectiveLineLength = (curveSettings && Number.isFinite(curveSettings.lineLength)) ? curveSettings.lineLength : (overlayLineLength || 12);
+                let effectiveLineHeight = (curveSettings && Number.isFinite(curveSettings.lineHeight)) ? curveSettings.lineHeight : (overlayLineHeight || 2);
+                let effectivePointSize = (curveSettings && Number.isFinite(curveSettings.pointSize)) ? curveSettings.pointSize : (overlayPointSize || 0.8);
+
+                if (isAllUnlocked) {
+                    if (Number.isFinite(overlayLineWidth)) effectiveLineWidth = overlayLineWidth;
+                    if (Number.isFinite(overlayLineLength)) effectiveLineLength = overlayLineLength;
+                    if (Number.isFinite(overlayLineHeight)) effectiveLineHeight = overlayLineHeight;
+                    if (Number.isFinite(overlayPointSize)) effectivePointSize = overlayPointSize;
+                }
+
+                // Debug log to verify thickness application
+                // console.log(`[renderCurveTraceOverlays] Curve: ${name}, AllUnlocked: ${isAllUnlocked}, GlobalWidth: ${overlayLineWidth}, EffectiveWidth: ${effectiveLineWidth}`);
+
                 const curveStyle = (curveSettings && curveSettings.style) ? String(curveSettings.style) : defaultStyle;
                 const compactOverlay = curveStyle === 'compact';
                 const crispOverlay = curveStyle === 'crisp';
@@ -8083,9 +8168,9 @@
                 if (showLine) {
                     // Main line thickness comes from the Line slider.
                     // Stick thickness comes from the Line height slider (fallback to Line).
-                    const mainThickness = Math.max(0.1, (curveSettings && Number.isFinite(curveSettings.lineWidth)) ? curveSettings.lineWidth : (overlayLineWidth || 4));
-                    const stickThickness = Math.max(0.1, (curveSettings && Number.isFinite(curveSettings.lineHeight)) ? curveSettings.lineHeight : ((overlayLineHeight || mainThickness)));
-                    const stickLen = Math.max(2.0, (curveSettings && Number.isFinite(curveSettings.lineLength)) ? curveSettings.lineLength : (overlayLineLength || stickThickness * 6));
+                    const mainThickness = Math.max(0.1, effectiveLineWidth);
+                    const stickThickness = Math.max(0.1, effectiveLineHeight);
+                    const stickLen = Math.max(2.0, effectiveLineLength);
                     const halfStick = stickLen * 0.5;
 
                     // First, draw a thin connecting polyline to guarantee continuity.
@@ -8360,14 +8445,18 @@
                 }
             }
 
-            // Render ML predicted curves in magenta
+            // Render ML predicted curves (make them responsive to settings too)
             if (window.mlPredictedCurves && Array.isArray(window.mlPredictedCurves)) {
                 ctx.setLineDash([]);
+                
+                // Use global settings for ML curves since they don't have individual config entries
+                const mlMainThickness = (Number.isFinite(overlayLineWidth) ? overlayLineWidth : 2);
+                const mlPointRadius = (Number.isFinite(overlayPointSize) ? overlayPointSize : 0.8);
+
                 for (const mlCurve of window.mlPredictedCurves) {
                     if (!mlCurve || !mlCurve.points || !mlCurve.points.length) continue;
                     
                     const mlColor = mlCurve.color || '#FF00FF';
-                    const mlLineWidth = 2;
                     
                     // Draw line connecting all points
                     ctx.beginPath();
@@ -8381,18 +8470,19 @@
                         }
                     }
                     ctx.strokeStyle = mlColor;
-                    ctx.lineWidth = mlLineWidth;
+                    ctx.lineWidth = mlMainThickness;
                     ctx.globalAlpha = 0.8;
                     ctx.stroke();
                     ctx.globalAlpha = 1.0;
                     
-                    // Draw points every 50 pixels for visibility
+                    // Draw points every few pixels for visibility
+                    // Scale step based on point count to avoid clutter
                     const pointStep = Math.max(1, Math.floor(mlCurve.points.length / 100));
                     for (let i = 0; i < mlCurve.points.length; i += pointStep) {
                         const xDom = (mlCurve.points[i].x * scaleX) - viewLeft;
                         const yDom = (mlCurve.points[i].y * scaleY) - viewTop;
                         ctx.beginPath();
-                        ctx.arc(xDom, yDom, 2, 0, Math.PI * 2);
+                        ctx.arc(xDom, yDom, mlPointRadius, 0, Math.PI * 2);
                         ctx.fillStyle = mlColor;
                         ctx.fill();
                     }

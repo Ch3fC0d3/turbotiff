@@ -249,5 +249,5 @@ Set `APP_VERSION` in your environment (e.g. `v0.5.0`) to track deployed builds.
 
 If you encounter problems or have feature ideas (new curve types, better OCR heuristics, etc.):
 
-- Open an issue on GitHub: [https://github.com/Ch3fC0d3/turbotifflas/issues](https://github.com/Ch3fC0d3/turbotifflas/issues)
+- Open an issue on GitHub: [https://github.com/Ch3fC0d3/TurboTIFFLAS/issues](https://github.com/Ch3fC0d3/TurboTIFFLAS/issues)
 - Include a short description and, if possible, a redacted sample image and LAS output.

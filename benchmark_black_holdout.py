@@ -277,7 +277,7 @@ def main():
     ap = argparse.ArgumentParser(description="Benchmark black-curve tracing on a holdout split from the dense TestTiflas archive.")
     ap.add_argument("--configs", default=r"D:\Users\gabep\Desktop\TestTiflas\temp_train_configs.json")
     ap.add_argument("--results", default=r"D:\Users\gabep\Desktop\TestTiflas\temp_train_results.json")
-    ap.add_argument("--dense-model", default=str(ROOT / "models" / "testtiflas_black_seg_v2.pt"))
+    ap.add_argument("--dense-model", default=str(ROOT / "models" / "TestTiflas_black_seg_v2.pt"))
     ap.add_argument("--legacy-model", default=str(ROOT / "curve_trace_model.pt"))
     ap.add_argument("--holdout-pct", type=float, default=20.0)
     ap.add_argument("--limit", type=int, default=64, help="0 means evaluate the full holdout split.")
