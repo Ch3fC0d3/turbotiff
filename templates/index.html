@@ -83,7 +83,7 @@
                     </div>
                 </div>
                 <div class="flex items-center">
-                    <a href="/login" class="bg-primary-600 hover:bg-primary-500 text-white px-4 py-2 rounded-md text-sm font-medium transition-colors border border-primary-500">
+                    <a href="/login" class="bg-[#69C21A] hover:bg-[#86c611] text-slate-900 px-4 py-2 rounded-md text-sm font-bold transition-colors border border-transparent shadow-[0_0_10px_rgba(105,194,26,0.3)]">
                         Login
                     </a>
                 </div>
@@ -144,17 +144,24 @@
         </div>
         
         <!-- Content Overlay -->
-        <div class="relative max-w-7xl mx-auto py-24 px-4 sm:py-32 sm:px-6 lg:px-8 z-10">
-            <div class="bg-slate-900/60 backdrop-blur-sm p-8 rounded-2xl border border-slate-700/50 shadow-2xl max-w-4xl">
+        <div class="relative max-w-7xl mx-auto py-24 px-4 sm:py-32 sm:px-6 lg:px-8 z-10 flex flex-col items-center">
+            
+            <!-- Large Centered Logo -->
+            <div class="mb-8 w-full max-w-2xl flex justify-center">
+                <img src="/static/images/logo.svg" alt="TifLAS Logo" class="w-full h-auto drop-shadow-2xl opacity-90">
+            </div>
+
+            <!-- Hero Text Box -->
+            <div class="bg-slate-900/40 backdrop-blur-md p-10 rounded-3xl border border-slate-700/30 shadow-2xl max-w-4xl text-center">
                 <h1 class="text-4xl font-extrabold tracking-tight text-white sm:text-5xl lg:text-6xl">
                     Converting Legacy Well Log Images into <span class="text-primary-400">Structured Subsurface Data</span>
                 </h1>
-                <p class="mt-6 text-xl text-slate-200 max-w-3xl">
+                <p class="mt-6 text-xl text-slate-200 max-w-3xl mx-auto">
                     TifLAS is a software platform designed to convert scanned well log images into structured LAS files that can be used in modern subsurface analysis workflows.
                 </p>
-                <div class="mt-10">
-                    <a href="/login" class="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-md text-slate-900 bg-primary-400 hover:bg-primary-500 transition-colors shadow-lg shadow-primary-500/20">
-                        Get Started <i data-lucide="arrow-right" class="ml-2 h-5 w-5"></i>
+                <div class="mt-10 flex justify-center">
+                    <a href="/login" class="inline-flex items-center px-8 py-4 border border-transparent text-lg font-bold rounded-lg text-slate-900 bg-[#C5ED52] hover:bg-[#A4E033] transition-colors shadow-[0_0_20px_rgba(197,237,82,0.3)]">
+                        Get Started <i data-lucide="arrow-right" class="ml-2 h-6 w-6"></i>
                     </a>
                 </div>
             </div>
