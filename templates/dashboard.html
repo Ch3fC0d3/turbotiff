@@ -842,6 +842,37 @@
             font-size: 11px;
             color: #aaa;
         }
+            .mt-1 { margin-top: 4px; }
+        .mt-2 { margin-top: 8px; }
+        .mt-3 { margin-top: 12px; }
+        .mb-2 { margin-bottom: 8px; }
+        .p-1 { padding: 4px; }
+        .p-2 { padding: 8px; }
+        .p-0-5 { padding: 2px 4px; }
+        .w-full { width: 100%; }
+        .w-4 { width: 16px; }
+        .h-4 { height: 16px; }
+        .max-w-420 { max-width: 420px; }
+        .text-sm { font-size: 0.8rem; }
+        .text-xs { font-size: 0.75rem; }
+        .btn-sm { padding: 6px 12px; font-size: 0.85rem; }
+        .btn-xs { padding: 4px 10px; font-size: 0.8rem; }
+        .block { display: block; }
+        .font-semibold { font-weight: 600; }
+        .font-normal { font-weight: 400; }
+        .cursor-pointer { cursor: pointer; }
+        .select-none { user-select: none; }
+        .text-slate-200 { color: #e2e8f0; }
+        .text-slate-300 { color: #cbd5e1; }
+        .bg-slate-800 { background-color: #1e293b; }
+        .border-slate-700 { border-color: #334155; }
+        .rounded { border-radius: 4px; }
+        .flex-center { display: flex; align-items: center; }
+        .flex-wrap-center { display: flex; flex-wrap: wrap; align-items: center; }
+        .gap-1 { gap: 4px; }
+        .gap-2 { gap: 8px; }
+        .gap-3 { gap: 12px; }
+        .grid-2-col { display: grid; grid-template-columns: 1fr 1fr; }
     </style>
 </head>
 <body>
@@ -857,8 +888,8 @@
                 <li><strong>Digitize:</strong> Click <em>Digitize &amp; Download LAS</em>. The app generates a QuickSyn-compatible LAS file (with 0.5 ft sampling when depth unit is Feet), runs basic checks, and shows depth/curve sanity warnings so you can review before using the file. For QuickSyn workflows, leave depth unit as <em>Feet (FT)</em>.</li>
                 <li><strong>Review AI hints:</strong> Step 4 shows what the AI saw (e.g. header text like "SONIC DT" and sample values) to help you judge if its guesses make sense.</li>
             </ol>
-            <p style="font-size: 0.85em; color: #94a3b8;">Tip: The AI never overwrites your choices. Treat suggestions as starting points, especially for depth anchors and curve labels.</p>
-            <p style="font-size: 0.85em; color: #94a3b8; margin-top: 4px;">More details (QuickSyn expectations, examples, troubleshooting):
+            <p class="hint-text">Tip: The AI never overwrites your choices. Treat suggestions as starting points, especially for depth anchors and curve labels.</p>
+            <p class="hint-text mt-1">More details (QuickSyn expectations, examples, troubleshooting):
                 <a href="https://github.com/Ch3fC0d3/TurboTIFFLAS#readme" target="_blank" rel="noopener noreferrer">see the full README on GitHub</a>.
             </p>
             <div class="intro-modal-actions">
@@ -885,14 +916,14 @@
                 <h2>Step 1: Upload Image</h2>
                 <div class="upload-area" id="uploadArea">
                     <p>📁 Drag & drop your TIFF/PNG/JPG here or click to browse</p>
-                    <p style="font-size: 0.9em; color: #cbd5e1; margin-top: 10px;">⚠️ Max file size: 100MB</p>
+                    <p class="text-sm text-slate-300 mt-2">⚠️ Max file size: 100MB</p>
                     <input type="file" id="fileInput" accept="image/*" style="display:none">
                 </div>
                 <div id="imageInfo" class="hidden"></div>
             </div>
 
             <!-- Status Messages (positioned above workspace for visibility) -->
-            <div id="statusArea" style="margin-bottom: 10px;"></div>
+            <div id="statusArea" class="mb-2"></div>
 
             <!-- Main workspace: left viewer, right configuration -->
             <div id="workspace" class="workspace hidden">
@@ -933,7 +964,7 @@
                                 <select id="overlayCurveSelect" onchange="onOverlayCurveTargetChange()" style="max-width: 140px; font-size: 0.75rem; padding: 2px 6px;">
                                     <option value="__all_unlocked__">All (unlocked)</option>
                                 </select>
-                                <label style="display: flex; align-items: center; gap: 3px; cursor: pointer; font-weight: 400;" title="Lock this curve's overlay settings">
+                                <label class="flex-center gap-1 cursor-pointer font-normal" title="Lock this curve's overlay settings">
                                     <input type="checkbox" id="overlayCurveLock" onchange="toggleOverlayCurveLock()"> Lock
                                 </label>
                             </div>
@@ -964,25 +995,25 @@
                             </div>
 
                             <div class="control-section">
-                                <label style="display: flex; align-items: center; gap: 3px; cursor: pointer; font-weight: 400;">
+                                <label class="flex-center gap-1 cursor-pointer font-normal">
                                     <input type="checkbox" id="showLine" checked onchange="toggleOverlayVisibility()"> Line
                                 </label>
-                                <label style="display: flex; align-items: center; gap: 3px; cursor: pointer; font-weight: 400;" title="Show only the continuous line">
+                                <label class="flex-center gap-1 cursor-pointer font-normal" title="Show only the continuous line">
                                     <input type="checkbox" id="mainLineOnly" onchange="toggleOverlayVisibility()"> Main only
                                 </label>
-                                <label style="display: flex; align-items: center; gap: 3px; cursor: pointer; font-weight: 400;">
+                                <label class="flex-center gap-1 cursor-pointer font-normal">
                                     <input type="checkbox" id="showPoints" checked onchange="toggleOverlayVisibility()"> Pts
                                 </label>
                             </div>
 
                             <div class="control-section">
-                                <label style="display: flex; align-items: center; gap: 3px; cursor: pointer; font-weight: 400;">
+                                <label class="flex-center gap-1 cursor-pointer font-normal">
                                     <input type="checkbox" id="highContrastOverlay" checked onchange="toggleOverlayVisibility()"> High contrast
                                 </label>
-                                <label style="display: flex; align-items: center; gap: 3px; cursor: pointer; font-weight: 400;">
+                                <label class="flex-center gap-1 cursor-pointer font-normal">
                                     <input type="checkbox" id="crispOverlay" onchange="toggleOverlayVisibility()"> Crisp
                                 </label>
-                                <label style="display: flex; align-items: center; gap: 3px; cursor: pointer; font-weight: 400;">
+                                <label class="flex-center gap-1 cursor-pointer font-normal">
                                     <input type="checkbox" id="compactOverlay" onchange="toggleOverlayVisibility()"> Compact
                                 </label>
                             </div>
@@ -1014,7 +1045,7 @@
                             </div>
                             <div class="toolbar-divider"></div>
                             <div class="toolbar-group" style="display: flex; align-items: center; padding: 0 4px;">
-                                <label style="font-size: 0.75em; display: flex; align-items: center; gap: 4px; cursor: pointer; user-select: none; color: #e2e8f0;" title="Move neighbors with drag">
+                                <label class="flex-center gap-1 cursor-pointer text-xs select-none text-slate-200" title="Move neighbors with drag">
                                     <input type="checkbox" id="smoothEditToggle"> Smooth
                                 </label>
                             </div>
@@ -1040,72 +1071,72 @@
                     <div id="calibPanel-main" class="tab-panel">
                         <div class="step hidden" id="previewStep">
                             <h2>Step 2: Image Preview</h2>
-                            <p style="color: #cbd5e1; margin-top: 10px;">
+                            <p class="text-slate-300 mt-2">
                                 📐 Image dimensions: <span id="imageDims"></span>
                             </p>
-                            <p id="mousePixelReadout" style="color: #cbd5e1; font-size: 0.85em; margin-top: 4px;">
+                            <p id="mousePixelReadout" class="hint-text mt-1">
                                 Mouse pixel: (move over image)
                             </p>
-                            <p style="color: #cbd5e1; font-size: 0.85em; margin-top: 6px;">
+                            <p class="hint-text mt-1">
                                 Tip: Use the <strong>Top/Bottom depth</strong> fields below and the <strong>Top/Bottom pixel</strong> fields in Step 3 to align the depth guidelines with the printed scale; the mouse readout updates from those values.
                             </p>
-                            <div class="form-group" style="margin-top: 8px; max-width: 420px;">
+                            <div class="form-group mt-2 max-w-420">
                                 <label>Header / key (optional)</label>
-                                <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 4px;">
-                                    <button type="button" class="btn" style="padding: 6px 12px; font-size: 0.85em;" onclick="beginHeaderSelection()">Capture header/key from image</button>
-                                    <button type="button" class="btn" style="padding: 6px 12px; font-size: 0.85em;" onclick="clearHeaderSelection()">Clear header/key</button>
+                                <div class="flex-wrap-center mt-1">
+                                    <button type="button" class="btn" class="btn-sm" onclick="beginHeaderSelection()">Capture header/key from image</button>
+                                    <button type="button" class="btn" class="btn-sm" onclick="clearHeaderSelection()">Clear header/key</button>
                                 </div>
                                 <div class="hint-text" id="headerSelectionSummary">No header captured. Curve config will use defaults.</div>
                                 <div class="hint-text"><strong>To capture details:</strong> Click and drag a box over the <strong>entire header</strong> (including Company/Well info AND scale labels).</div>
                                 
                                 <!-- Header Metadata Inputs -->
-                                <div id="headerMetadataFields" style="margin-top: 12px; padding: 10px; background: #f8f9fa; border: 1px solid #e9ecef; border-radius: 4px;">
-                                    <label style="margin-bottom: 8px; display: block; font-weight: 600;">Header Details (for LAS export)</label>
-                                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                                <div id="headerMetadataFields" class="bg-slate-800 border-slate-700 rounded p-2 mt-3">
+                                    <label class="block font-semibold mb-2">Header Details (for LAS export)</label>
+                                    <div class="grid-2-col gap-2">
                                         <div>
-                                            <label for="headerWell" style="font-size: 0.8em;">Well Name</label>
-                                            <input type="text" id="headerWell" placeholder="WELL" style="width: 100%; padding: 4px;">
+                                            <label for="headerWell" class="text-sm">Well Name</label>
+                                            <input type="text" id="headerWell" placeholder="WELL" class="w-full p-1">
                                         </div>
                                         <div>
-                                            <label for="headerComp" style="font-size: 0.8em;">Company</label>
-                                            <input type="text" id="headerComp" placeholder="COMPANY" style="width: 100%; padding: 4px;">
+                                            <label for="headerComp" class="text-sm">Company</label>
+                                            <input type="text" id="headerComp" placeholder="COMPANY" class="w-full p-1">
                                         </div>
                                         <div>
-                                            <label for="headerApi" style="font-size: 0.8em;">API Number</label>
-                                            <input type="text" id="headerApi" placeholder="API" style="width: 100%; padding: 4px;">
+                                            <label for="headerApi" class="text-sm">API Number</label>
+                                            <input type="text" id="headerApi" placeholder="API" class="w-full p-1">
                                         </div>
                                         <div>
-                                            <label for="headerDate" style="font-size: 0.8em;">Date</label>
-                                            <input type="text" id="headerDate" placeholder="DATE" style="width: 100%; padding: 4px;">
+                                            <label for="headerDate" class="text-sm">Date</label>
+                                            <input type="text" id="headerDate" placeholder="DATE" class="w-full p-1">
                                         </div>
                                         <div>
-                                            <label for="headerFld" style="font-size: 0.8em;">Field</label>
-                                            <input type="text" id="headerFld" placeholder="FIELD" style="width: 100%; padding: 4px;">
+                                            <label for="headerFld" class="text-sm">Field</label>
+                                            <input type="text" id="headerFld" placeholder="FIELD" class="w-full p-1">
                                         </div>
                                         <div>
-                                            <label for="headerLoc" style="font-size: 0.8em;">Location</label>
-                                            <input type="text" id="headerLoc" placeholder="LOCATION" style="width: 100%; padding: 4px;">
+                                            <label for="headerLoc" class="text-sm">Location</label>
+                                            <input type="text" id="headerLoc" placeholder="LOCATION" class="w-full p-1">
                                         </div>
                                         <div>
-                                            <label for="headerCnty" style="font-size: 0.8em;">County</label>
-                                            <input type="text" id="headerCnty" placeholder="COUNTY" style="width: 100%; padding: 4px;">
+                                            <label for="headerCnty" class="text-sm">County</label>
+                                            <input type="text" id="headerCnty" placeholder="COUNTY" class="w-full p-1">
                                         </div>
                                         <div>
-                                            <label for="headerState" style="font-size: 0.8em;">State</label>
-                                            <input type="text" id="headerState" placeholder="STATE" style="width: 100%; padding: 4px;">
+                                            <label for="headerState" class="text-sm">State</label>
+                                            <input type="text" id="headerState" placeholder="STATE" class="w-full p-1">
                                         </div>
                                         <div>
-                                            <label for="headerProv" style="font-size: 0.8em;">Province</label>
-                                            <input type="text" id="headerProv" placeholder="PROVINCE" style="width: 100%; padding: 4px;">
+                                            <label for="headerProv" class="text-sm">Province</label>
+                                            <input type="text" id="headerProv" placeholder="PROVINCE" class="w-full p-1">
                                         </div>
                                         <div>
-                                            <label for="headerSrvc" style="font-size: 0.8em;">Service Co.</label>
-                                            <input type="text" id="headerSrvc" placeholder="SERVICE CO" style="width: 100%; padding: 4px;">
+                                            <label for="headerSrvc" class="text-sm">Service Co.</label>
+                                            <input type="text" id="headerSrvc" placeholder="SERVICE CO" class="w-full p-1">
                                         </div>
                                     </div>
                                 </div>
                             </div>
-                            <div class="form-group" style="margin-top: 8px; max-width: 420px;">
+                            <div class="form-group mt-2 max-w-420">
                                 <label>Depth values</label>
                                 <div class="depth-row">
                                     <div class="field">
@@ -1118,11 +1149,11 @@
                                     </div>
                                 </div>
                             </div>
-                            <div class="form-group" style="margin-top: 8px; max-width: 420px;">
+                            <div class="form-group mt-2 max-w-420">
                                 <label>Select log panel</label>
-                                <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 4px;">
-                                    <button type="button" class="btn" style="padding: 6px 12px; font-size: 0.85em;" onclick="beginPanelSelection()">Select panel from image</button>
-                                    <button type="button" class="btn" style="padding: 6px 12px; font-size: 0.85em;" onclick="clearPanelSelection()">Clear selection</button>
+                                <div class="flex-wrap-center mt-1">
+                                    <button type="button" class="btn" class="btn-sm" onclick="beginPanelSelection()">Select panel from image</button>
+                                    <button type="button" class="btn" class="btn-sm" onclick="clearPanelSelection()">Clear selection</button>
                                 </div>
                                 <div class="hint-text" id="selectionSummary">No panel selected. Using full image width and depth.</div>
                                 <div class="hint-text">Click and drag directly on the image to draw a selection box around the log copy you want to digitize.</div>
@@ -1148,7 +1179,7 @@
                                     </div>
                                 </div>
 
-                                <div class="grid" style="margin-top: 8px;">
+                                <div class="grid" class="mt-2">
                                     <div class="field">
                                         <label for="depthUnit">Depth unit</label>
                                         <select id="depthUnit">
@@ -1158,9 +1189,9 @@
                                     </div>
                                 </div>
                             </div>
-                            <div class="form-group" style="margin-top: 4px; max-width: 420px;">
-                                <button type="button" class="btn" style="padding: 6px 12px; font-size: 0.85em;" onclick="cropToWorkingPanel()">✂️ Crop to working panel</button>
-                                <div class="hint-text" style="margin-top: 4px;">
+                            <div class="form-group mt-1 max-w-420">
+                                <button type="button" class="btn" class="btn-sm" onclick="cropToWorkingPanel()">✂️ Crop to working panel</button>
+                                <div class="hint-text" class="mt-1">
                                     After selecting a panel and setting depth, crop so only that depth window is used as the working TIFF.
                                 </div>
                             </div>
@@ -1178,7 +1209,7 @@
                                         <label for="numCurves">Number of Curves (max 6)</label>
                                         <input type="number" id="numCurves" value="3" min="1" max="6">
                                         
-                                        <label for="snapThreshold" style="margin-top: 8px;">Snap Threshold (1.2 = 20% brighter)</label>
+                                        <label for="snapThreshold" class="mt-2">Snap Threshold (1.2 = 20% brighter)</label>
                                         <input type="number" id="snapThreshold" value="1.20" step="0.05" min="0.1" max="5.0" title="Lower (<1.0) = Greedier, Higher (>1.0) = Stricter">
 
                                         <div class="curve-action">
@@ -1191,8 +1222,8 @@
                                 </div>
 
                                 <div id="curvesContainer"></div>
-                                <div id="curveScaleSummary" class="hint-text" style="margin-top: 8px;"></div>
-                                <div class="form-group" style="margin-top: 8px;">
+                                <div id="curveScaleSummary" class="hint-text" class="mt-2"></div>
+                                <div class="form-group" class="mt-2">
                                     <label>Curve summary (list view)</label>
                                     <div class="curve-list-wrapper">
                                         <div id="curveListView" class="curve-list-summary hint-text"></div>
@@ -1217,27 +1248,27 @@
                                     </div>
                                 </div>
 
-                                <div class="form-group" style="margin-top: 10px; max-width: 420px;">
+                                <div class="form-group mt-2 max-w-420">
                                     <label>Manual curve edits (after digitize)</label>
-                                    <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
+                                    <div class="flex-wrap-center">
                                         <select id="editCurveSelect" style="max-width: 140px;">
                                             <option value="">(select curve)</option>
                                         </select>
-                                        <button class="btn" type="button" id="toggleEditModeBtn" onclick="toggleCurveEditMode()" style="padding: 4px 10px; font-size: 0.8em;">
+                                        <button class="btn" type="button" id="toggleEditModeBtn" onclick="toggleCurveEditMode()" class="btn-xs">
                                             Enable edit mode
                                         </button>
-                                        <span id="editModeStatus" class="hint-text" style="font-size: 0.8em;">Edit mode off</span>
+                                        <span id="editModeStatus" class="hint-text" class="text-sm">Edit mode off</span>
                                     </div>
-                                    <div style="display: flex; gap: 12px; align-items: center; margin-top: 6px;">
-                                        <div style="display: flex; align-items: center; gap: 6px;">
-                                            <input type="checkbox" id="snapToCurveToggle" style="cursor: pointer; width: 16px; height: 16px;">
-                                            <label for="snapToCurveToggle" style="font-size: 0.8em; cursor: pointer;">
+                                    <div class="flex-center gap-3 mt-1">
+                                        <div class="flex-center gap-2">
+                                            <input type="checkbox" id="snapToCurveToggle" class="cursor-pointer w-4 h-4">
+                                            <label for="snapToCurveToggle" class="text-sm cursor-pointer">
                                                 Snap to curve (AI assist)
                                             </label>
-                                            <label for="snapMaxDistanceSelect" style="font-size: 0.8em; cursor: pointer;">
+                                            <label for="snapMaxDistanceSelect" class="text-sm cursor-pointer">
                                                 strength:
                                             </label>
-                                            <select id="snapMaxDistanceSelect" style="font-size: 0.8em; padding: 2px 4px;">
+                                            <select id="snapMaxDistanceSelect" class="text-sm p-0-5">
                                                 <option value="8">tight</option>
                                                 <option value="15" selected>normal</option>
                                                 <option value="25">loose</option>
@@ -1247,12 +1278,12 @@
                                 <div class="hint-text" style="font-size: 0.8em; margin-top: 4px;">
                                         Drag points to adjust. Snap-to-curve helps find the nearest colored line. Ctrl+Z to undo.
                                     </div>
-                                    <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px;">
+                                    <div class="flex-wrap-center mt-2">
                                         <input type="text" id="blackSegmentNote" placeholder="note e.g. right shoulder missed" style="min-width: 260px; flex: 1 1 260px; font-size: 0.8em; padding: 5px 8px;">
-                                        <button class="btn" type="button" id="saveBadBlackSegmentBtn" onclick="saveBadBlackSegment()" style="padding: 4px 10px; font-size: 0.8em;">
+                                        <button class="btn" type="button" id="saveBadBlackSegmentBtn" onclick="saveBadBlackSegment()" class="btn-xs">
                                             Save bad black segment
                                         </button>
-                                        <button class="btn" type="button" id="saveCorrectedBlackSegmentBtn" onclick="saveCorrectedBlackSegment()" style="padding: 4px 10px; font-size: 0.8em;">
+                                        <button class="btn" type="button" id="saveCorrectedBlackSegmentBtn" onclick="saveCorrectedBlackSegment()" class="btn-xs">
                                             Save corrected black segment
                                         </button>
                                         <span class="hint-text" style="font-size: 0.78em;">
@@ -1281,9 +1312,9 @@
                     <h3>Ask AI about this log</h3>
                     <p class="hint-text">The AI sees OCR text and LAS curve statistics for this image. You can ask things like "Which curve is GR vs DT?" or "Do any curves look unreasonable?"</p>
                     <textarea id="aiChatQuestion" rows="3" style="width: 100%; margin-top: 6px;" placeholder="Type a question about the current log (after running Digitize)..."></textarea>
-                    <button type="button" class="btn" style="margin-top: 6px;" onclick="askAiAboutLog()">Ask AI</button>
+                    <button type="button" class="btn" class="mt-1" onclick="askAiAboutLog()">Ask AI</button>
                     <button type="button" class="btn" style="margin-top: 6px; margin-left: 8px;" onclick="askAiWhichCurveIsWhich()">Ask: which curve is which?</button>
-                    <div id="aiChatOutput" style="margin-top: 8px;"></div>
+                    <div id="aiChatOutput" class="mt-2"></div>
                 </div>
             </div>
         </div>
@@ -7010,7 +7041,7 @@
                             <input type="color" id="pointColor${i}" value="#00ffff">
                         </div>
                     </div>
-                    <div class="form-group" style="margin-top: 8px;">
+                    <div class="form-group" class="mt-2">
                         <label style="display: flex; align-items: center; gap: 6px; font-size: 0.85rem;">
                             <input type="checkbox" id="showTrace${i}" checked>
                             Show overlay trace
@@ -9650,7 +9681,7 @@
                             <div class="insight-block">
                                 <h3>Header OCR (key items)</h3>
                                 <div class="header-ocr-grid">${chips}</div>
-                                <div class="hint-text" style="margin-top: 4px;">
+                                <div class="hint-text" class="mt-1">
                                     Legend:
                                     <span class="header-ocr-tag header-ocr-tag-gr">GR / Gamma Ray</span>
                                     <span class="header-ocr-tag header-ocr-tag-rhob">RHOB / Density</span>
@@ -9670,3 +9701,5 @@
     </script>
 </body>
 </html>
+
+
