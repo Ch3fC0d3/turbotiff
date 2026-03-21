@@ -905,7 +905,7 @@
             <a href="/logout" class="logout-btn">Logout</a>
         </div>
         <div class="content">
-            <button type="button" class="btn mt-2" onclick="openIntroModal()">❓ How to use this tool</button>
+            <button type="button" class="btn" onclick="openIntroModal()">❓ How to use this tool</button>
         </div>
 
         <div class="content">
@@ -1082,8 +1082,8 @@
                             <div class="form-group mt-2 max-w-420">
                                 <label>Header / key (optional)</label>
                                 <div class="flex-wrap-center mt-1">
-                                    <button type="button" class="btn" class="btn-sm" onclick="beginHeaderSelection()">Capture header/key from image</button>
-                                    <button type="button" class="btn" class="btn-sm" onclick="clearHeaderSelection()">Clear header/key</button>
+                                    <button type="button" class="btn btn-sm" onclick="beginHeaderSelection()">Capture header/key from image</button>
+                                    <button type="button" class="btn btn-sm" onclick="clearHeaderSelection()">Clear header/key</button>
                                 </div>
                                 <div class="hint-text" id="headerSelectionSummary">No header captured. Curve config will use defaults.</div>
                                 <div class="hint-text"><strong>To capture details:</strong> Click and drag a box over the <strong>entire header</strong> (including Company/Well info AND scale labels).</div>
@@ -1151,8 +1151,8 @@
                             <div class="form-group mt-2 max-w-420">
                                 <label>Select log panel</label>
                                 <div class="flex-wrap-center mt-1">
-                                    <button type="button" class="btn" class="btn-sm" onclick="beginPanelSelection()">Select panel from image</button>
-                                    <button type="button" class="btn" class="btn-sm" onclick="clearPanelSelection()">Clear selection</button>
+                                    <button type="button" class="btn btn-sm" onclick="beginPanelSelection()">Select panel from image</button>
+                                    <button type="button" class="btn btn-sm" onclick="clearPanelSelection()">Clear selection</button>
                                 </div>
                                 <div class="hint-text" id="selectionSummary">No panel selected. Using full image width and depth.</div>
                                 <div class="hint-text">Click and drag directly on the image to draw a selection box around the log copy you want to digitize.</div>
@@ -1178,7 +1178,7 @@
                                     </div>
                                 </div>
 
-                                <div class="grid" class="mt-2">
+                                <div class="grid mt-2">
                                     <div class="field">
                                         <label for="depthUnit">Depth unit</label>
                                         <select id="depthUnit">
@@ -1189,7 +1189,7 @@
                                 </div>
                             </div>
                             <div class="form-group mt-1 max-w-420">
-                                <button type="button" class="btn" class="btn-sm" onclick="cropToWorkingPanel()">✂️ Crop to working panel</button>
+                                <button type="button" class="btn btn-sm" onclick="cropToWorkingPanel()">✂️ Crop to working panel</button>
                                 <div class="hint-text" class="mt-1">
                                     After selecting a panel and setting depth, crop so only that depth window is used as the working TIFF.
                                 </div>
@@ -1221,7 +1221,7 @@
                                 </div>
 
                                 <div id="curvesContainer"></div>
-                                <div id="curveScaleSummary" class="hint-text" class="mt-2"></div>
+                                <div id="curveScaleSummary" class="hint-text mt-2"></div>
                                 <div class="form-group" class="mt-2">
                                     <label>Curve summary (list view)</label>
                                     <div class="curve-list-wrapper">
@@ -1311,7 +1311,7 @@
                     <h3>Ask AI about this log</h3>
                     <p class="hint-text">The AI sees OCR text and LAS curve statistics for this image. You can ask things like "Which curve is GR vs DT?" or "Do any curves look unreasonable?"</p>
                     <textarea id="aiChatQuestion" rows="3" style="width: 100%; margin-top: 6px;" placeholder="Type a question about the current log (after running Digitize)..."></textarea>
-                    <button type="button" class="btn" class="mt-1" onclick="askAiAboutLog()">Ask AI</button>
+                    <button type="button" class="btn mt-1" onclick="askAiAboutLog()">Ask AI</button>
                     <button type="button" class="btn" style="margin-top: 6px; margin-left: 8px;" onclick="askAiWhichCurveIsWhich()">Ask: which curve is which?</button>
                     <div id="aiChatOutput" class="mt-2"></div>
                 </div>
@@ -9700,6 +9700,9 @@
     </script>
 </body>
 </html>
+
+
+
 
 
 
