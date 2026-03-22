@@ -128,9 +128,19 @@ def _current_user(require_access: bool = True):
         }
 
     user_id = session.get('user_id')
+    
+    # Check for impersonation
+    if session.get('impersonate_user_id') and session.get('is_admin'):
+        user_id = session.get('impersonate_user_id')
+        
     if not user_id:
         return None
     user = auth_billing.get_user_by_id(config.AUTH_DB_PATH, int(user_id))
+    
+    # If standard auth, check banned status
+    if user and user.get('is_banned') and not session.get('is_admin'):
+        session.clear()
+        return None
     if not user:
         session.pop('user_id', None)
         return None
@@ -197,6 +207,7 @@ def login():
             error = 'Invalid email or password'
         else:
             session['user_id'] = user['id']
+            session['is_admin'] = user.get('is_admin', 0)
             if auth_billing.subscription_access_allowed(user):
                 return redirect(next_url or url_for('dashboard'))
             flash('Start your trial or choose a plan to access the app.', 'info')
@@ -297,23 +308,78 @@ def account():
 def admin():
     """Admin panel."""
     user = _current_user(require_access=True)
-    if not user.get('is_admin'):
+    if not user.get('is_admin') and not session.get('is_admin'):
         flash('Access denied.', 'error')
         return redirect(url_for('dashboard'))
         
     users = auth_billing.get_all_users_for_admin(config.AUTH_DB_PATH)
     logs = auth_billing.get_all_logs_for_admin(config.AUTH_DB_PATH)
-    return render_template('admin.html', user=user, users=users, logs=logs)
+    stats = auth_billing.get_admin_stats(config.AUTH_DB_PATH)
+    settings = auth_billing.get_admin_settings(config.AUTH_DB_PATH)
+    
+    # Determine which user we are impersonating, if any
+    impersonating_id = session.get('impersonate_user_id')
+    
+    return render_template('admin.html', user=user, users=users, logs=logs, stats=stats, settings=settings, impersonating_id=impersonating_id)
+
+@app.route('/admin/action', methods=['POST'])
+@login_required
+def admin_action():
+    if not session.get('is_admin'):
+        return jsonify({'success': False, 'error': 'Unauthorized'}), 403
+        
+    data = request.json or {}
+    action = data.get('action')
+    
+    if action == 'impersonate':
+        target_id = data.get('user_id')
+        if target_id:
+            session['impersonate_user_id'] = int(target_id)
+            return jsonify({'success': True, 'message': 'Impersonation started'})
+        else:
+            return jsonify({'success': False, 'error': 'Missing user_id'})
+            
+    elif action == 'stop_impersonate':
+        session.pop('impersonate_user_id', None)
+        return jsonify({'success': True, 'message': 'Impersonation stopped'})
+        
+    elif action == 'update_setting':
+        key = data.get('key')
+        val = data.get('value', '')
+        if key:
+            auth_billing.update_admin_setting(config.AUTH_DB_PATH, key, val)
+            return jsonify({'success': True})
+        return jsonify({'success': False, 'error': 'Missing key'})
+        
+    elif action in ['ban', 'unban', 'extend_trial', 'make_lifetime', 'delete']:
+        target_id = data.get('user_id')
+        if target_id:
+            try:
+                auth_billing.admin_update_user_action(config.AUTH_DB_PATH, int(target_id), action)
+                return jsonify({'success': True})
+            except Exception as e:
+                return jsonify({'success': False, 'error': str(e)})
+                
+    return jsonify({'success': False, 'error': 'Invalid action'})
 
 @app.route('/dashboard')
 @login_required
 def dashboard():
     """User dashboard listing saved logs."""
     user = _current_user(require_access=True)
+    if not user:
+        return redirect(url_for('login'))
+        
+    # Get global banner setting
+    settings = auth_billing.get_admin_settings(config.AUTH_DB_PATH)
+    global_banner = settings.get('global_banner')
+        
     logs = auth_billing.get_user_logs(config.AUTH_DB_PATH, user['id'])
     return render_template('dashboard.html', 
                           user=user,
-                          logs=logs)
+                          logs=logs,
+                          global_banner=global_banner,
+                          impersonating=bool(session.get('impersonate_user_id')))
 
 
 @app.route('/workspace')
