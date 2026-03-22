@@ -46,6 +46,27 @@ HF_MODEL_ID=meta-llama/Llama-3.2-3B-Instruct
 
 Hugging Face support depends on your account and which models are available via the `hf-inference` provider.
 
+### 3. Auth + Stripe Billing (required for real login/subscriptions)
+
+```env
+APP_BASE_URL=https://your-service.up.railway.app
+SECRET_KEY=replace-with-strong-random-secret
+AUTH_DB_PATH=/data/auth_billing.db
+
+STRIPE_SECRET_KEY=sk_live_or_test_...
+STRIPE_WEBHOOK_SECRET=whsec_...
+STRIPE_PRICE_MONTHLY=price_xxx_for_99_monthly
+STRIPE_PRICE_ANNUAL=price_xxx_for_999_annual
+```
+
+Notes:
+
+- `AUTH_DB_PATH` should point to a persistent Railway volume path.
+- `APP_BASE_URL` must exactly match the deployed URL used in Stripe Checkout return URLs.
+- Configure Stripe webhook endpoint to:
+  - `https://your-service.up.railway.app/billing/webhook`
+  - Events: `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`
+
 ## How to Set Environment Variables in Railway
 
 1. Go to your Railway project dashboard
@@ -82,6 +103,10 @@ After setting environment variables:
 2. Test OCR: Upload a TIFF and check if "Jump to label" works
 3. Test AI: Click "Generate Curve Fields" and check if AI insights appear
 4. Test AI Chat: Type a question in the AI chat box
+5. Test billing:
+   - Sign up at `/signup`.
+   - Confirm redirect to Stripe Checkout for free trial start.
+   - Confirm `/account` shows current plan, trial countdown, payment method, invoices, and plan controls.
 
 ## Current Status
 

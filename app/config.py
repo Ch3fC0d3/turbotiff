@@ -94,3 +94,17 @@ CURVE_TRACE_UPSCALE = max(1.0, min(4.0, CURVE_TRACE_UPSCALE))
 APP_VERSION = os.environ.get("APP_VERSION", "dev")
 APP_BUILD_TIME = os.environ.get("APP_BUILD_TIME", "unknown")
 SECRET_KEY = os.environ.get("SECRET_KEY", "tiflas-dev-secret-key-change-in-prod")
+
+# ----------------------------
+# Auth + Billing (Stripe)
+# ----------------------------
+
+APP_BASE_URL = os.environ.get("APP_BASE_URL", "http://localhost:5000")
+
+_default_auth_db_path = Path.cwd() / "data" / "auth_billing.db"
+AUTH_DB_PATH = os.environ.get("AUTH_DB_PATH", str(_default_auth_db_path))
+
+STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
+STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+STRIPE_PRICE_MONTHLY = os.environ.get("STRIPE_PRICE_MONTHLY", "")
+STRIPE_PRICE_ANNUAL = os.environ.get("STRIPE_PRICE_ANNUAL", "")
