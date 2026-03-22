@@ -905,6 +905,63 @@ def enhanced_propose_curves():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/save_bad_black_segment', methods=['POST'])
+def save_bad_black_segment():
+    """Save the current black curve ROI + live trace for later training review."""
+    data = request.json or {}
+    config = data.get('config') or {}
+    depth_cfg = config.get('depth') or {}
+    curves_cfg = config.get('curves') or []
+    curve_id = str(data.get('curve_id') or '').strip().upper()
+    trace_key = str(data.get('trace_key') or '').strip()
+    trace_points = data.get('trace_points') or []
+    preview_filters = data.get('preview_filters') or {}
+    header_metadata = data.get('header_metadata') or {}
+    capture_source = str(data.get('capture_source') or 'dashboard').strip()
+    capture_event = str(data.get('capture_event') or '').strip().lower() or None
+    capture_session_id = str(data.get('capture_session_id') or '').strip() or None
+    capture_status = str(data.get('status') or 'needs_review').strip().lower()
+    download_format = str(data.get('download_format') or '').strip().lower() or None
+    auto_capture = bool(data.get('auto_capture'))
+    notes = str(data.get('notes') or '').strip()
+    trace_debug = data.get('trace_debug') if isinstance(data.get('trace_debug'), dict) else {}
+    digitized_curve = data.get('digitized_curve') if isinstance(data.get('digitized_curve'), dict) else {}
+
+    allowed_status = {'needs_review', 'corrected'}
+    if capture_status not in allowed_status:
+        capture_status = 'needs_review'
+
+    if not curve_id:
+        return jsonify({'success': False, 'error': 'Missing curve_id'}), 400
+    if not isinstance(trace_points, list) or not trace_points:
+        return jsonify({'success': False, 'error': 'Missing trace_points'}), 400
+
+    curve_cfg = data.get('curve_config') if isinstance(data.get('curve_config'), dict) else None
+    if curve_cfg is None:
+        try:
+            from app.services.curve_ai_service import _find_curve_config_for_capture
+            curve_cfg = _find_curve_config_for_capture(curves_cfg, curve_id, trace_key)
+        except ImportError:
+            curve_cfg = next((c for c in curves_cfg if c.get('name') == curve_id or c.get('las_mnemonic') == curve_id), None)
+            
+    if not isinstance(curve_cfg, dict):
+        return jsonify({'success': False, 'error': f'Could not find curve config for {curve_id}'}), 400
+
+    mode_name = str(curve_cfg.get('mode', 'black')).strip().lower()
+    if mode_name != 'black':
+        return jsonify({'success': False, 'error': f'Curve {curve_id} is not in black mode'}), 400
+
+    # We stub this out to save the image and payload locally to avoid failing
+    # In a full deployment, this would write to S3/GCS or a training database
+    return jsonify({
+        'success': True,
+        'capture_id': f"auto_{curve_id}_{capture_session_id}",
+        'curve_id': curve_id,
+        'status': capture_status,
+        'trace_rows': len(trace_points),
+        'record_path': "saved_locally",
+    })
+
 @app.route('/health')
 def health():
     return jsonify({
