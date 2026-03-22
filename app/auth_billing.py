@@ -69,6 +69,74 @@ def init_db(db_path: str) -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_users_company_domain ON users(company_domain)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_users_company_normalized ON users(company_name_normalized)")
+        
+        # Create user_logs table for saved digitized logs
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_logs (
+                id TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                curve_count INTEGER NOT NULL DEFAULT 0,
+                depth_start REAL,
+                depth_end REAL,
+                depth_unit TEXT,
+                las_content TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_user_logs_user_id ON user_logs(user_id)")
+
+
+def save_user_log(db_path: str, log_id: str, user_id: int, name: str, curve_count: int, depth_start: float, depth_end: float, depth_unit: str, las_content: str) -> None:
+    now = _utc_now_iso()
+    with get_db(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO user_logs (
+                id, user_id, name, curve_count, depth_start, depth_end, depth_unit, las_content, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                name=excluded.name,
+                curve_count=excluded.curve_count,
+                depth_start=excluded.depth_start,
+                depth_end=excluded.depth_end,
+                depth_unit=excluded.depth_unit,
+                las_content=excluded.las_content,
+                updated_at=excluded.updated_at
+            """,
+            (log_id, user_id, name, curve_count, depth_start, depth_end, depth_unit, las_content, now, now)
+        )
+
+
+def get_user_logs(db_path: str, user_id: int) -> List[Dict[str, Any]]:
+    with get_db(db_path) as conn:
+        rows = conn.execute(
+            "SELECT id, name, curve_count, depth_start, depth_end, depth_unit, created_at, updated_at FROM user_logs WHERE user_id = ? ORDER BY created_at DESC", 
+            (user_id,)
+        ).fetchall()
+    
+    result = []
+    for r in rows:
+        d = dict(r)
+        # Format date nicely
+        if d.get('created_at'):
+            try:
+                dt = datetime.fromisoformat(d['created_at'])
+                d['created_at_formatted'] = dt.strftime('%b %d, %Y')
+            except Exception:
+                d['created_at_formatted'] = d['created_at']
+        result.append(d)
+    return result
+
+
+def get_user_log(db_path: str, log_id: str, user_id: int) -> Optional[Dict[str, Any]]:
+    with get_db(db_path) as conn:
+        row = conn.execute("SELECT * FROM user_logs WHERE id = ? AND user_id = ?", (log_id, user_id)).fetchone()
+    return dict(row) if row else None
 
 
 def create_user(

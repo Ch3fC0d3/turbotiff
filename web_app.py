@@ -295,19 +295,94 @@ def account():
 @app.route('/dashboard')
 @login_required
 def dashboard():
-    """Main application dashboard"""
+    """User dashboard listing saved logs."""
     user = _current_user(require_access=True)
+    logs = auth_billing.get_user_logs(config.AUTH_DB_PATH, user['id'])
     return render_template('dashboard.html', 
+                          user=user,
+                          logs=logs)
+
+
+@app.route('/workspace')
+@login_required
+def workspace():
+    """Digitizer workspace for creating new logs."""
+    user = _current_user(require_access=True)
+    return render_template('workspace.html', 
                           user=user,
                           version=config.APP_VERSION)
 
 @app.route('/las_viewer')
 @login_required
 def las_viewer():
-    """LAS Viewer page"""
+    """LAS Viewer page. Can be initialized with a saved log."""
     user = _current_user(require_access=True)
+    log_id = request.args.get('log_id')
+    log_data = None
+    if log_id:
+        log_data = auth_billing.get_user_log(config.AUTH_DB_PATH, log_id, user['id'])
+        if not log_data:
+            flash('Log not found or access denied.', 'error')
+            return redirect(url_for('dashboard'))
+
     return render_template('las_viewer.html', 
-                          user=user)
+                          user=user,
+                          log_data=log_data)
+
+
+@app.route('/api/logs', methods=['POST'])
+@login_required
+def save_log():
+    """Save a digitized log to the user's account."""
+    user = _current_user(require_access=True)
+    data = request.json
+    
+    try:
+        import uuid
+        log_id = str(uuid.uuid4())
+        name = data.get('name', 'Untitled Log')
+        curve_count = data.get('curve_count', 0)
+        depth_start = float(data.get('depth_start', 0))
+        depth_end = float(data.get('depth_end', 0))
+        depth_unit = data.get('depth_unit', 'FT')
+        las_content = data.get('las_content', '')
+        
+        if not las_content:
+            return jsonify({'success': False, 'error': 'Missing LAS content'}), 400
+            
+        auth_billing.save_user_log(
+            config.AUTH_DB_PATH,
+            log_id=log_id,
+            user_id=user['id'],
+            name=name,
+            curve_count=curve_count,
+            depth_start=depth_start,
+            depth_end=depth_end,
+            depth_unit=depth_unit,
+            las_content=las_content
+        )
+        return jsonify({'success': True, 'log_id': log_id})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/logs/<log_id>/download', methods=['GET'])
+@login_required
+def download_log(log_id):
+    """Download a saved log as a .las file."""
+    user = _current_user(require_access=True)
+    log_data = auth_billing.get_user_log(config.AUTH_DB_PATH, log_id, user['id'])
+    
+    if not log_data:
+        return "Log not found", 404
+        
+    filename = f"{log_data['name'].replace(' ', '_')}.las"
+    
+    return Response(
+        log_data['las_content'],
+        mimetype='text/plain',
+        headers={'Content-Disposition': f'attachment;filename={filename}'}
+    )
 
 
 @app.route('/billing/create-checkout-session', methods=['GET', 'POST'])
