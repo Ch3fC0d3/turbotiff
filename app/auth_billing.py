@@ -61,6 +61,7 @@ def init_db(db_path: str) -> None:
                 trial_started_at TEXT,
                 trial_ends_at TEXT,
                 trial_used INTEGER NOT NULL DEFAULT 0,
+                is_admin INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
@@ -182,6 +183,25 @@ def get_user_by_id(db_path: str, user_id: int) -> Optional[Dict[str, Any]]:
     with get_db(db_path) as conn:
         row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
     return dict(row) if row else None
+
+
+def get_all_users_for_admin(db_path: str) -> List[Dict[str, Any]]:
+    with get_db(db_path) as conn:
+        rows = conn.execute("SELECT id, email, full_name, company_name, is_admin, subscription_status, created_at FROM users ORDER BY created_at DESC").fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_all_logs_for_admin(db_path: str) -> List[Dict[str, Any]]:
+    with get_db(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT l.id, l.name, l.curve_count, l.created_at, u.email as user_email
+            FROM user_logs l
+            JOIN users u ON l.user_id = u.id
+            ORDER BY l.created_at DESC
+            """
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def get_user_by_customer_id(db_path: str, stripe_customer_id: str) -> Optional[Dict[str, Any]]:

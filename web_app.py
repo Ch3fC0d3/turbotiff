@@ -292,6 +292,19 @@ def account():
         cancel_at_period_end=subscription_cancel_at_period_end,
     )
 
+@app.route('/admin')
+@login_required
+def admin():
+    """Admin panel."""
+    user = _current_user(require_access=True)
+    if not user.get('is_admin'):
+        flash('Access denied.', 'error')
+        return redirect(url_for('dashboard'))
+        
+    users = auth_billing.get_all_users_for_admin(config.AUTH_DB_PATH)
+    logs = auth_billing.get_all_logs_for_admin(config.AUTH_DB_PATH)
+    return render_template('admin.html', user=user, users=users, logs=logs)
+
 @app.route('/dashboard')
 @login_required
 def dashboard():
