@@ -9088,6 +9088,72 @@
                 downloadFormat: 'las',
             });
         }
+        
+        function saveLogToAccount() {
+            if (!lastLasContent) {
+                alert('No LAS data to save. Digitize first.');
+                return;
+            }
+            
+            const logName = prompt("Enter a name for this log:", lastLasFilename || "New Well Log");
+            if (!logName) return;
+            
+            const btn = document.getElementById('saveLogBtn');
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '⏳ Saving...';
+            btn.disabled = true;
+            
+            const curveCount = document.querySelectorAll('.track-section').length;
+            const topDepth = parseFloat(document.getElementById('topDepth').value) || 0;
+            const bottomDepth = parseFloat(document.getElementById('bottomDepth').value) || 0;
+            const depthUnit = document.getElementById('depthUnit').value;
+            
+            // Rebuild LAS to include manual edits
+            let finalLasContent = lastLasContent;
+            if (Array.isArray(lastDigitizedDepth) && lastDigitizedDepth.length > 0 &&
+                lastDigitizedCurves && typeof lastDigitizedCurves === 'object' &&
+                lastDepthConfig) {
+                const rebuilt = buildLasFromDigitized(lastDigitizedDepth, lastDigitizedCurves, lastDepthConfig, lastNullValue);
+                if (rebuilt && typeof rebuilt === 'string' && rebuilt.trim().length) {
+                    finalLasContent = rebuilt;
+                }
+            }
+            
+            fetch('/api/logs', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    name: logName,
+                    curve_count: curveCount,
+                    depth_start: topDepth,
+                    depth_end: bottomDepth,
+                    depth_unit: depthUnit,
+                    las_content: finalLasContent
+                })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    btn.innerHTML = '✅ Saved!';
+                    showStatus(`Log saved successfully: ${logName}`, 'success');
+                    setTimeout(() => {
+                        btn.innerHTML = originalText;
+                        btn.disabled = false;
+                    }, 3000);
+                } else {
+                    throw new Error(data.error || 'Failed to save log');
+                }
+            })
+            .catch(err => {
+                console.error(err);
+                btn.innerHTML = '❌ Error';
+                showStatus(`Error saving log: ${err.message}`, 'error');
+                setTimeout(() => {
+                    btn.innerHTML = originalText;
+                    btn.disabled = false;
+                }, 3000);
+            });
+        }
 
         function showStatus(message, type) {
             const statusArea = document.getElementById('statusArea');
