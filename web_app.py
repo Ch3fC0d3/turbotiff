@@ -826,6 +826,10 @@ def health():
 @app.route('/debug-billing')
 def debug_billing():
     """Deployment debug endpoint for auth + Stripe billing readiness."""
+    return jsonify(_billing_debug_payload())
+
+
+def _billing_debug_payload() -> Dict[str, object]:
     auth_db_path = config.AUTH_DB_PATH
     auth_db_exists = os.path.exists(auth_db_path)
     auth_db_dir = os.path.dirname(auth_db_path) or os.getcwd()
@@ -855,7 +859,7 @@ def debug_billing():
     except Exception as exc:
         db_error = str(exc)
 
-    return jsonify({
+    return {
         'status': 'ok',
         'app_base_url': config.APP_BASE_URL,
         'webhook_expected_url': f"{config.APP_BASE_URL}/billing/webhook",
@@ -875,7 +879,15 @@ def debug_billing():
         },
         'db_stats': db_stats,
         'db_error': db_error,
-    })
+    }
+
+
+@app.route('/debug-billing/ui')
+@login_required
+def debug_billing_ui():
+    """Protected HTML status page for billing deployment checks."""
+    payload = _billing_debug_payload()
+    return render_template('debug_billing.html', payload=payload)
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
