@@ -89,6 +89,20 @@
         .account-btn:hover {
             background: rgba(99, 102, 241, 0.3);
         }
+        .dashboard-btn {
+            background: rgba(16, 185, 129, 0.2);
+            color: #34d399;
+            padding: 8px 15px;
+            border-radius: 999px;
+            text-decoration: none;
+            font-weight: bold;
+            font-size: 0.9em;
+            transition: background 0.2s;
+            border: 1px solid #10b981;
+        }
+        .dashboard-btn:hover {
+            background: rgba(16, 185, 129, 0.3);
+        }
         .content { padding: 30px; }
         .step {
             background: #0f172a;
@@ -925,6 +939,7 @@
             <img src="/static/images/logo.svg" alt="TifLAS Logo" style="height: 140px; margin-bottom: 8px; display: inline-block; filter: drop-shadow(0 2px 8px rgba(0,0,0,0.25));">
             <p style="font-size: 1.15em; letter-spacing: 0.3px; opacity: 0.92;">Convert legacy well log images to standard LAS files using Computer Vision</p>
             <div class="header-actions">
+                <a href="/dashboard" class="dashboard-btn">🏠 Dashboard</a>
                 <a href="/las_viewer" class="las-viewer-btn" onclick="openLasViewerWithData(event)">📈 LAS Viewer</a>
                 <a href="/account" class="account-btn">Manage Billing</a>
                 <a href="/logout" class="logout-btn">Logout</a>
