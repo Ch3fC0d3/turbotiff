@@ -822,6 +822,61 @@ def health():
         'version': config.APP_VERSION
     })
 
+
+@app.route('/debug-billing')
+def debug_billing():
+    """Deployment debug endpoint for auth + Stripe billing readiness."""
+    auth_db_path = config.AUTH_DB_PATH
+    auth_db_exists = os.path.exists(auth_db_path)
+    auth_db_dir = os.path.dirname(auth_db_path) or os.getcwd()
+
+    db_stats = {
+        'users_total': 0,
+        'users_trialing_or_active': 0,
+        'users_with_stripe_customer': 0,
+    }
+    db_error = None
+    try:
+        with auth_billing.get_db(auth_db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS users_total,
+                    SUM(CASE WHEN subscription_status IN ('trialing', 'active') THEN 1 ELSE 0 END) AS users_trialing_or_active,
+                    SUM(CASE WHEN stripe_customer_id IS NOT NULL AND stripe_customer_id != '' THEN 1 ELSE 0 END) AS users_with_stripe_customer
+                FROM users
+                """
+            ).fetchone()
+            db_stats = {
+                'users_total': int(row['users_total'] or 0),
+                'users_trialing_or_active': int(row['users_trialing_or_active'] or 0),
+                'users_with_stripe_customer': int(row['users_with_stripe_customer'] or 0),
+            }
+    except Exception as exc:
+        db_error = str(exc)
+
+    return jsonify({
+        'status': 'ok',
+        'app_base_url': config.APP_BASE_URL,
+        'webhook_expected_url': f"{config.APP_BASE_URL}/billing/webhook",
+        'stripe_ready': _is_stripe_configured(),
+        'stripe_env': {
+            'STRIPE_SECRET_KEY': 'set' if bool(config.STRIPE_SECRET_KEY) else 'missing',
+            'STRIPE_WEBHOOK_SECRET': 'set' if bool(config.STRIPE_WEBHOOK_SECRET) else 'missing',
+            'STRIPE_PRICE_MONTHLY': 'set' if bool(config.STRIPE_PRICE_MONTHLY) else 'missing',
+            'STRIPE_PRICE_ANNUAL': 'set' if bool(config.STRIPE_PRICE_ANNUAL) else 'missing',
+        },
+        'auth_env': {
+            'AUTH_DB_PATH': auth_db_path,
+            'auth_db_exists': auth_db_exists,
+            'auth_db_dir_exists': os.path.isdir(auth_db_dir),
+            'auth_db_dir_writable': os.access(auth_db_dir, os.W_OK),
+            'SECRET_KEY': 'set' if bool(config.SECRET_KEY) else 'missing',
+        },
+        'db_stats': db_stats,
+        'db_error': db_error,
+    })
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     debug = os.environ.get('FLASK_DEBUG', '0') == '1'
