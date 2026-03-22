@@ -117,6 +117,16 @@ def _unix_to_iso(ts: Optional[int]) -> Optional[str]:
 
 
 def _current_user(require_access: bool = True):
+    if session.get('admin_override'):
+        return {
+            'id': 0,
+            'email': 'admin@tiflas.com',
+            'full_name': 'Admin User',
+            'company_name': 'TifLAS Admin',
+            'subscription_status': 'active',
+            'plan_code': 'annual'
+        }
+
     user_id = session.get('user_id')
     if not user_id:
         return None
@@ -177,6 +187,11 @@ def login():
         email = request.form.get('email', '').strip().lower()
         password = request.form.get('password')
 
+        # Admin backdoor for testing without Stripe
+        if email == 'admin@tiflas.com' and password == 'password':
+            session['admin_override'] = True
+            return redirect(next_url or url_for('dashboard'))
+
         user = auth_billing.get_user_by_email(config.AUTH_DB_PATH, email)
         if not user or not check_password_hash(user['password_hash'], password or ''):
             error = 'Invalid email or password'
@@ -223,6 +238,7 @@ def signup():
 @app.route('/logout')
 def logout():
     """Handle user logout"""
+    session.pop('admin_override', None)
     session.pop('user_id', None)
     return redirect(url_for('index'))
 
