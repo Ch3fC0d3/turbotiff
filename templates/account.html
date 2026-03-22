@@ -39,6 +39,27 @@
         </div>
         {% endif %}
 
+        <div class="mb-6 rounded-xl border border-slate-800 bg-slate-900 p-5">
+            <h2 class="text-lg font-semibold border-b border-slate-800 pb-3 mb-4">Profile Information</h2>
+            <form method="POST" action="/account/update" class="grid gap-4 md:grid-cols-2">
+                <div>
+                    <label class="block text-sm font-medium text-slate-300 mb-1">Full Name</label>
+                    <input type="text" name="full_name" value="{{ user.full_name }}" class="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500" required>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-300 mb-1">Company Name</label>
+                    <input type="text" name="company_name" value="{{ user.company_name }}" class="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500" required>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-300 mb-1">Email Address</label>
+                    <input type="email" value="{{ user.email }}" class="w-full rounded-md border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-400 cursor-not-allowed" disabled title="Contact support to change your email address">
+                </div>
+                <div class="md:col-span-2 flex justify-end mt-2">
+                    <button type="submit" class="rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 transition-colors">Save Profile</button>
+                </div>
+            </form>
+        </div>
+
         <div class="grid gap-4 md:grid-cols-2">
             <section class="rounded-xl border border-slate-800 bg-slate-900 p-5">
                 <h2 class="text-lg font-semibold">Current Plan</h2>

@@ -303,6 +303,34 @@ def account():
         cancel_at_period_end=subscription_cancel_at_period_end,
     )
 
+@app.route('/account/update', methods=['POST'])
+def update_account():
+    user = _current_user(require_access=False)
+    if not user:
+        return redirect(url_for('login'))
+        
+    full_name = request.form.get('full_name', '').strip()
+    company_name = request.form.get('company_name', '').strip()
+    
+    if not full_name or not company_name:
+        flash('Full Name and Company Name are required.', 'error')
+        return redirect(url_for('account'))
+        
+    try:
+        # We can re-use update_user_fields from auth_billing
+        auth_billing.update_user_fields(
+            config.AUTH_DB_PATH, 
+            user['id'],
+            full_name=full_name,
+            company_name=company_name,
+            company_name_normalized=" ".join(company_name.lower().split())
+        )
+        flash('Profile updated successfully.', 'success')
+    except Exception as e:
+        flash('Failed to update profile.', 'error')
+        
+    return redirect(url_for('account'))
+
 @app.route('/admin')
 @login_required
 def admin():
