@@ -1322,8 +1322,8 @@ def auto_layout_tracks():
         }
         tracks_out.append(track_out)
 
-    if not tracks_out:
-        return jsonify({'success': False, 'error': 'AI layout returned no usable tracks.'}), 400
+    if not tracks_out and not header_metadata:
+        return jsonify({'success': False, 'error': 'AI layout returned no usable tracks and no header metadata.'}), 400
 
     return jsonify({
         'success': True,
