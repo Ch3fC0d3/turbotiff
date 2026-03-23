@@ -1123,11 +1123,12 @@
                             <div class="form-group mt-2 max-w-420">
                                 <label>Header / key (optional)</label>
                                 <div class="flex-wrap-center mt-1">
-                                    <button type="button" class="btn btn-sm" onclick="beginHeaderSelection()">Capture header/key from image</button>
-                                    <button type="button" class="btn btn-sm" onclick="clearHeaderSelection()">Clear header/key</button>
+                                    <button type="button" class="btn btn-sm bg-blue-600 hover:bg-blue-500 text-white" onclick="autoExtractHeader()">Auto-Extract Header Info</button>
+                                    <button type="button" class="btn btn-sm" onclick="beginHeaderSelection()">Manual Selection</button>
+                                    <button type="button" class="btn btn-sm" onclick="clearHeaderSelection()">Clear</button>
                                 </div>
                                 <div class="hint-text" id="headerSelectionSummary">No header captured. Curve config will use defaults.</div>
-                                <div class="hint-text"><strong>To capture details:</strong> Click and drag a box over the <strong>entire header</strong> (including Company/Well info AND scale labels).</div>
+                                <div class="hint-text"><strong>Auto-Extract:</strong> Automatically finds the header at the top of the image.<br><strong>Manual Selection:</strong> Click and drag a box over the <strong>entire header</strong>.</div>
                                 
                                 <!-- Header Metadata Inputs -->
                                 <div id="headerMetadataFields" class="bg-slate-800 border-slate-700 rounded p-2 mt-3">
@@ -1247,7 +1248,7 @@
                                     <label>Curve Configuration</label>
                                     <div class="curve-actions">
                                         <label for="numCurves">Number of Curves (max 6)</label>
-                                        <input type="number" id="numCurves" value="3" min="1" max="6">
+                                        <input type="number" id="numCurves" value="3" min="0" max="6">
                                         
                                         <label for="snapThreshold" class="mt-2">Snap Threshold (1.2 = 20% brighter)</label>
                                         <input type="number" id="snapThreshold" value="1.20" step="0.05" min="0.1" max="5.0" title="Lower (<1.0) = Greedier, Higher (>1.0) = Stricter">
@@ -2325,18 +2326,21 @@
         }
 
         function updateHeaderCaptureState() {
-            const headerBtn = document.querySelector('button[onclick="beginHeaderSelection()"]');
+            const autoBtn = document.querySelector('button[onclick="autoExtractHeader()"]');
+            const manualBtn = document.querySelector('button[onclick="beginHeaderSelection()"]');
             const clearBtn = document.querySelector('button[onclick="clearHeaderSelection()"]');
             const summaryEl = document.getElementById('headerSelectionSummary');
 
             if (headerCaptureEnabled) {
-                if (headerBtn) headerBtn.disabled = false;
+                if (autoBtn) autoBtn.disabled = false;
+                if (manualBtn) manualBtn.disabled = false;
                 if (clearBtn) clearBtn.disabled = false;
                 if (summaryEl && (!headerRegion || !headerTracks)) {
-                    summaryEl.textContent = 'Ready to capture header. Draw a box over the header strip.';
+                    summaryEl.textContent = 'Ready to capture header. Use Auto-Extract or draw a box.';
                 }
             } else {
-                if (headerBtn) headerBtn.disabled = true;
+                if (autoBtn) autoBtn.disabled = true;
+                if (manualBtn) manualBtn.disabled = true;
                 if (clearBtn) clearBtn.disabled = true;
                 if (summaryEl) {
                     summaryEl.textContent = 'Header capture disabled until you crop to a panel.';
@@ -5972,6 +5976,48 @@
             } catch (err) {
                 showStatus(`AI calibration request failed: ${err.message}`, 'error');
             }
+        }
+
+        async function autoExtractHeader() {
+            if (editMode) {
+                showStatus('Turn off manual curve edit mode before extracting header.', 'info');
+                return;
+            }
+            if (!headerCaptureEnabled) {
+                showStatus('Header capture is disabled until you crop to a panel.', 'info');
+                return;
+            }
+            if (!uploadedImage || !imageWidth || !imageHeight) {
+                showStatus('No image loaded.', 'error');
+                return;
+            }
+
+            // Estimate header region as the top 25% of the image, or up to topPx if it's set
+            const topPxInput = document.getElementById('topPx');
+            let bottomBound = Math.floor(imageHeight * 0.25);
+            
+            if (topPxInput && topPxInput.value) {
+                const topPxVal = parseFloat(topPxInput.value);
+                if (topPxVal > 50) { // If there's a reasonable top panel selected
+                    bottomBound = topPxVal;
+                }
+            }
+
+            headerRegion = {
+                left_px: 0,
+                right_px: imageWidth,
+                top_px: 0,
+                bottom_px: bottomBound
+            };
+            
+            renderHeaderRegionOverlay();
+            
+            const summaryEl = document.getElementById('headerSelectionSummary');
+            if (summaryEl) {
+                summaryEl.textContent = `Auto-extracting header from top of image...`;
+            }
+            
+            await aiCaptureHeaderFromRegion();
         }
 
         async function aiCaptureHeaderFromRegion() {
