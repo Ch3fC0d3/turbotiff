@@ -1198,13 +1198,14 @@ def auto_layout_tracks():
                 'traceback': traceback.format_exc()[-1500:]
             }), 500
         
-        if not tracks_out:
+        if not tracks_out and not header_metadata:
             return jsonify({'success': False, 'error': 'No tracks detected (neither header text nor edge detection found tracks).'}), 400
         
         return jsonify({
             'success': True,
             'tracks': tracks_out,
             'raw_layout': {'tracks': [], 'fallback': 'edge_detection'},
+            'header_metadata': header_metadata,
         })
 
     layout_payload = {
@@ -1261,7 +1262,7 @@ def auto_layout_tracks():
                 'traceback': traceback.format_exc()[-1500:]
             }), 500
 
-        if tracks_out:
+        if tracks_out or header_metadata:
             return jsonify({
                 'success': True,
                 'tracks': tracks_out,
@@ -1270,6 +1271,7 @@ def auto_layout_tracks():
                     'fallback': 'edge_detection_after_ai_failure',
                     'ocr_items': len(items),
                 },
+                'header_metadata': header_metadata,
             })
 
         return jsonify({
