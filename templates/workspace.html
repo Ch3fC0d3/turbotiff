@@ -2233,7 +2233,10 @@
         // Depth anchor buttons have been removed; depth configuration is now
         // driven directly by numeric inputs and AI suggestions.
 
+        let currentTabId = 'calibPanel-main';
+
         function setCalibrationTab(targetId) {
+            currentTabId = targetId;
             const panels = ['calibPanel-main', 'calibPanel-curves'];
             panels.forEach((id) => {
                 const el = document.getElementById(id);
@@ -2254,6 +2257,9 @@
                     btn.classList.remove('active');
                 }
             });
+
+            // Update ribbons visibility
+            refreshTrackOverlaysFromCurves();
         }
 
         function beginPanelSelection() {
@@ -7732,6 +7738,11 @@
         }
 
         function refreshTrackOverlaysFromCurves() {
+            if (currentTabId !== 'calibPanel-curves') {
+                clearTrackOverlays();
+                return;
+            }
+
             const numCurvesInput = document.getElementById('numCurves');
             if (!numCurvesInput) {
                 clearTrackOverlays();
