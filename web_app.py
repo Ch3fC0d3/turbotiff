@@ -144,7 +144,7 @@ def _current_user(require_access: bool = True):
     if not user:
         session.pop('user_id', None)
         return None
-    if require_access and not auth_billing.subscription_access_allowed(user):
+    if require_access and _is_stripe_configured() and not auth_billing.subscription_access_allowed(user):
         return None
     return user
 
@@ -1000,6 +1000,339 @@ def suggest_parameters(curve_type):
         return jsonify(result)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/auto_layout', methods=['POST'])
+def auto_layout_tracks():
+    data = request.json or {}
+    image_data = data.get('image')
+    region = data.get('region') or {}
+    treat_region_as_header = bool(data.get('treat_region_as_header'))
+
+    if not image_data or ',' not in image_data:
+        return jsonify({'success': False, 'error': 'Missing image data'}), 400
+
+    try:
+        img_payload = image_data.split(',', 1)[1]
+        img_bytes = base64.b64decode(img_payload)
+    except Exception:
+        return jsonify({'success': False, 'error': 'Invalid image data'}), 400
+
+    nparr = np.frombuffer(img_bytes, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if img is None:
+        return jsonify({'success': False, 'error': 'Could not decode image'}), 400
+
+    H, W, _ = img.shape
+    try:
+        left = max(0, int(region.get('left_px', 0)))
+        right = min(W, int(region.get('right_px', W)))
+        top = max(0, int(region.get('top_px', 0)))
+        bottom = min(H, int(region.get('bottom_px', H)))
+    except Exception:
+        return jsonify({'success': False, 'error': 'Invalid region'}), 400
+
+    if right <= left or bottom <= top:
+        return jsonify({'success': False, 'error': 'Empty region'}), 400
+
+    panel = img[top:bottom, left:right]
+    panel_h, panel_w, _ = panel.shape
+    if panel_h < 2 or panel_w < 2:
+        return jsonify({'success': False, 'error': 'Panel too small for layout detection'}), 400
+
+    # For normal panel-based layout, only the top band is treated as the
+    # header. For explicit header/key capture, the entire region is the
+    # header strip, so skip the extra crop.
+    if treat_region_as_header:
+        header = panel
+        header_h = panel_h
+    else:
+        header_h = max(10, int(panel_h * 0.15))
+        header = panel[0:header_h, :]
+
+    ok, buf = cv2.imencode('.jpg', header, [cv2.IMWRITE_JPEG_QUALITY, 90])
+    if not ok:
+        return jsonify({'success': False, 'error': 'Failed to encode header crop'}), 500
+
+    header_bytes = buf.tobytes()
+
+    detected_text = vision_service.detect_text_vision_api(header_bytes)
+    raw_text = detected_text.get('raw', []) or []
+
+    def _extract_header_metadata(raw_entries):
+        if not isinstance(raw_entries, list) or not raw_entries:
+            return None
+        try:
+            items_local = []
+            for entry in raw_entries:
+                if not isinstance(entry, dict):
+                    continue
+                text = (entry.get('text') or '').strip()
+                if not text:
+                    continue
+                verts = entry.get('vertices') or []
+                ys_local = [v.get('y') for v in verts if isinstance(v, dict) and 'y' in v]
+                xs_local = [v.get('x') for v in verts if isinstance(v, dict) and 'x' in v]
+                if not ys_local or not xs_local:
+                    continue
+                y = float(sum(ys_local)) / len(ys_local)
+                x = float(sum(xs_local)) / len(xs_local)
+                items_local.append((y, x, text))
+            if not items_local:
+                return None
+            items_local.sort(key=lambda t: (t[0], t[1]))
+
+            lines = []
+            y_tol = 8.0
+            current_y = None
+            current_tokens = []
+            for y, x, text in items_local:
+                if current_y is None or abs(y - current_y) <= y_tol:
+                    if current_y is None:
+                        current_y = y
+                    current_tokens.append((x, text))
+                else:
+                    current_tokens.sort(key=lambda t: t[0])
+                    lines.append(' '.join(t[1] for t in current_tokens if t[1]).strip())
+                    current_y = y
+                    current_tokens = [(x, text)]
+            if current_tokens:
+                current_tokens.sort(key=lambda t: t[0])
+                lines.append(' '.join(t[1] for t in current_tokens if t[1]).strip())
+
+            import re
+
+            def pick_after(label_re, s):
+                m = re.search(label_re, s, flags=re.IGNORECASE)
+                if not m:
+                    return None
+                tail = s[m.end():].strip(" :-\t")
+                return tail.strip() if tail else None
+
+            md = {}
+            for s in lines:
+                if not s:
+                    continue
+                for key, pat in (
+                    ('comp', r"\bCOMPANY\b"),
+                    ('well', r"\bWELL\b"),
+                    ('fld', r"\bFIELD\b"),
+                    ('loc', r"\bLOCATION\b"),
+                    ('county', r"\bCOUNTY\b"),
+                    ('state', r"\bSTATE\b"),
+                    ('prov', r"\bPROV(?:INCE)?\b"),
+                    ('srvc', r"\bSERVICE\s+COMPANY\b"),
+                    ('date', r"\bDATE\b"),
+                    ('api', r"\bAPI\b"),
+                    ('uwi', r"\bUWI\b"),
+                ):
+                    if key in md:
+                        continue
+                    val = pick_after(pat, s)
+                    if val:
+                        md[key] = val
+
+                if 'api' not in md:
+                    m = re.search(r"\b(\d{2}[- ]?\d{3}[- ]?\d{5})\b", s)
+                    if m:
+                        md['api'] = m.group(1).replace(' ', '-')
+                if 'date' not in md:
+                    m = re.search(r"\b(\d{1,2}[-/][A-Za-z]{3}[-/]\d{2,4}|\d{4}[-/]\d{1,2}[-/]\d{1,2})\b", s)
+                    if m:
+                        md['date'] = m.group(1)
+
+            return md if md else None
+        except Exception:
+            return None
+
+    header_metadata = _extract_header_metadata(raw_text) if treat_region_as_header else None
+
+    items = []
+    for entry in raw_text:
+        text = (entry.get('text') or '').strip()
+        if not text:
+            continue
+        verts = entry.get('vertices') or []
+        xs = [v.get('x') for v in verts if isinstance(v, dict) and 'x' in v]
+        ys = [v.get('y') for v in verts if isinstance(v, dict) and 'y' in v]
+        if not xs or not ys:
+            continue
+        x_center = float(sum(xs)) / len(xs)
+        y_center = float(sum(ys)) / len(ys)
+        items.append({
+            'text': text,
+            'x': x_center,
+            'y': y_center,
+        })
+
+    full_text_blob = detected_text.get('full_text', '')
+
+    # If no header text found, fall back to edge-based track detection
+    if not items and not full_text_blob:
+        print("⚠️  No header text found; falling back to edge-based track detection")
+        try:
+            local_tracks = image_processing.auto_detect_tracks(panel)
+            tracks_out = []
+            for idx, (lx, rx) in enumerate(local_tracks or []):
+                try:
+                    lx_f = float(lx)
+                    rx_f = float(rx)
+                except (TypeError, ValueError):
+                    continue
+                if not np.isfinite(lx_f) or not np.isfinite(rx_f) or rx_f <= lx_f:
+                    continue
+                tracks_out.append({
+                    'name': f'Track{idx+1}',
+                    'left_px': float(left) + lx_f,
+                    'right_px': float(left) + rx_f,
+                    'scale_min': None,
+                    'scale_max': None,
+                    'unit': None,
+                    'hot_side': None,
+                })
+        except Exception as exc:
+            import traceback
+            return jsonify({
+                'success': False,
+                'error': f'Edge fallback failed: {str(exc)}',
+                'traceback': traceback.format_exc()[-1500:]
+            }), 500
+        
+        if not tracks_out:
+            return jsonify({'success': False, 'error': 'No tracks detected (neither header text nor edge detection found tracks).'}), 400
+        
+        return jsonify({
+            'success': True,
+            'tracks': tracks_out,
+            'raw_layout': {'tracks': [], 'fallback': 'edge_detection'},
+        })
+
+    layout_payload = {
+        'image': {
+            'width_px': panel_w,
+            'height_px': header_h,
+        },
+        'items': items,
+        'full_text': full_text_blob,
+    }
+
+    layout = ai_service.call_ai_auto_layout(layout_payload)
+    if not layout:
+        # If no AI providers are configured, give an actionable error.
+        has_provider = bool(
+            (ai_service.GEMINI_API_KEY and ai_service.GEMINI_MODEL_ID)
+            or (ai_service.OPENAI_API_KEY and ai_service.OPENAI_MODEL_ID)
+            or (ai_service.HF_API_TOKEN and ai_service.HF_MODEL_ID)
+        )
+        if not has_provider:
+            return jsonify({
+                'success': False,
+                'error': 'AI layout detection is not configured. Set GEMINI_API_KEY (or OPENAI_API_KEY / HF_API_TOKEN) in the server environment.'
+            }), 500
+
+        # Otherwise fall back to edge-based track detection on the panel.
+        print("⚠️  AI layout inference returned no result; falling back to edge-based track detection")
+        try:
+            local_tracks = image_processing.auto_detect_tracks(panel)
+            tracks_out = []
+            for idx, (lx, rx) in enumerate(local_tracks or []):
+                try:
+                    lx_f = float(lx)
+                    rx_f = float(rx)
+                except (TypeError, ValueError):
+                    continue
+                if not np.isfinite(lx_f) or not np.isfinite(rx_f) or rx_f <= lx_f:
+                    continue
+                tracks_out.append({
+                    'name': f'Track{idx+1}',
+                    'left_px': float(left) + lx_f,
+                    'right_px': float(left) + rx_f,
+                    'scale_min': None,
+                    'scale_max': None,
+                    'unit': None,
+                    'hot_side': None,
+                    'color_hint': None,
+                })
+        except Exception as exc:
+            import traceback
+            return jsonify({
+                'success': False,
+                'error': f'AI layout returned no result, and edge fallback failed: {str(exc)}',
+                'traceback': traceback.format_exc()[-1500:]
+            }), 500
+
+        if tracks_out:
+            return jsonify({
+                'success': True,
+                'tracks': tracks_out,
+                'raw_layout': {
+                    'tracks': [],
+                    'fallback': 'edge_detection_after_ai_failure',
+                    'ocr_items': len(items),
+                },
+            })
+
+        return jsonify({
+            'success': False,
+            'error': f"AI layout detection failed and edge fallback found no tracks. OCR items={len(items)}. Try selecting a larger/clearer header region."
+        }), 500
+
+    raw_tracks = layout.get('tracks') or []
+    
+    # Merge AI-extracted metadata (often better than regex)
+    ai_meta = layout.get('header_metadata')
+    if ai_meta and isinstance(ai_meta, dict):
+        if header_metadata is None:
+            header_metadata = {}
+        for k, v in ai_meta.items():
+            if v and isinstance(v, str) and v.strip():
+                val = v.strip()
+                # Map AI keys to internal keys where they differ
+                if k == 'company': header_metadata['comp'] = val
+                elif k == 'field': header_metadata['fld'] = val
+                elif k == 'location': header_metadata['loc'] = val
+                elif k == 'province': header_metadata['prov'] = val
+                elif k == 'service_company': header_metadata['srvc'] = val
+                else:
+                    # well, api, date, county, state, etc. match or are new
+                    header_metadata[k] = val
+
+    tracks_out = []
+    for t in raw_tracks:
+        try:
+            lx = float(t.get('left_x'))
+            rx = float(t.get('right_x'))
+        except (TypeError, ValueError):
+            continue
+        if not np.isfinite(lx) or not np.isfinite(rx):
+            continue
+        lx = max(0.0, min(float(panel_w), lx))
+        rx = max(0.0, min(float(panel_w), rx))
+        if rx <= lx:
+            continue
+
+        track_out = {
+            'name': t.get('name'),
+            'left_px': float(left) + lx,
+            'right_px': float(left) + rx,
+            'scale_min': t.get('scale_min'),
+            'scale_max': t.get('scale_max'),
+            'unit': t.get('unit'),
+            'hot_side': t.get('hot_side'),
+            'color_hint': t.get('color_hint'),
+        }
+        tracks_out.append(track_out)
+
+    if not tracks_out:
+        return jsonify({'success': False, 'error': 'AI layout returned no usable tracks.'}), 400
+
+    return jsonify({
+        'success': True,
+        'tracks': tracks_out,
+        'raw_layout': layout,
+        'header_metadata': header_metadata,
+    })
+
+
 
 @app.route('/api/enhanced_propose_curves', methods=['POST'])
 @login_required

@@ -16,6 +16,7 @@
                 </p>
             </div>
             <div class="flex gap-2">
+                <a href="/workspace" class="rounded-md border border-slate-700 px-3 py-2 text-sm hover:bg-slate-800">Work Area</a>
                 <a href="/dashboard" class="rounded-md border border-slate-700 px-3 py-2 text-sm hover:bg-slate-800">Back to Dashboard</a>
                 <a href="/logout" class="rounded-md border border-slate-700 px-3 py-2 text-sm hover:bg-slate-800">Logout</a>
             </div>
@@ -86,19 +87,19 @@
                     <form method="POST" action="/billing/create-checkout-session">
                         <input type="hidden" name="plan" value="monthly">
                         <input type="hidden" name="mode" value="trial">
-                        <button type="submit" class="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500" {% if not trial_eligibility.eligible or not billing_ready %}disabled{% endif %}>Start Free Trial</button>
+                        <button type="submit" class="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500" {% if not trial_eligibility.eligible %}disabled{% endif %}>Start Free Trial</button>
                     </form>
 
                     <form method="POST" action="/billing/create-checkout-session">
                         <input type="hidden" name="plan" value="monthly">
                         <input type="hidden" name="mode" value="upgrade">
-                        <button type="submit" class="rounded-md border border-slate-600 px-4 py-2 text-sm font-semibold text-slate-100 hover:bg-slate-800" {% if not billing_ready %}disabled{% endif %}>Upgrade to Monthly</button>
+                        <button type="submit" class="rounded-md border border-slate-600 px-4 py-2 text-sm font-semibold text-slate-100 hover:bg-slate-800">Upgrade to Monthly</button>
                     </form>
 
                     <form method="POST" action="/billing/create-checkout-session">
                         <input type="hidden" name="plan" value="annual">
                         <input type="hidden" name="mode" value="upgrade">
-                        <button type="submit" class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white ring-2 ring-emerald-300 hover:bg-emerald-500" {% if not billing_ready %}disabled{% endif %}>Upgrade to Annual</button>
+                        <button type="submit" class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white ring-2 ring-emerald-300 hover:bg-emerald-500">Upgrade to Annual</button>
                     </form>
                 </div>
                 <p class="mt-2 text-xs text-slate-400">Annual plan highlighted as best value. {% if not trial_eligibility.eligible %}{{ trial_eligibility.reason }}{% endif %}</p>
@@ -113,7 +114,7 @@
                     <p class="mt-2 text-sm text-slate-400">No payment method on file.</p>
                 {% endif %}
                 <form method="POST" action="/billing/portal" class="mt-4">
-                    <button type="submit" class="rounded-md border border-slate-600 px-4 py-2 text-sm font-semibold text-slate-100 hover:bg-slate-800" {% if not can_manage_billing or not billing_ready %}disabled{% endif %}>Manage Billing</button>
+                    <button type="submit" class="rounded-md border border-slate-600 px-4 py-2 text-sm font-semibold text-slate-100 hover:bg-slate-800">Manage Billing</button>
                 </form>
             </section>
 
@@ -125,7 +126,7 @@
                     <p class="mt-2 text-sm text-slate-400">Auto-renews unless canceled.</p>
                 {% endif %}
                 <form method="POST" action="/billing/cancel-plan" class="mt-4">
-                    <button type="submit" class="rounded-md border border-red-700 px-4 py-2 text-sm font-semibold text-red-300 hover:bg-red-950" {% if not user.stripe_subscription_id %}disabled{% endif %}>Cancel Plan</button>
+                    <button type="submit" class="rounded-md border border-red-700 px-4 py-2 text-sm font-semibold text-red-300 hover:bg-red-950">Cancel Plan</button>
                 </form>
             </section>
 
