@@ -976,7 +976,7 @@
                         <div id="crosshairLabel" class="crosshair-label hidden"></div>
 
                         <!-- Unified Viewer Controls -->
-                        <div class="viewer-controls">
+                        <div class="viewer-controls" style="color: #cbd5e1; background: #1e293b; border-bottom: 1px solid #334155;">
                             <!-- Lock Controls -->
                             <div class="control-section">
                                 <button type="button" class="btn" onclick="toggleScrollLock()" id="scrollLockBtn" title="Lock/Unlock Viewer Scroll">🔓</button>
@@ -1000,8 +1000,8 @@
                             </div>
 
                             <div class="control-section">
-                                <label>Curve:</label>
-                                <select id="overlayCurveSelect" onchange="onOverlayCurveTargetChange()" style="max-width: 140px; font-size: 0.75rem; padding: 2px 6px;">
+                                <label class="text-slate-300">Curve:</label>
+                                <select id="overlayCurveSelect" class="bg-slate-800 text-slate-200 border-slate-600 rounded" onchange="onOverlayCurveTargetChange()" style="max-width: 140px; font-size: 0.75rem; padding: 2px 6px;">
                                     <option value="__all_unlocked__">All (unlocked)</option>
                                 </select>
                                 <label class="flex-center gap-1 cursor-pointer font-normal" title="Lock this curve's overlay settings">
