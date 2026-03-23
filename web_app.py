@@ -1046,7 +1046,8 @@ def auto_layout_tracks():
         header = panel
         header_h = panel_h
     else:
-        header_h = max(10, int(panel_h * 0.15))
+        # Give it a very generous crop (25% instead of 15%) because logs vary wildly
+        header_h = max(10, int(panel_h * 0.25))
         header = panel[0:header_h, :]
 
     ok, buf = cv2.imencode('.jpg', header, [cv2.IMWRITE_JPEG_QUALITY, 90])
