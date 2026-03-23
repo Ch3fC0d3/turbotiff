@@ -347,9 +347,9 @@
             display: flex;
             gap: 8px;
             padding: 6px 10px;
-            background: #1e293b;
-            color: #cbd5e1;
-            border-bottom: 1px solid #334155;
+            background: #f5f5f5;
+            color: #334155;
+            border-bottom: 1px solid #ddd;
             margin-bottom: 0;
             flex-wrap: wrap;
             align-items: center;
@@ -360,19 +360,13 @@
             font-size: 0.75rem;
             min-width: auto;
             white-space: nowrap;
-            background: #334155;
-            color: #f8fafc;
-            border: 1px solid #475569;
-        }
-        .viewer-controls .btn:hover {
-            background: #475569;
         }
         .viewer-controls .control-section {
             display: flex;
             gap: 4px;
             align-items: center;
             padding: 0 6px;
-            border-left: 1px solid #475569;
+            border-left: 1px solid #ddd;
         }
         .viewer-controls .control-section:first-child {
             border-left: none;
@@ -382,14 +376,14 @@
             font-size: 0.75rem;
             font-weight: 600;
             margin: 0;
-            color: #cbd5e1;
+            color: #1e293b;
         }
         .viewer-controls input[type="range"] {
             width: 80px;
         }
         .viewer-controls .hint-text {
             font-size: 0.7rem;
-            color: #94a3b8;
+            color: #64748b;
         }
         .viewer-scroll {
             height: calc(100vh - 120px) !important;
@@ -984,7 +978,7 @@
                         <div id="crosshairLabel" class="crosshair-label hidden"></div>
 
                         <!-- Unified Viewer Controls -->
-                        <div class="viewer-controls" style="color: #cbd5e1; background: #1e293b; border-bottom: 1px solid #334155;">
+                        <div class="viewer-controls">
                             <!-- Lock Controls -->
                             <div class="control-section">
                                 <button type="button" class="btn" onclick="toggleScrollLock()" id="scrollLockBtn" title="Lock/Unlock Viewer Scroll">🔓</button>
