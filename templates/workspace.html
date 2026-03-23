@@ -6073,25 +6073,10 @@
                     return;
                 }
 
-                const tracks = data.tracks || [];
-                if (!tracks.length) {
-                    showStatus('No tracks detected in header region. Try selecting a larger area.', 'warning');
-                    const summaryEl = document.getElementById('headerSelectionSummary');
-                    if (summaryEl) {
-                        summaryEl.textContent = 'No tracks found in header. Try again.';
-                    }
-                    headerRegion = null;
-                    clearHeaderRegionOverlay();
-                    return;
-                }
-
-                // Store the detected header tracks
-                headerTracks = tracks;
-
-                // Store extracted header metadata (company, well, field, etc.) if provided
+                // Even if there are no tracks, we might still have header metadata.
+                // We should process it before returning due to lack of tracks.
                 headerMetadata = (data && data.header_metadata) ? data.header_metadata : null;
 
-                // Populate input fields if metadata exists
                 if (headerMetadata) {
                     if (headerMetadata.well) document.getElementById('headerWell').value = headerMetadata.well;
                     if (headerMetadata.comp) document.getElementById('headerComp').value = headerMetadata.comp;
@@ -6109,6 +6094,29 @@
                     if (headerMetadata.srvc) document.getElementById('headerSrvc').value = headerMetadata.srvc;
                     if (headerMetadata.service) document.getElementById('headerSrvc').value = headerMetadata.service;
                 }
+
+                const tracks = data.tracks || [];
+                if (!tracks.length) {
+                    if (headerMetadata) {
+                        showStatus('Found header info but no curve tracks. Try a larger manual selection if needed.', 'info');
+                        const summaryEl = document.getElementById('headerSelectionSummary');
+                        if (summaryEl) {
+                            summaryEl.textContent = 'Populated header fields, but no tracks detected.';
+                        }
+                    } else {
+                        showStatus('No tracks or info detected in header region. Try selecting a larger area.', 'warning');
+                        const summaryEl = document.getElementById('headerSelectionSummary');
+                        if (summaryEl) {
+                            summaryEl.textContent = 'No tracks found in header. Try again.';
+                        }
+                        headerRegion = null;
+                        clearHeaderRegionOverlay();
+                    }
+                    return;
+                }
+
+                // Store the detected header tracks
+                headerTracks = tracks;
 
                 // Update summary
                 const summaryEl = document.getElementById('headerSelectionSummary');
