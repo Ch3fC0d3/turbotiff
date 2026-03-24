@@ -910,7 +910,14 @@ def digitize():
             # -----------------------------------
 
             roi = img[top:bot, left_px:right_px]
-            
+
+            # Guard against degenerate ROIs (zero-width/height slice crashes GaussianBlur)
+            if roi.size == 0 or roi.shape[0] < 2 or roi.shape[1] < 2:
+                nrows_c = max(0, bot - top)
+                traces[name] = []
+                curve_data[name] = {'unit': unit, 'values': np.full(nrows_c, null_val, dtype=np.float32)}
+                continue
+
             # Apply blur
             if blur > 0:
                 bb = blur + 1 if blur % 2 == 0 else blur
