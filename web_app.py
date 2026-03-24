@@ -927,43 +927,27 @@ def digitize():
             mask = image_processing.preprocess_curve_track(roi, mode)
             
             # 2. Tracing
-            # Black tracks remain on multiscale DP (with optional AI mask).
-            # Colored tracks use pixel-perfect first (better on color curves with dense grids),
-            # then fallback to multiscale DP if needed.
-            if mode == 'black':
-                if config.experimental_black_ai_enabled() and ai_tracer and ai_tracer.model is not None:
-                    # Black logs: try AI tracer mask first
-                    prob_map = ai_tracer.predict_prob_map(roi)
-                    mask = (prob_map * 255).astype(np.uint8)
-
-                xs, _conf = curve_tracing.trace_curve_multiscale(
-                    curve_mask=mask,
-                    scale_min=0,     # Pass 0-1 ranges, scaling happens later
-                    scale_max=1,
-                    curve_type=name,
-                    max_step=3,
-                    smooth_lambda=0.01 if name.upper() == 'GR' else 0.1,
-                )
-            else:
-                xs, _conf = curve_tracing.trace_curve_pixel_perfect(
-                    mask=mask,
-                    bgr=roi,
-                    preserve_wiggles=True,
-                    crest_boost=True,
-                )
-
-                # Fallback if the color-first tracer did not produce enough finite points
-                finite_count = int(np.isfinite(xs).sum()) if xs is not None and len(xs) > 0 else 0
-                min_finite = max(8, mask.shape[0] // 20)
-                if xs is None or len(xs) == 0 or finite_count < min_finite:
-                    xs, _conf = curve_tracing.trace_curve_multiscale(
-                        curve_mask=mask,
-                        scale_min=0,
-                        scale_max=1,
-                        curve_type=name,
-                        max_step=3,
-                        smooth_lambda=0.01 if name.upper() == 'GR' else 0.1,
-                    )
+            # Use advanced multi-scale dynamic programming tracer for better resilience to grids
+            # For black curves, we use a more constrained trace due to noise
+            scale_min = left_value
+            scale_max = right_value
+            
+            # Use AI if mode is black and available, otherwise fallback to DP multiscale
+            if mode == 'black' and config.experimental_black_ai_enabled() and ai_tracer and ai_tracer.model is not None:
+                # Black logs: try AI tracer first
+                prob_map = ai_tracer.predict_prob_map(roi)
+                # Apply post-processing if necessary or let multiscale handle the prob map
+                # But currently ai_tracer returns a probability map directly
+                mask = (prob_map * 255).astype(np.uint8)
+                
+            xs, _conf = curve_tracing.trace_curve_multiscale(
+                curve_mask=mask,
+                scale_min=0,     # Pass 0-1 ranges, scaling happens later
+                scale_max=1,
+                curve_type=name,
+                max_step=3,
+                smooth_lambda=0.01 if name.upper() == 'GR' else 0.1
+            )
             
             # Fallback if tracer fails
             if xs is None or len(xs) == 0:

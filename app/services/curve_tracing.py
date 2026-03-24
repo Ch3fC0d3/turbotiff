@@ -201,7 +201,6 @@ def trace_curve_with_dp(
                     cost[:, x] += 1.0
     
     # Horizontal grid line suppression using morphological opening.
-    horiz_mask = np.zeros(h, dtype=bool)  # default: no gridline rows
     if h >= 4 and w >= 8:
         horiz_kernel_w = max(5, w // 4)
         horiz_kern = cv2.getStructuringElement(cv2.MORPH_RECT, (horiz_kernel_w, 1))
@@ -258,12 +257,7 @@ def trace_curve_with_dp(
         elif valid2:
             xs[y] = v2
             confidence[y] = conf_bwd[y]
-
-    # NaN out gridline rows so smooth_nanmedian bridges them instead of flat-lining
-    if np.any(horiz_mask):
-        xs[horiz_mask] = np.nan
-        confidence[horiz_mask] = 0.0
-
+    
     return xs, confidence
 
 def trace_curve_skeleton_path(mask: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -460,8 +454,7 @@ def trace_curve_pixel_perfect(mask: np.ndarray, grayscale: np.ndarray = None, bg
         ridge_prob = cv2.dilate(ridge_prob, cv2.getStructuringElement(cv2.MORPH_RECT, (1, 3)))
     xs = np.full(h, np.nan, dtype=np.float32)
     confidence = np.zeros(h, dtype=np.float32)
-    # Keep search window bounded to avoid teleporting across the track onto grid artifacts.
-    base_search_rad = max(18, min(48, w // 6)) if crest_boost else max(12, min(40, w // 8))
+    base_search_rad = 80  # widened to catch larger jumps
 
     # Find initial x from the row with strongest total ink
     row_sums = ridge_prob.sum(axis=1)
@@ -478,8 +471,7 @@ def trace_curve_pixel_perfect(mask: np.ndarray, grayscale: np.ndarray = None, bg
         # Determine search window
         s_rad = base_search_rad + int(6 * row_strength) if crest_boost else base_search_rad
         if wide_search:
-            # Do not explode search radius; large jumps usually indicate locking onto grid lines.
-            s_rad = int(s_rad * (1.8 if crest_boost else 2.2))
+            s_rad = s_rad * 3  # Emergency wide search
             
         start = max(0, xi - s_rad)
         end = min(w, xi + s_rad + 1)
@@ -532,7 +524,7 @@ def trace_curve_pixel_perfect(mask: np.ndarray, grayscale: np.ndarray = None, bg
                 dist = abs(pk_x - prev_x)
                 
                 norm_dist = dist / float(s_rad) # 0 to 1
-                penalty_weight = 0.35  # stronger continuity pressure to prevent teleports
+                penalty_weight = 0.15 # Stronger weight to prevent jumping to grid lines
                 continuity_penalty = penalty_weight * (norm_dist ** 2) * (1.0 - pk_val * 0.5)
                 
                 score = pk_val - continuity_penalty
@@ -636,7 +628,7 @@ def trace_curve_pixel_perfect(mask: np.ndarray, grayscale: np.ndarray = None, bg
     xs = s.to_numpy(dtype=np.float32)
 
     # Photocopy-style fusion: row tracer vs row maxima vs seam
-    # 1) Fuse with row maxima, but only when consistent with local continuity.
+    # 1) Fuse with row maxima when stronger (no margin to keep detail)
     for y in range(h):
         if not np.isfinite(row_max_xs[y]):
             continue
@@ -644,13 +636,7 @@ def trace_curve_pixel_perfect(mask: np.ndarray, grayscale: np.ndarray = None, bg
         x_max = row_max_xs[y]
         p_max = ridge_prob[y, int(round(np.clip(x_max, 0, w - 1)))]
         p_row = ridge_prob[y, int(round(np.clip(x_row, 0, w - 1)))] if np.isfinite(x_row) else -1.0
-        if not np.isfinite(x_row):
-            xs[y] = x_max
-            continue
-
-        dx = abs(float(x_max) - float(x_row))
-        # Allow near-by refinement, or moderate shifts only when row-max is materially stronger.
-        if (dx <= 4.0 and p_max > p_row) or (dx <= 12.0 and p_max > (p_row + 0.08)):
+        if p_max > p_row:
             xs[y] = x_max
 
     # 2) Optional seam fusion; skip when crest_boost is enabled
@@ -853,19 +839,5 @@ def trace_curve_multiscale(curve_mask, scale_min, scale_max, curve_type="GR", ma
         else:
             final_xs[y] = values[0]
             final_conf[y] = 0.0
-
-    # Final full-resolution horizontal gridline suppression.
-    # Some scales may still produce finite values on gridline rows; drop them here so
-    # downstream smoothing can bridge through true gridline bands.
-    if h >= 4 and w >= 8:
-        bin_mask_full = (curve_mask > 25).astype(np.uint8)
-        horiz_kernel_w = max(5, w // 4)
-        horiz_kern = cv2.getStructuringElement(cv2.MORPH_RECT, (horiz_kernel_w, 1))
-        horiz_detected = cv2.morphologyEx(bin_mask_full, cv2.MORPH_OPEN, horiz_kern)
-        horiz_row_frac = horiz_detected.mean(axis=1)
-        horiz_rows = horiz_row_frac > 0.30
-        if np.any(horiz_rows):
-            final_xs[horiz_rows] = np.nan
-            final_conf[horiz_rows] = 0.0
-
+            
     return final_xs, final_conf
