@@ -100,10 +100,22 @@ def preprocess_curve_track(roi, mode="black"):
         # Only subtract thin vertical lines
         thin_vert_lines = cv2.subtract(vert_structures, thick_vert_structures)
         curve_mask = cv2.bitwise_and(curve_mask, cv2.bitwise_not(thin_vert_lines))
-    
-    # Step 3: Horizontal gridlines are handled by the DP tracer's built-in horiz_mask
-    # suppression, which penalises any row where >30% of the width is solid horizontal ink.
-    # Doing it morphologically here also erases flat log segments, so we skip it.
+
+    # Step 3: Remove THIN horizontal gridlines for colored curves only.
+    # For black mode we skip this to avoid deleting flat black log segments; the DP tracer
+    # handles black horizontal suppression with its own row-based penalty.
+    if mode != "black" and w > 15:
+        line_len = min(15, w // 3)
+        horiz_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (line_len, 1))
+        horiz_structures = cv2.morphologyEx(curve_mask, cv2.MORPH_OPEN, horiz_kernel)
+
+        # Thick structures (>=3px tall) are likely the curve
+        thick_horiz_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (line_len, 3))
+        thick_horiz_structures = cv2.morphologyEx(curve_mask, cv2.MORPH_OPEN, thick_horiz_kernel)
+
+        # Only subtract thin horizontal lines
+        thin_horiz_lines = cv2.subtract(horiz_structures, thick_horiz_structures)
+        curve_mask = cv2.bitwise_and(curve_mask, cv2.bitwise_not(thin_horiz_lines))
 
     # Step 4: Slight blur to fill 1-pixel gaps
     blurred = cv2.GaussianBlur(curve_mask, (3, 3), 0)

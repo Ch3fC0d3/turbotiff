@@ -845,5 +845,19 @@ def trace_curve_multiscale(curve_mask, scale_min, scale_max, curve_type="GR", ma
         else:
             final_xs[y] = values[0]
             final_conf[y] = 0.0
-            
+
+    # Final full-resolution horizontal gridline suppression.
+    # Some scales may still produce finite values on gridline rows; drop them here so
+    # downstream smoothing can bridge through true gridline bands.
+    if h >= 4 and w >= 8:
+        bin_mask_full = (curve_mask > 25).astype(np.uint8)
+        horiz_kernel_w = max(5, w // 4)
+        horiz_kern = cv2.getStructuringElement(cv2.MORPH_RECT, (horiz_kernel_w, 1))
+        horiz_detected = cv2.morphologyEx(bin_mask_full, cv2.MORPH_OPEN, horiz_kern)
+        horiz_row_frac = horiz_detected.mean(axis=1)
+        horiz_rows = horiz_row_frac > 0.30
+        if np.any(horiz_rows):
+            final_xs[horiz_rows] = np.nan
+            final_conf[horiz_rows] = 0.0
+
     return final_xs, final_conf
