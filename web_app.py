@@ -225,9 +225,11 @@ def _handle_internal_server_error(exc):
 
 @app.route('/')
 def index():
+    if _current_user(require_access=False):
+        return redirect(url_for('dashboard'))
     return render_template('index.html', 
                           version=config.APP_VERSION, 
-                          build_time=config.APP_BUILD_TIME, # This might be missing from config, but we can default or add it
+                          build_time=config.APP_BUILD_TIME,
                           vision_available=vision_service.VISION_API_AVAILABLE)
 
 @app.route('/login', methods=['GET', 'POST'])
