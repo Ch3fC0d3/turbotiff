@@ -99,6 +99,23 @@ REMEMBER_COOKIE_NAME = 'remember_token'
 REMEMBER_COOKIE_DAYS = 30
 
 
+def _remember_serializer():
+    from itsdangerous import URLSafeTimedSerializer
+    return URLSafeTimedSerializer(config.SECRET_KEY, salt='remember-me')
+
+
+def _create_remember_token(payload: dict) -> str:
+    return _remember_serializer().dumps(payload)
+
+
+def _decode_remember_token(raw: str) -> Optional[dict]:
+    from itsdangerous import BadSignature, SignatureExpired
+    try:
+        return _remember_serializer().loads(raw, max_age=REMEMBER_COOKIE_DAYS * 86400)
+    except (BadSignature, SignatureExpired, Exception):
+        return None
+
+
 @app.before_request
 def restore_session_from_token():
     """If no active session, check for a remember-me token cookie and restore the session."""
@@ -107,11 +124,18 @@ def restore_session_from_token():
     raw_token = request.cookies.get(REMEMBER_COOKIE_NAME)
     if not raw_token:
         return
-    user = auth_billing.get_user_by_remember_token(config.AUTH_DB_PATH, raw_token)
-    if user and not user.get('is_banned'):
-        session['user_id'] = user['id']
-        session['is_admin'] = user.get('is_admin', 0)
+    payload = _decode_remember_token(raw_token)
+    if not payload:
+        return
+    if payload.get('admin'):
+        session['admin_override'] = True
         session.permanent = True
+    elif payload.get('user_id'):
+        user = auth_billing.get_user_by_id(config.AUTH_DB_PATH, int(payload['user_id']))
+        if user and not user.get('is_banned'):
+            session['user_id'] = user['id']
+            session['is_admin'] = user.get('is_admin', 0)
+            session.permanent = True
 
 auth_billing.init_db(config.AUTH_DB_PATH)
 stripe.api_key = config.STRIPE_SECRET_KEY
@@ -222,7 +246,14 @@ def login():
             session.clear()  # prevent session fixation
             session['admin_override'] = True
             session.permanent = remember
-            return redirect(next_url or url_for('dashboard'))
+            resp = redirect(next_url or url_for('dashboard'))
+            if remember:
+                resp.set_cookie(
+                    REMEMBER_COOKIE_NAME, _create_remember_token({'admin': True}),
+                    max_age=REMEMBER_COOKIE_DAYS * 24 * 3600,
+                    httponly=True, samesite='Lax',
+                )
+            return resp
 
         user = auth_billing.get_user_by_email(config.AUTH_DB_PATH, email)
         if not user or not check_password_hash(user['password_hash'], password or ''):
@@ -233,9 +264,6 @@ def login():
             session['is_admin'] = user.get('is_admin', 0)
             session.permanent = remember
 
-            if remember:
-                token = auth_billing.create_remember_token(config.AUTH_DB_PATH, user['id'])
-
             if auth_billing.subscription_access_allowed(user):
                 dest = next_url or url_for('dashboard')
             else:
@@ -245,9 +273,9 @@ def login():
             resp = redirect(dest)
             if remember:
                 resp.set_cookie(
-                    REMEMBER_COOKIE_NAME, token,
+                    REMEMBER_COOKIE_NAME, _create_remember_token({'user_id': user['id']}),
                     max_age=REMEMBER_COOKIE_DAYS * 24 * 3600,
-                    httponly=True, samesite='Lax', secure=False,
+                    httponly=True, samesite='Lax',
                 )
             return resp
             
