@@ -101,20 +101,10 @@ def preprocess_curve_track(roi, mode="black"):
         thin_vert_lines = cv2.subtract(vert_structures, thick_vert_structures)
         curve_mask = cv2.bitwise_and(curve_mask, cv2.bitwise_not(thin_vert_lines))
     
-    # Step 3: Remove THIN horizontal gridlines
-    if w > 15:
-        line_len = min(15, w // 3)
-        horiz_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (line_len, 1))
-        horiz_structures = cv2.morphologyEx(curve_mask, cv2.MORPH_OPEN, horiz_kernel)
-        
-        # Thick structures (>=3px tall) are likely the curve
-        thick_horiz_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (line_len, 3))
-        thick_horiz_structures = cv2.morphologyEx(curve_mask, cv2.MORPH_OPEN, thick_horiz_kernel)
-        
-        # Only subtract thin horizontal lines
-        thin_horiz_lines = cv2.subtract(horiz_structures, thick_horiz_structures)
-        curve_mask = cv2.bitwise_and(curve_mask, cv2.bitwise_not(thin_horiz_lines))
-    
+    # Step 3: Horizontal gridlines are handled by the DP tracer's built-in horiz_mask
+    # suppression, which penalises any row where >30% of the width is solid horizontal ink.
+    # Doing it morphologically here also erases flat log segments, so we skip it.
+
     # Step 4: Slight blur to fill 1-pixel gaps
     blurred = cv2.GaussianBlur(curve_mask, (3, 3), 0)
     _, cleaned = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
@@ -129,13 +119,12 @@ def preprocess_curve_track(roi, mode="black"):
         edge_mask[:edge_margin] = True
         edge_mask[-edge_margin:] = True
 
-        # Strong spines near the left/right edges (likely track borders)
-        # Use 0.90 threshold: true borders span ~100% of height; slow curves (RHOB/DTC)
-        # can occupy 40-80% of one column and must not be removed.
-        edge_spines = (col_fraction > 0.90) & edge_mask
+        # Edge columns: lower threshold (0.50) catches partial borders that have gaps.
+        # Even a 50% filled edge column is almost certainly a track border, not the curve.
+        edge_spines = (col_fraction > 0.50) & edge_mask
 
-        # Very strong vertical spines anywhere inside the band.
-        interior_spines = (col_fraction > 0.90) & ~edge_mask
+        # Interior: keep threshold high (0.85) so we don't erase genuine flat log segments.
+        interior_spines = (col_fraction > 0.85) & ~edge_mask
 
         spine_cols = edge_spines | interior_spines
         if np.any(spine_cols):
