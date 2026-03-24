@@ -54,22 +54,24 @@ def preprocess_curve_track(roi, mode="black"):
     
     # Step 1: Color isolation
     if mode == "black":
-        # For black-on-black grids, we need more sophisticated extraction
-        # Often the curve is darker/thicker than the gridlines
+        # For black-on-black grids, we need to balance between keeping faded ink
+        # and dropping gridlines. A pure adaptive threshold often drops thin/faded log sections.
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
         
-        # Apply adaptive thresholding to separate ink from background
-        # Block size 51, C=15 helps separate the curve (which is usually locally darker) 
-        # from lighter grid lines, but might keep some strong gridlines
+        # Blur slightly to smooth out dot-matrix printer artifacts
+        blur = cv2.GaussianBlur(gray, (3, 3), 0)
+        
+        # Use a generous global threshold to ensure we don't drop the curve ink.
+        # (Grid lines will also be included, but we'll remove them morphologically later)
+        _, curve_mask = cv2.threshold(blur, 190, 255, cv2.THRESH_BINARY_INV)
+        
+        # Use an adaptive threshold just as a "boost" for very dark local regions
+        # that might be slightly above the global 190 threshold due to uneven lighting
         thresh = cv2.adaptiveThreshold(
             gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-            cv2.THRESH_BINARY_INV, 51, 15
+            cv2.THRESH_BINARY_INV, 51, 10
         )
-        
-        # Additionally, only keep pixels that are actually quite dark globally
-        _, global_thresh = cv2.threshold(gray, 120, 255, cv2.THRESH_BINARY_INV)
-        
-        curve_mask = cv2.bitwise_and(thresh, global_thresh)
+        curve_mask = cv2.bitwise_or(curve_mask, thresh)
     elif mode == "red":
         b, g, r = cv2.split(roi)
         curve_mask = ((r > 120) & (r > g + 20) & (r > b + 20)).astype(np.uint8) * 255
@@ -99,9 +101,8 @@ def preprocess_curve_track(roi, mode="black"):
         thin_vert_lines = cv2.subtract(vert_structures, thick_vert_structures)
         curve_mask = cv2.bitwise_and(curve_mask, cv2.bitwise_not(thin_vert_lines))
     
-    # Step 3: Remove THIN horizontal gridlines for colored curves only.
-    # For black mode we skip this to avoid deleting flat black log segments.
-    if mode != "black" and w > 15:
+    # Step 3: Remove THIN horizontal gridlines
+    if w > 15:
         line_len = min(15, w // 3)
         horiz_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (line_len, 1))
         horiz_structures = cv2.morphologyEx(curve_mask, cv2.MORPH_OPEN, horiz_kernel)
@@ -206,35 +207,10 @@ def detect_dominant_curve_hue(roi_bgr, sample_fraction=0.3):
 def pick_curve_x_per_row(mask, min_run=2):
     h, w = mask.shape
     xs = np.full(h, np.nan, dtype=np.float32)
-    
-    # 1. First pass: find unambiguous rows to anchor the trace
     for y in range(h):
         idx = np.flatnonzero(mask[y, :] > 0)
         if idx.size >= min_run:
-            # If ink spans a very wide area (like a gridline), don't trust it yet
-            if idx[-1] - idx[0] > 25:
-                continue
             xs[y] = float(np.median(idx))
-            
-    # 2. Fill gaps using continuity from nearest valid rows
-    # Interpolate to get a guide path for ambiguous rows
-    s = pd.Series(xs)
-    guide = s.interpolate(limit_direction='both').to_numpy()
-    
-    # 3. Second pass: resolve wide/ambiguous rows using the guide
-    for y in range(h):
-        if np.isnan(xs[y]):
-            idx = np.flatnonzero(mask[y, :] > 0)
-            if idx.size >= min_run and np.isfinite(guide[y]):
-                # Find the ink closest to the guide path
-                closest_idx = idx[np.argmin(np.abs(idx - guide[y]))]
-                # Take median of local ink around that point (ignore distant grid ink)
-                local_idx = idx[np.abs(idx - closest_idx) <= 8]
-                if local_idx.size >= min_run:
-                    xs[y] = float(np.median(local_idx))
-                else:
-                    xs[y] = float(closest_idx)
-                    
     return xs
 
 def smooth_nanmedian(series, window):
