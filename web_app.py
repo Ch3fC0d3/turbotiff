@@ -910,14 +910,7 @@ def digitize():
             # -----------------------------------
 
             roi = img[top:bot, left_px:right_px]
-
-            # Guard against degenerate ROIs (zero-width/height slice crashes GaussianBlur)
-            if roi.size == 0 or roi.shape[0] < 2 or roi.shape[1] < 2:
-                nrows_c = max(0, bot - top)
-                traces[name] = []
-                curve_data[name] = {'unit': unit, 'values': np.full(nrows_c, null_val, dtype=np.float32)}
-                continue
-
+            
             # Apply blur
             if blur > 0:
                 bb = blur + 1 if blur % 2 == 0 else blur
@@ -927,7 +920,31 @@ def digitize():
             mask = image_processing.preprocess_curve_track(roi, mode)
             
             # 2. Tracing
-            xs = image_processing.pick_curve_x_per_row(mask, min_run)
+            # Use advanced multi-scale dynamic programming tracer for better resilience to grids
+            # For black curves, we use a more constrained trace due to noise
+            scale_min = left_value
+            scale_max = right_value
+            
+            # Use AI if mode is black and available, otherwise fallback to DP multiscale
+            if mode == 'black' and config.EXPERIMENTAL_BLACK_AI_ENABLED and ai_tracer and ai_tracer.model is not None:
+                # Black logs: try AI tracer first
+                prob_map = ai_tracer.predict_prob_map(roi)
+                # Apply post-processing if necessary or let multiscale handle the prob map
+                # But currently ai_tracer returns a probability map directly
+                mask = (prob_map * 255).astype(np.uint8)
+                
+            xs, _conf = curve_tracing.trace_curve_multiscale(
+                curve_mask=mask,
+                scale_min=0,     # Pass 0-1 ranges, scaling happens later
+                scale_max=1,
+                curve_type=name,
+                max_step=3,
+                smooth_lambda=0.01 if name.upper() == 'GR' else 0.1
+            )
+            
+            # Fallback if tracer fails
+            if xs is None or len(xs) == 0:
+                xs = image_processing.pick_curve_x_per_row(mask, min_run)
                 
             xs = image_processing.smooth_nanmedian(xs, smooth_window)
             

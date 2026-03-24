@@ -54,24 +54,22 @@ def preprocess_curve_track(roi, mode="black"):
     
     # Step 1: Color isolation
     if mode == "black":
-        # For black-on-black grids, we need to balance between keeping faded ink
-        # and dropping gridlines. A pure adaptive threshold often drops thin/faded log sections.
+        # For black-on-black grids, we need more sophisticated extraction
+        # Often the curve is darker/thicker than the gridlines
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
         
-        # Blur slightly to smooth out dot-matrix printer artifacts
-        blur = cv2.GaussianBlur(gray, (3, 3), 0)
-        
-        # Use a generous global threshold to ensure we don't drop the curve ink.
-        # (Grid lines will also be included, but we'll remove them morphologically later)
-        _, curve_mask = cv2.threshold(blur, 190, 255, cv2.THRESH_BINARY_INV)
-        
-        # Use an adaptive threshold just as a "boost" for very dark local regions
-        # that might be slightly above the global 190 threshold due to uneven lighting
+        # Apply adaptive thresholding to separate ink from background
+        # Block size 51, C=15 helps separate the curve (which is usually locally darker) 
+        # from lighter grid lines, but might keep some strong gridlines
         thresh = cv2.adaptiveThreshold(
             gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-            cv2.THRESH_BINARY_INV, 51, 10
+            cv2.THRESH_BINARY_INV, 51, 15
         )
-        curve_mask = cv2.bitwise_or(curve_mask, thresh)
+        
+        # Additionally, only keep pixels that are actually quite dark globally
+        _, global_thresh = cv2.threshold(gray, 120, 255, cv2.THRESH_BINARY_INV)
+        
+        curve_mask = cv2.bitwise_and(thresh, global_thresh)
     elif mode == "red":
         b, g, r = cv2.split(roi)
         curve_mask = ((r > 120) & (r > g + 20) & (r > b + 20)).astype(np.uint8) * 255
@@ -207,10 +205,32 @@ def detect_dominant_curve_hue(roi_bgr, sample_fraction=0.3):
 def pick_curve_x_per_row(mask, min_run=2):
     h, w = mask.shape
     xs = np.full(h, np.nan, dtype=np.float32)
+    prev_x = None
     for y in range(h):
         idx = np.flatnonzero(mask[y, :] > 0)
         if idx.size >= min_run:
-            xs[y] = float(np.median(idx))
+            if prev_x is None:
+                xs[y] = float(np.median(idx))
+                prev_x = xs[y]
+            else:
+                # Find the cluster of pixels closest to prev_x to avoid jumping across the track
+                # (e.g. ignoring grid lines that extend far away)
+                closest_idx = idx[np.argmin(np.abs(idx - prev_x))]
+                
+                # Get local run around the closest pixel to avoid biasing by distant noise
+                local_idx = idx[np.abs(idx - closest_idx) <= 15]
+                if local_idx.size >= min_run:
+                    xs[y] = float(np.median(local_idx))
+                else:
+                    xs[y] = float(closest_idx)
+                
+                # Update prev_x but limit how fast it can move to prevent sudden teleports
+                # Allow it to follow real curve movement but resist jumping 50+ pixels instantly
+                if np.abs(xs[y] - prev_x) < 30:
+                    prev_x = xs[y]
+                else:
+                    # Drift slowly towards jumps instead of snapping
+                    prev_x = prev_x + np.clip(xs[y] - prev_x, -10, 10)
     return xs
 
 def smooth_nanmedian(series, window):
