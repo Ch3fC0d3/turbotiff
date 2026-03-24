@@ -926,7 +926,7 @@ def digitize():
             scale_max = right_value
             
             # Use AI if mode is black and available, otherwise fallback to DP multiscale
-            if mode == 'black' and config.EXPERIMENTAL_BLACK_AI_ENABLED and ai_tracer and ai_tracer.model is not None:
+            if mode == 'black' and hasattr(config, 'experimental_black_ai_enabled') and config.experimental_black_ai_enabled() and ai_tracer and ai_tracer.model is not None:
                 # Black logs: try AI tracer first
                 prob_map = ai_tracer.predict_prob_map(roi)
                 # Apply post-processing if necessary or let multiscale handle the prob map
