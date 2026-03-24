@@ -85,17 +85,33 @@ def preprocess_curve_track(roi, mode="black"):
         _, _, v = cv2.split(hsv)
         _, curve_mask = cv2.threshold(v, 80, 255, cv2.THRESH_BINARY_INV)
     
-    # Step 2: Remove vertical gridlines
+    # Step 2: Remove THIN vertical gridlines
     if h > 15:
-        vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, min(15, h // 3)))
-        vert_lines = cv2.morphologyEx(curve_mask, cv2.MORPH_OPEN, vertical_kernel)
-        curve_mask = cv2.bitwise_and(curve_mask, cv2.bitwise_not(vert_lines))
+        line_len = min(15, h // 3)
+        vert_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, line_len))
+        vert_structures = cv2.morphologyEx(curve_mask, cv2.MORPH_OPEN, vert_kernel)
+        
+        # Thick structures (>=3px wide) are likely the curve
+        thick_vert_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, line_len))
+        thick_vert_structures = cv2.morphologyEx(curve_mask, cv2.MORPH_OPEN, thick_vert_kernel)
+        
+        # Only subtract thin vertical lines
+        thin_vert_lines = cv2.subtract(vert_structures, thick_vert_structures)
+        curve_mask = cv2.bitwise_and(curve_mask, cv2.bitwise_not(thin_vert_lines))
     
-    # Step 3: Remove horizontal gridlines
+    # Step 3: Remove THIN horizontal gridlines
     if w > 15:
-        horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (min(15, w // 3), 1))
-        horiz_lines = cv2.morphologyEx(curve_mask, cv2.MORPH_OPEN, horizontal_kernel)
-        curve_mask = cv2.bitwise_and(curve_mask, cv2.bitwise_not(horiz_lines))
+        line_len = min(15, w // 3)
+        horiz_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (line_len, 1))
+        horiz_structures = cv2.morphologyEx(curve_mask, cv2.MORPH_OPEN, horiz_kernel)
+        
+        # Thick structures (>=3px tall) are likely the curve
+        thick_horiz_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (line_len, 3))
+        thick_horiz_structures = cv2.morphologyEx(curve_mask, cv2.MORPH_OPEN, thick_horiz_kernel)
+        
+        # Only subtract thin horizontal lines
+        thin_horiz_lines = cv2.subtract(horiz_structures, thick_horiz_structures)
+        curve_mask = cv2.bitwise_and(curve_mask, cv2.bitwise_not(thin_horiz_lines))
     
     # Step 4: Slight blur to fill 1-pixel gaps
     blurred = cv2.GaussianBlur(curve_mask, (3, 3), 0)
