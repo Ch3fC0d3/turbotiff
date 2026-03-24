@@ -205,32 +205,35 @@ def detect_dominant_curve_hue(roi_bgr, sample_fraction=0.3):
 def pick_curve_x_per_row(mask, min_run=2):
     h, w = mask.shape
     xs = np.full(h, np.nan, dtype=np.float32)
-    prev_x = None
+    
+    # 1. First pass: find unambiguous rows to anchor the trace
     for y in range(h):
         idx = np.flatnonzero(mask[y, :] > 0)
         if idx.size >= min_run:
-            if prev_x is None:
-                xs[y] = float(np.median(idx))
-                prev_x = xs[y]
-            else:
-                # Find the cluster of pixels closest to prev_x to avoid jumping across the track
-                # (e.g. ignoring grid lines that extend far away)
-                closest_idx = idx[np.argmin(np.abs(idx - prev_x))]
-                
-                # Get local run around the closest pixel to avoid biasing by distant noise
-                local_idx = idx[np.abs(idx - closest_idx) <= 15]
+            # If ink spans a very wide area (like a gridline), don't trust it yet
+            if idx[-1] - idx[0] > 25:
+                continue
+            xs[y] = float(np.median(idx))
+            
+    # 2. Fill gaps using continuity from nearest valid rows
+    # Interpolate to get a guide path for ambiguous rows
+    s = pd.Series(xs)
+    guide = s.interpolate(limit_direction='both').to_numpy()
+    
+    # 3. Second pass: resolve wide/ambiguous rows using the guide
+    for y in range(h):
+        if np.isnan(xs[y]):
+            idx = np.flatnonzero(mask[y, :] > 0)
+            if idx.size >= min_run and np.isfinite(guide[y]):
+                # Find the ink closest to the guide path
+                closest_idx = idx[np.argmin(np.abs(idx - guide[y]))]
+                # Take median of local ink around that point (ignore distant grid ink)
+                local_idx = idx[np.abs(idx - closest_idx) <= 8]
                 if local_idx.size >= min_run:
                     xs[y] = float(np.median(local_idx))
                 else:
                     xs[y] = float(closest_idx)
-                
-                # Update prev_x but limit how fast it can move to prevent sudden teleports
-                # Allow it to follow real curve movement but resist jumping 50+ pixels instantly
-                if np.abs(xs[y] - prev_x) < 30:
-                    prev_x = xs[y]
-                else:
-                    # Drift slowly towards jumps instead of snapping
-                    prev_x = prev_x + np.clip(xs[y] - prev_x, -10, 10)
+                    
     return xs
 
 def smooth_nanmedian(series, window):
