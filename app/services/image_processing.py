@@ -54,10 +54,22 @@ def preprocess_curve_track(roi, mode="black"):
     
     # Step 1: Color isolation
     if mode == "black":
-        # Low brightness = curve
-        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-        _, _, v = cv2.split(hsv)
-        _, curve_mask = cv2.threshold(v, 80, 255, cv2.THRESH_BINARY_INV)
+        # For black-on-black grids, we need more sophisticated extraction
+        # Often the curve is darker/thicker than the gridlines
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        
+        # Apply adaptive thresholding to separate ink from background
+        # Block size 51, C=15 helps separate the curve (which is usually locally darker) 
+        # from lighter grid lines, but might keep some strong gridlines
+        thresh = cv2.adaptiveThreshold(
+            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+            cv2.THRESH_BINARY_INV, 51, 15
+        )
+        
+        # Additionally, only keep pixels that are actually quite dark globally
+        _, global_thresh = cv2.threshold(gray, 120, 255, cv2.THRESH_BINARY_INV)
+        
+        curve_mask = cv2.bitwise_and(thresh, global_thresh)
     elif mode == "red":
         b, g, r = cv2.split(roi)
         curve_mask = ((r > 120) & (r > g + 20) & (r > b + 20)).astype(np.uint8) * 255
