@@ -460,7 +460,8 @@ def trace_curve_pixel_perfect(mask: np.ndarray, grayscale: np.ndarray = None, bg
         ridge_prob = cv2.dilate(ridge_prob, cv2.getStructuringElement(cv2.MORPH_RECT, (1, 3)))
     xs = np.full(h, np.nan, dtype=np.float32)
     confidence = np.zeros(h, dtype=np.float32)
-    base_search_rad = 80  # widened to catch larger jumps
+    # Keep search window bounded to avoid teleporting across the track onto grid artifacts.
+    base_search_rad = max(18, min(48, w // 6)) if crest_boost else max(12, min(40, w // 8))
 
     # Find initial x from the row with strongest total ink
     row_sums = ridge_prob.sum(axis=1)
@@ -477,7 +478,8 @@ def trace_curve_pixel_perfect(mask: np.ndarray, grayscale: np.ndarray = None, bg
         # Determine search window
         s_rad = base_search_rad + int(6 * row_strength) if crest_boost else base_search_rad
         if wide_search:
-            s_rad = s_rad * 3  # Emergency wide search
+            # Do not explode search radius; large jumps usually indicate locking onto grid lines.
+            s_rad = int(s_rad * (1.8 if crest_boost else 2.2))
             
         start = max(0, xi - s_rad)
         end = min(w, xi + s_rad + 1)
@@ -530,7 +532,7 @@ def trace_curve_pixel_perfect(mask: np.ndarray, grayscale: np.ndarray = None, bg
                 dist = abs(pk_x - prev_x)
                 
                 norm_dist = dist / float(s_rad) # 0 to 1
-                penalty_weight = 0.15 # Stronger weight to prevent jumping to grid lines
+                penalty_weight = 0.35  # stronger continuity pressure to prevent teleports
                 continuity_penalty = penalty_weight * (norm_dist ** 2) * (1.0 - pk_val * 0.5)
                 
                 score = pk_val - continuity_penalty
@@ -634,7 +636,7 @@ def trace_curve_pixel_perfect(mask: np.ndarray, grayscale: np.ndarray = None, bg
     xs = s.to_numpy(dtype=np.float32)
 
     # Photocopy-style fusion: row tracer vs row maxima vs seam
-    # 1) Fuse with row maxima when stronger (no margin to keep detail)
+    # 1) Fuse with row maxima, but only when consistent with local continuity.
     for y in range(h):
         if not np.isfinite(row_max_xs[y]):
             continue
@@ -642,7 +644,13 @@ def trace_curve_pixel_perfect(mask: np.ndarray, grayscale: np.ndarray = None, bg
         x_max = row_max_xs[y]
         p_max = ridge_prob[y, int(round(np.clip(x_max, 0, w - 1)))]
         p_row = ridge_prob[y, int(round(np.clip(x_row, 0, w - 1)))] if np.isfinite(x_row) else -1.0
-        if p_max > p_row:
+        if not np.isfinite(x_row):
+            xs[y] = x_max
+            continue
+
+        dx = abs(float(x_max) - float(x_row))
+        # Allow near-by refinement, or moderate shifts only when row-max is materially stronger.
+        if (dx <= 4.0 and p_max > p_row) or (dx <= 12.0 and p_max > (p_row + 0.08)):
             xs[y] = x_max
 
     # 2) Optional seam fusion; skip when crest_boost is enabled
