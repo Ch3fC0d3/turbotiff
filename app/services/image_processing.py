@@ -74,13 +74,13 @@ def preprocess_curve_track(roi, mode="black"):
         curve_mask = cv2.bitwise_or(curve_mask, thresh)
     elif mode == "red":
         b, g, r = cv2.split(roi)
-        curve_mask = ((r > 80) & (r > g + 10) & (r > b + 10)).astype(np.uint8) * 255
+        curve_mask = ((r > 120) & (r > g + 20) & (r > b + 20)).astype(np.uint8) * 255
     elif mode == "blue":
         b, g, r = cv2.split(roi)
-        curve_mask = ((b > 80) & (b > r + 10) & (b > g + 10)).astype(np.uint8) * 255
+        curve_mask = ((b > 120) & (b > r + 20) & (b > g + 20)).astype(np.uint8) * 255
     elif mode == "green":
         b, g, r = cv2.split(roi)
-        curve_mask = ((g > 80) & (g > r + 10) & (g > b + 10)).astype(np.uint8) * 255
+        curve_mask = ((g > 120) & (g > r + 20) & (g > b + 20)).astype(np.uint8) * 255
     else:
         # Fallback: use existing black mask logic
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
@@ -119,12 +119,13 @@ def preprocess_curve_track(roi, mode="black"):
         edge_mask[:edge_margin] = True
         edge_mask[-edge_margin:] = True
 
-        # Edge columns: lower threshold (0.50) catches partial borders that have gaps.
-        # Even a 50% filled edge column is almost certainly a track border, not the curve.
-        edge_spines = (col_fraction > 0.50) & edge_mask
+        # Strong spines near the left/right edges (likely track borders).
+        # 0.90 threshold: true borders span ~100% of height; log curves near the edge
+        # may occupy 40-80% of one column and must not be removed.
+        edge_spines = (col_fraction > 0.90) & edge_mask
 
-        # Interior: keep threshold high (0.85) so we don't erase genuine flat log segments.
-        interior_spines = (col_fraction > 0.85) & ~edge_mask
+        # Very strong vertical spines anywhere inside the band.
+        interior_spines = (col_fraction > 0.90) & ~edge_mask
 
         spine_cols = edge_spines | interior_spines
         if np.any(spine_cols):
