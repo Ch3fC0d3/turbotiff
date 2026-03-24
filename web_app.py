@@ -312,6 +312,24 @@ def signup():
 
     return render_template('signup.html', error=error)
 
+@app.route('/auth-debug')
+def auth_debug():
+    """Diagnostic route — shows cookie and session state for remember-me debugging."""
+    raw_token = request.cookies.get(REMEMBER_COOKIE_NAME)
+    decoded = _decode_remember_token(raw_token) if raw_token else None
+    info = {
+        'session_keys': list(session.keys()),
+        'session_permanent': session.permanent,
+        'remember_cookie_present': bool(raw_token),
+        'remember_cookie_preview': (raw_token[:20] + '...') if raw_token else None,
+        'token_decode_ok': decoded is not None,
+        'token_payload': decoded,
+        'all_cookie_names': list(request.cookies.keys()),
+        'secret_key_prefix': config.SECRET_KEY[:8] + '...' if config.SECRET_KEY else 'NOT SET',
+    }
+    return jsonify(info)
+
+
 @app.route('/logout')
 def logout():
     """Handle user logout"""
