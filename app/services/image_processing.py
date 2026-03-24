@@ -99,8 +99,9 @@ def preprocess_curve_track(roi, mode="black"):
         thin_vert_lines = cv2.subtract(vert_structures, thick_vert_structures)
         curve_mask = cv2.bitwise_and(curve_mask, cv2.bitwise_not(thin_vert_lines))
     
-    # Step 3: Remove THIN horizontal gridlines
-    if w > 15:
+    # Step 3: Remove THIN horizontal gridlines for colored curves only.
+    # For black mode we skip this to avoid deleting flat black log segments.
+    if mode != "black" and w > 15:
         line_len = min(15, w // 3)
         horiz_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (line_len, 1))
         horiz_structures = cv2.morphologyEx(curve_mask, cv2.MORPH_OPEN, horiz_kernel)
