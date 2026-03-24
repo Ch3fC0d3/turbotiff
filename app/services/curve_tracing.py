@@ -201,6 +201,7 @@ def trace_curve_with_dp(
                     cost[:, x] += 1.0
     
     # Horizontal grid line suppression using morphological opening.
+    horiz_mask = np.zeros(h, dtype=bool)  # default: no gridline rows
     if h >= 4 and w >= 8:
         horiz_kernel_w = max(5, w // 4)
         horiz_kern = cv2.getStructuringElement(cv2.MORPH_RECT, (horiz_kernel_w, 1))
@@ -257,7 +258,12 @@ def trace_curve_with_dp(
         elif valid2:
             xs[y] = v2
             confidence[y] = conf_bwd[y]
-    
+
+    # NaN out gridline rows so smooth_nanmedian bridges them instead of flat-lining
+    if np.any(horiz_mask):
+        xs[horiz_mask] = np.nan
+        confidence[horiz_mask] = 0.0
+
     return xs, confidence
 
 def trace_curve_skeleton_path(mask: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
