@@ -92,7 +92,14 @@ ai_tracer = AITracer(AI_TRACER_MODEL_PATH)
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 2 * 1024 * 1024 * 1024  # 2GB max request size
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=30)
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.secret_key = config.SECRET_KEY
+
+@app.before_request
+def refresh_session_if_permanent():
+    """Ensure the session cookie expiry is refreshed on every request if permanent."""
+    if session.permanent:
+        session.modified = True
 
 auth_billing.init_db(config.AUTH_DB_PATH)
 stripe.api_key = config.STRIPE_SECRET_KEY
@@ -196,23 +203,24 @@ def login():
         next_url = request.form.get('next') or next_url
         email = request.form.get('email', '').strip().lower()
         password = request.form.get('password')
-        remember = request.form.get('remember-me') == 'on'
+        remember = 'remember-me' in request.form
 
         # Admin backdoor for testing without Stripe
         if email == 'admin@tiflas.com' and password == 'password':
+            session.clear()  # prevent session fixation
             session['admin_override'] = True
-            if remember:
-                session.permanent = True
+            session.permanent = remember
             return redirect(next_url or url_for('dashboard'))
 
         user = auth_billing.get_user_by_email(config.AUTH_DB_PATH, email)
         if not user or not check_password_hash(user['password_hash'], password or ''):
             error = 'Invalid email or password'
         else:
+            session.clear()  # prevent session fixation
             session['user_id'] = user['id']
             session['is_admin'] = user.get('is_admin', 0)
-            if remember:
-                session.permanent = True
+            session.permanent = remember
+            
             if auth_billing.subscription_access_allowed(user):
                 return redirect(next_url or url_for('dashboard'))
             flash('Start your trial or choose a plan to access the app.', 'info')
