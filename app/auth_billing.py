@@ -1,7 +1,9 @@
+import hashlib
 import os
+import secrets
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 
@@ -104,6 +106,67 @@ def init_db(db_path: str) -> None:
         # Insert default settings if they don't exist
         conn.execute("INSERT OR IGNORE INTO admin_settings (setting_key, setting_value) VALUES ('global_banner', '')")
         conn.execute("INSERT OR IGNORE INTO admin_settings (setting_key, setting_value) VALUES ('feature_flag_experimental_ai', '0')")
+
+        # Remember-me tokens table
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS remember_tokens (
+                token TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                expires_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_remember_tokens_user_id ON remember_tokens(user_id)")
+
+
+REMEMBER_TOKEN_DAYS = 30
+
+
+def create_remember_token(db_path: str, user_id: int) -> str:
+    """Generate a secure token, store its hash in the DB, and return the raw token."""
+    raw = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(raw.encode()).hexdigest()
+    expires_at = (datetime.now(timezone.utc) + timedelta(days=REMEMBER_TOKEN_DAYS)).isoformat()
+    with get_db(db_path) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO remember_tokens (token, user_id, expires_at) VALUES (?, ?, ?)",
+            (token_hash, user_id, expires_at),
+        )
+    return raw
+
+
+def get_user_by_remember_token(db_path: str, raw_token: str) -> Optional[Dict[str, Any]]:
+    """Validate a raw token and return the associated user, or None if invalid/expired."""
+    if not raw_token:
+        return None
+    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db(db_path) as conn:
+        row = conn.execute(
+            "SELECT user_id FROM remember_tokens WHERE token = ? AND expires_at > ?",
+            (token_hash, now),
+        ).fetchone()
+        if not row:
+            return None
+        user_row = conn.execute("SELECT * FROM users WHERE id = ?", (row["user_id"],)).fetchone()
+    return dict(user_row) if user_row else None
+
+
+def delete_remember_token(db_path: str, raw_token: str) -> None:
+    """Delete a token by its raw value."""
+    if not raw_token:
+        return
+    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+    with get_db(db_path) as conn:
+        conn.execute("DELETE FROM remember_tokens WHERE token = ?", (token_hash,))
+
+
+def delete_remember_tokens_for_user(db_path: str, user_id: int) -> None:
+    """Delete all remember-me tokens for a user (e.g. on password change or explicit logout-all)."""
+    with get_db(db_path) as conn:
+        conn.execute("DELETE FROM remember_tokens WHERE user_id = ?", (user_id,))
 
 
 def save_user_log(db_path: str, log_id: str, user_id: int, name: str, curve_count: int, depth_start: float, depth_end: float, depth_unit: str, las_content: str) -> None:

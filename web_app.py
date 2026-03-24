@@ -95,11 +95,23 @@ app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=30)
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.secret_key = config.SECRET_KEY
 
+REMEMBER_COOKIE_NAME = 'remember_token'
+REMEMBER_COOKIE_DAYS = 30
+
+
 @app.before_request
-def refresh_session_if_permanent():
-    """Ensure the session cookie expiry is refreshed on every request if permanent."""
-    if session.permanent:
-        session.modified = True
+def restore_session_from_token():
+    """If no active session, check for a remember-me token cookie and restore the session."""
+    if session.get('user_id') or session.get('admin_override'):
+        return
+    raw_token = request.cookies.get(REMEMBER_COOKIE_NAME)
+    if not raw_token:
+        return
+    user = auth_billing.get_user_by_remember_token(config.AUTH_DB_PATH, raw_token)
+    if user and not user.get('is_banned'):
+        session['user_id'] = user['id']
+        session['is_admin'] = user.get('is_admin', 0)
+        session.permanent = True
 
 auth_billing.init_db(config.AUTH_DB_PATH)
 stripe.api_key = config.STRIPE_SECRET_KEY
@@ -220,11 +232,24 @@ def login():
             session['user_id'] = user['id']
             session['is_admin'] = user.get('is_admin', 0)
             session.permanent = remember
-            
+
+            if remember:
+                token = auth_billing.create_remember_token(config.AUTH_DB_PATH, user['id'])
+
             if auth_billing.subscription_access_allowed(user):
-                return redirect(next_url or url_for('dashboard'))
-            flash('Start your trial or choose a plan to access the app.', 'info')
-            return redirect(url_for('account'))
+                dest = next_url or url_for('dashboard')
+            else:
+                flash('Start your trial or choose a plan to access the app.', 'info')
+                dest = url_for('account')
+
+            resp = redirect(dest)
+            if remember:
+                resp.set_cookie(
+                    REMEMBER_COOKIE_NAME, token,
+                    max_age=REMEMBER_COOKIE_DAYS * 24 * 3600,
+                    httponly=True, samesite='Lax', secure=False,
+                )
+            return resp
             
     return render_template('login.html', error=error, next_url=next_url)
 
@@ -262,9 +287,13 @@ def signup():
 @app.route('/logout')
 def logout():
     """Handle user logout"""
-    session.pop('admin_override', None)
-    session.pop('user_id', None)
-    return redirect(url_for('index'))
+    raw_token = request.cookies.get(REMEMBER_COOKIE_NAME)
+    if raw_token:
+        auth_billing.delete_remember_token(config.AUTH_DB_PATH, raw_token)
+    session.clear()
+    resp = redirect(url_for('index'))
+    resp.delete_cookie(REMEMBER_COOKIE_NAME)
+    return resp
 
 
 @app.route('/account')
