@@ -54,22 +54,24 @@ def preprocess_curve_track(roi, mode="black"):
     
     # Step 1: Color isolation
     if mode == "black":
-        # For black-on-black grids, we need more sophisticated extraction
-        # Often the curve is darker/thicker than the gridlines
+        # For black-on-black grids, we need to balance between keeping faded ink
+        # and dropping gridlines. A pure adaptive threshold often drops thin/faded log sections.
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
         
-        # Apply adaptive thresholding to separate ink from background
-        # Block size 51, C=15 helps separate the curve (which is usually locally darker) 
-        # from lighter grid lines, but might keep some strong gridlines
+        # Blur slightly to smooth out dot-matrix printer artifacts
+        blur = cv2.GaussianBlur(gray, (3, 3), 0)
+        
+        # Use a generous global threshold to ensure we don't drop the curve ink.
+        # (Grid lines will also be included, but we'll remove them morphologically later)
+        _, curve_mask = cv2.threshold(blur, 190, 255, cv2.THRESH_BINARY_INV)
+        
+        # Use an adaptive threshold just as a "boost" for very dark local regions
+        # that might be slightly above the global 190 threshold due to uneven lighting
         thresh = cv2.adaptiveThreshold(
             gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-            cv2.THRESH_BINARY_INV, 51, 15
+            cv2.THRESH_BINARY_INV, 51, 10
         )
-        
-        # Additionally, only keep pixels that are actually quite dark globally
-        _, global_thresh = cv2.threshold(gray, 120, 255, cv2.THRESH_BINARY_INV)
-        
-        curve_mask = cv2.bitwise_and(thresh, global_thresh)
+        curve_mask = cv2.bitwise_or(curve_mask, thresh)
     elif mode == "red":
         b, g, r = cv2.split(roi)
         curve_mask = ((r > 120) & (r > g + 20) & (r > b + 20)).astype(np.uint8) * 255
