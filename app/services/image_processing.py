@@ -326,69 +326,36 @@ def detect_dominant_curve_hue(roi_bgr, sample_fraction=0.3):
         
     return None
 
-def _best_run_center(idx, guide_x, search_radius, min_run=1):
-    """Among the contiguous runs in `idx`, return the center of the run that is
-    (a) within `search_radius` of `guide_x` and (b) has the most pixels.
-    Returns NaN if no qualifying run exists."""
-    if idx.size == 0:
-        return np.nan
-
-    # Split into contiguous runs (gap > 1 px breaks a run)
-    runs = []
-    start = prev = int(idx[0])
-    for px in idx[1:]:
-        px = int(px)
-        if px - prev > 2:          # allow 1-pixel gap inside a run (scan noise)
-            runs.append((start, prev))
-            start = px
-        prev = px
-    runs.append((start, prev))
-
-    # Filter: run center must be within search_radius of guide, run must be long enough
-    best_center = np.nan
-    best_size = 0
-    for (lo, hi) in runs:
-        center = (lo + hi) / 2.0
-        size = hi - lo + 1
-        if size < min_run:
-            continue
-        if np.isfinite(guide_x) and abs(center - guide_x) > search_radius:
-            continue
-        if size > best_size:
-            best_size = size
-            best_center = center
-
-    return best_center
-
-
 def pick_curve_x_per_row(mask, min_run=2):
     h, w = mask.shape
     xs = np.full(h, np.nan, dtype=np.float32)
 
+    # 1. First pass: trust only unambiguous rows (ink span narrow enough to be the curve, not a gridline)
     max_span = max(25, w // 8)
-    search_radius = max(30, w // 6)
-
-    # 1. First pass: anchor unambiguous narrow-span rows using the dominant run center
     for y in range(h):
         idx = np.flatnonzero(mask[y, :] > 0)
-        if idx.size >= min_run and (idx[-1] - idx[0]) <= max_span:
-            c = _best_run_center(idx, np.nan, search_radius, min_run)
-            if np.isfinite(c):
-                xs[y] = float(c)
+        if idx.size >= min_run:
+            if idx[-1] - idx[0] <= max_span:
+                xs[y] = float(np.median(idx))
 
     # 2. Interpolate anchors → continuous guide path
     s = pd.Series(xs)
     guide = s.interpolate(limit_direction='both').to_numpy()
 
-    # 3. Second pass: resolve wide/gridline rows — pick the largest run near the guide.
-    #    Rows with nothing in the search radius stay NaN and are bridged by smooth_nanmedian.
+    # 3. Second pass: resolve wide / gridline rows by picking ink closest to the guide,
+    #    but only within a reasonable search radius so we never jump to annotations,
+    #    CSG text, tick marks, or the far border of the track.
+    search_radius = max(30, w // 6)
     for y in range(h):
         if np.isnan(xs[y]):
             idx = np.flatnonzero(mask[y, :] > 0)
-            if idx.size >= 1 and np.isfinite(guide[y]):
-                c = _best_run_center(idx, guide[y], search_radius, min_run)
-                if np.isfinite(c):
-                    xs[y] = float(c)
+            if idx.size >= min_run and np.isfinite(guide[y]):
+                nearby = idx[np.abs(idx - guide[y]) <= search_radius]
+                if nearby.size >= min_run:
+                    xs[y] = float(np.median(nearby))
+                elif nearby.size == 1:
+                    xs[y] = float(nearby[0])
+                # else: leave NaN — smooth_nanmedian will bridge the gap linearly
 
     return xs
 
