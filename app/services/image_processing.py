@@ -326,55 +326,36 @@ def detect_dominant_curve_hue(roi_bgr, sample_fraction=0.3):
         
     return None
 
-def _nearest_cluster(idx, guide_x, search_radius):
-    """Return the center of the ink cluster in `idx` that is closest to `guide_x`
-    and within `search_radius`.  Returns NaN if nothing qualifies."""
-    nearby = idx[np.abs(idx.astype(np.float32) - guide_x) <= search_radius]
-    if nearby.size == 0:
-        return np.nan
-    nearest = float(nearby[np.argmin(np.abs(nearby.astype(np.float32) - guide_x))])
-    local = nearby[np.abs(nearby.astype(np.float32) - nearest) <= 8]
-    return float(np.median(local)) if local.size >= 1 else nearest
-
-
 def pick_curve_x_per_row(mask, min_run=2):
     h, w = mask.shape
-    max_span      = max(25, w // 8)
-    search_radius = max(20, w // 8)   # tighter than w//6 to reject scale annotations
+    xs = np.full(h, np.nan, dtype=np.float32)
 
-    # ── Pass 1a: raw anchors (narrow-span rows only) ────────────────────────
-    raw = np.full(h, np.nan, dtype=np.float32)
+    # 1. First pass: trust only unambiguous rows (ink span narrow enough to be the curve, not a gridline)
+    max_span = max(25, w // 8)
     for y in range(h):
         idx = np.flatnonzero(mask[y, :] > 0)
-        if idx.size >= min_run and (idx[-1] - idx[0]) <= max_span:
-            raw[y] = float(np.median(idx))
+        if idx.size >= min_run:
+            if idx[-1] - idx[0] <= max_span:
+                xs[y] = float(np.median(idx))
 
-    # Rough guide from raw anchors (some may be annotation artifacts)
-    rough_guide = pd.Series(raw).interpolate(limit_direction='both').to_numpy()
+    # 2. Interpolate anchors → continuous guide path
+    s = pd.Series(xs)
+    guide = s.interpolate(limit_direction='both').to_numpy()
 
-    # ── Pass 1b: filter out anchors far from rough guide ────────────────────
-    # Annotation/scale elements have narrow spans (pass max_span) but sit far
-    # from the main curve.  Discard them so the final guide is uncontaminated.
-    xs = np.full(h, np.nan, dtype=np.float32)
+    # 3. Second pass: resolve wide / gridline rows by picking ink closest to the guide,
+    #    but only within a reasonable search radius so we never jump to annotations,
+    #    CSG text, tick marks, or the far border of the track.
+    search_radius = max(30, w // 6)
     for y in range(h):
-        if np.isfinite(raw[y]) and np.isfinite(rough_guide[y]):
-            if abs(raw[y] - rough_guide[y]) <= search_radius:
-                xs[y] = raw[y]
-
-    # Clean guide from filtered anchors
-    guide = pd.Series(xs).interpolate(limit_direction='both').to_numpy()
-
-    # ── Pass 2: fill remaining rows ─────────────────────────────────────────
-    # Pick the ink cluster closest to the guide (not the median of everything
-    # nearby) so a larger annotation blob cannot bias the result away from the
-    # actual curve.
-    for y in range(h):
-        if np.isnan(xs[y]) and np.isfinite(guide[y]):
+        if np.isnan(xs[y]):
             idx = np.flatnonzero(mask[y, :] > 0)
-            if idx.size >= 1:
-                c = _nearest_cluster(idx, guide[y], search_radius)
-                if np.isfinite(c):
-                    xs[y] = float(c)
+            if idx.size >= min_run and np.isfinite(guide[y]):
+                nearby = idx[np.abs(idx - guide[y]) <= search_radius]
+                if nearby.size >= min_run:
+                    xs[y] = float(np.median(nearby))
+                elif nearby.size == 1:
+                    xs[y] = float(nearby[0])
+                # else: leave NaN — smooth_nanmedian will bridge the gap linearly
 
     return xs
 
