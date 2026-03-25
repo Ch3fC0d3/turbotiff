@@ -920,32 +920,31 @@ def digitize():
             mask = image_processing.preprocess_curve_track(roi, mode)
             
             # 2. Tracing
-            # Use advanced multi-scale dynamic programming tracer for better resilience to grids
-            # For black curves, we use a more constrained trace due to noise
             scale_min = left_value
             scale_max = right_value
-            
-            # Use AI if mode is black and available, otherwise fallback to DP multiscale
-            if mode == 'black' and hasattr(config, 'experimental_black_ai_enabled') and config.experimental_black_ai_enabled() and ai_tracer and ai_tracer.model is not None:
-                # Black logs: try AI tracer first
-                prob_map = ai_tracer.predict_prob_map(roi)
-                # Apply post-processing if necessary or let multiscale handle the prob map
-                # But currently ai_tracer returns a probability map directly
-                mask = (prob_map * 255).astype(np.uint8)
-                
-            xs, _conf = curve_tracing.trace_curve_multiscale(
-                curve_mask=mask,
-                scale_min=0,     # Pass 0-1 ranges, scaling happens later
-                scale_max=1,
-                curve_type=name,
-                max_step=3,
-                smooth_lambda=0.01 if name.upper() == 'GR' else 0.1
-            )
-            
-            # Fallback if tracer fails
-            if xs is None or len(xs) == 0:
+
+            if mode == 'black':
+                # Black curves: DP multiscale with optional AI mask
+                if hasattr(config, 'experimental_black_ai_enabled') and config.experimental_black_ai_enabled() and ai_tracer and ai_tracer.model is not None:
+                    prob_map = ai_tracer.predict_prob_map(roi)
+                    mask = (prob_map * 255).astype(np.uint8)
+
+                xs, _conf = curve_tracing.trace_curve_multiscale(
+                    curve_mask=mask,
+                    scale_min=0,
+                    scale_max=1,
+                    curve_type=name,
+                    max_step=3,
+                    smooth_lambda=0.01 if name.upper() == 'GR' else 0.1
+                )
+
+                if xs is None or len(xs) == 0:
+                    xs = image_processing.pick_curve_x_per_row(mask, min_run)
+            else:
+                # Colored curves (red/green/blue): two-pass row picker is more
+                # reliable than DP on dense gridded log paper — avoids horizontal jumps
                 xs = image_processing.pick_curve_x_per_row(mask, min_run)
-                
+
             xs = image_processing.smooth_nanmedian(xs, smooth_window)
             
             # Create trace points for overlay (x_dom, y_dom)

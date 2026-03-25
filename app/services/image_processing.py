@@ -143,6 +143,129 @@ def preprocess_curve_track(roi, mode="black"):
 
     return cleaned
 
+def compute_prob_map(roi_bgr, mode="black"):
+    """Build a soft probability map for curve tracing using HSV color isolation,
+    edge detection, and distance-transform centerline boosting.
+
+    Returns an 8-bit image (0-255) where higher values = higher curve likelihood.
+    """
+    if roi_bgr is None or roi_bgr.size == 0:
+        return np.zeros((1, 1), dtype=np.uint8)
+
+    h, w = roi_bgr.shape[:2]
+    if h < 2 or w < 2:
+        return np.zeros((h, w), dtype=np.uint8)
+
+    hsv = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2HSV)
+    gray = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
+
+    # 1) Color mask
+    if mode == "green":
+        lower = np.array([35, 40, 40], dtype=np.uint8)
+        upper = np.array([90, 255, 255], dtype=np.uint8)
+        color_mask = cv2.inRange(hsv, lower, upper)
+
+        b, g, r = cv2.split(roi_bgr)
+        r16 = r.astype(np.int16)
+        g16 = g.astype(np.int16)
+        b16 = b.astype(np.int16)
+        red_dominant = (r16 > g16 + 10) & (r16 > b16 + 10)
+        color_mask[red_dominant] = 0
+
+        nonzero = np.nonzero(color_mask)
+        if len(nonzero[0]) > 50:
+            h_channel = hsv[:, :, 0]
+            valid_h = h_channel[nonzero]
+            med_h = float(np.median(valid_h))
+            band = 15.0
+            h_lo = max(0, int(med_h - band))
+            h_hi = min(180, int(med_h + band))
+            dyn_lower = np.array([h_lo, 40, 40], dtype=np.uint8)
+            dyn_upper = np.array([h_hi, 255, 255], dtype=np.uint8)
+            color_mask = cv2.inRange(hsv, dyn_lower, dyn_upper)
+            color_mask[red_dominant] = 0
+
+        g_dominant = (g16 >= r16 - 5) & (g16 >= b16 + 5)
+        color_mask[~g_dominant] = 0
+
+    elif mode == "red":
+        lower1 = np.array([0, 70, 40], dtype=np.uint8)
+        upper1 = np.array([15, 255, 255], dtype=np.uint8)
+        lower2 = np.array([160, 70, 40], dtype=np.uint8)
+        upper2 = np.array([180, 255, 255], dtype=np.uint8)
+        color_mask = cv2.bitwise_or(
+            cv2.inRange(hsv, lower1, upper1),
+            cv2.inRange(hsv, lower2, upper2),
+        )
+    elif mode == "blue":
+        lower = np.array([90, 40, 40], dtype=np.uint8)
+        upper = np.array([140, 255, 255], dtype=np.uint8)
+        color_mask = cv2.inRange(hsv, lower, upper)
+    else:
+        color_mask = cv2.adaptiveThreshold(
+            gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 21, 10,
+        )
+
+    kernel = np.ones((3, 3), np.uint8)
+    color_mask = cv2.morphologyEx(color_mask, cv2.MORPH_OPEN, kernel, iterations=1)
+    color_mask = cv2.morphologyEx(color_mask, cv2.MORPH_CLOSE, kernel, iterations=1)
+    color_score = color_mask.astype(np.float32) / 255.0
+
+    # 2) Edge score gated by color for colored modes
+    edges = cv2.Canny(gray, 40, 120)
+    edges_blur = cv2.GaussianBlur(edges, (5, 5), 0)
+    edge_score = edges_blur.astype(np.float32) / 255.0
+    if mode in {"green", "red", "blue"}:
+        edge_score *= color_score
+
+    # 3) Suppress vertical rails (columns that are "on" most of the image)
+    if h >= 4 and w >= 2:
+        col_on_frac = (color_score > 0).mean(axis=0)
+        rail_cols = col_on_frac > 0.40
+        if np.any(rail_cols):
+            color_score[:, rail_cols] *= 0.01
+            edge_score[:, rail_cols] *= 0.01
+
+    # 4) Centerline boost via distance transform on ink pixels
+    ink_mask = (color_score > 0.35) & (edge_score > 0.15)
+    if not np.any(ink_mask):
+        ink_mask = (color_score > 0.2) & (edge_score > 0.05)
+
+    bin_for_dt = ink_mask.astype(np.uint8)
+    if np.any(bin_for_dt):
+        dist = cv2.distanceTransform(bin_for_dt, cv2.DIST_L2, 5)
+        center_score = dist.astype(np.float32)
+        maxd = float(center_score.max())
+        if maxd > 0:
+            center_score /= maxd
+    else:
+        center_score = np.zeros_like(color_score, dtype=np.float32)
+
+    # 5) Combine scores; for colored modes strongly emphasize the centerline ridge
+    if mode in {"green", "red", "blue"}:
+        prob = 0.2 * color_score + 0.1 * edge_score + 0.7 * center_score
+        prob = prob ** 2
+    else:
+        prob = 0.3 * color_score + 0.4 * edge_score + 0.3 * center_score
+
+    # 6) Gate with binary preprocessed mask to suppress gridlines
+    try:
+        cleaned_binary = preprocess_curve_track(roi_bgr, mode=mode)
+        if cleaned_binary is not None and cleaned_binary.size == prob.size:
+            cleaned_score = cleaned_binary.astype(np.float32) / 255.0
+            gate = 0.05 + 0.95 * cleaned_score
+            prob *= gate
+    except Exception:
+        pass
+
+    maxp = float(prob.max())
+    if maxp > 0:
+        prob = prob / maxp
+    prob = np.clip(prob, 1e-4, 1.0).astype(np.float32)
+
+    return (prob * 255.0).astype(np.uint8)
+
+
 def detect_dominant_curve_hue(roi_bgr, sample_fraction=0.3):
     """Detect the dominant hue of the curve in a sample region.
     
@@ -207,10 +330,28 @@ def detect_dominant_curve_hue(roi_bgr, sample_fraction=0.3):
 def pick_curve_x_per_row(mask, min_run=2):
     h, w = mask.shape
     xs = np.full(h, np.nan, dtype=np.float32)
+
+    # 1. First pass: trust only unambiguous rows (ink span narrow enough to be the curve, not a gridline)
+    max_span = max(25, w // 8)
     for y in range(h):
         idx = np.flatnonzero(mask[y, :] > 0)
         if idx.size >= min_run:
-            xs[y] = float(np.median(idx))
+            if idx[-1] - idx[0] <= max_span:
+                xs[y] = float(np.median(idx))
+
+    # 2. Interpolate anchors → continuous guide path
+    s = pd.Series(xs)
+    guide = s.interpolate(limit_direction='both').to_numpy()
+
+    # 3. Second pass: resolve wide / gridline rows by picking ink closest to the guide
+    for y in range(h):
+        if np.isnan(xs[y]):
+            idx = np.flatnonzero(mask[y, :] > 0)
+            if idx.size >= min_run and np.isfinite(guide[y]):
+                closest = idx[np.argmin(np.abs(idx - guide[y]))]
+                local = idx[np.abs(idx - closest) <= 8]
+                xs[y] = float(np.median(local)) if local.size >= min_run else float(closest)
+
     return xs
 
 def smooth_nanmedian(series, window):

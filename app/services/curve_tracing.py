@@ -841,3 +841,39 @@ def trace_curve_multiscale(curve_mask, scale_min, scale_max, curve_type="GR", ma
             final_conf[y] = 0.0
             
     return final_xs, final_conf
+
+
+def trace_curve_direct_centerline(mask, threshold=10):
+    """Find the centerline by picking the peak intensity in each row.
+    Uses intensity-weighted centroid around the peak for sub-pixel accuracy.
+
+    Args:
+        mask: Grayscale probability map (0-255)
+        threshold: Minimum intensity to consider as ink
+
+    Returns:
+        Array of x-coordinates (one per row), np.nan where no ink found
+    """
+    h, w = mask.shape[:2]
+    xs = np.full(h, np.nan, dtype=np.float32)
+
+    for y in range(h):
+        row = mask[y, :].astype(np.float32)
+        valid = row >= threshold
+        if not np.any(valid):
+            continue
+        max_intensity = row[valid].max()
+        if max_intensity <= threshold:
+            continue
+        peak_mask = row >= max_intensity * 0.95
+        peak_indices = np.where(peak_mask)[0]
+        if len(peak_indices) == 0:
+            continue
+        weights = row[peak_indices] ** 3
+        wsum = weights.sum()
+        if wsum > 0:
+            xs[y] = float((peak_indices * weights).sum() / wsum)
+        else:
+            xs[y] = float(peak_indices[len(peak_indices) // 2])
+
+    return xs
