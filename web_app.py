@@ -923,27 +923,16 @@ def digitize():
             scale_min = left_value
             scale_max = right_value
 
-            if mode == 'black':
-                # Black curves: DP multiscale with optional AI mask
-                if hasattr(config, 'experimental_black_ai_enabled') and config.experimental_black_ai_enabled() and ai_tracer and ai_tracer.model is not None:
-                    prob_map = ai_tracer.predict_prob_map(roi)
-                    mask = (prob_map * 255).astype(np.uint8)
+            # AI mask override for black curves when available
+            if mode == 'black' and hasattr(config, 'experimental_black_ai_enabled') and config.experimental_black_ai_enabled() and ai_tracer and ai_tracer.model is not None:
+                prob_map = ai_tracer.predict_prob_map(roi)
+                mask = (prob_map * 255).astype(np.uint8)
 
-                xs, _conf = curve_tracing.trace_curve_multiscale(
-                    curve_mask=mask,
-                    scale_min=0,
-                    scale_max=1,
-                    curve_type=name,
-                    max_step=3,
-                    smooth_lambda=0.01 if name.upper() == 'GR' else 0.1
-                )
-
-                if xs is None or len(xs) == 0:
-                    xs = image_processing.pick_curve_x_per_row(mask, min_run)
-            else:
-                # Colored curves (red/green/blue): two-pass row picker is more
-                # reliable than DP on dense gridded log paper — avoids horizontal jumps
-                xs = image_processing.pick_curve_x_per_row(mask, min_run)
+            # Two-pass gridline-immune row picker for all curve types.
+            # Spine removal + HSV isolation already clean the mask; the picker
+            # handles residual wide-span rows (gridlines/depth markers) via the
+            # guide path + search-radius guard.
+            xs = image_processing.pick_curve_x_per_row(mask, min_run)
 
             xs = image_processing.smooth_nanmedian(xs, smooth_window)
             
