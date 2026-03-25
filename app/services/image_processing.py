@@ -342,14 +342,20 @@ def pick_curve_x_per_row(mask, min_run=2):
     s = pd.Series(xs)
     guide = s.interpolate(limit_direction='both').to_numpy()
 
-    # 3. Second pass: resolve wide / gridline rows by picking ink closest to the guide
+    # 3. Second pass: resolve wide / gridline rows by picking ink closest to the guide,
+    #    but only within a reasonable search radius so we never jump to annotations,
+    #    CSG text, tick marks, or the far border of the track.
+    search_radius = max(30, w // 6)
     for y in range(h):
         if np.isnan(xs[y]):
             idx = np.flatnonzero(mask[y, :] > 0)
             if idx.size >= min_run and np.isfinite(guide[y]):
-                closest = idx[np.argmin(np.abs(idx - guide[y]))]
-                local = idx[np.abs(idx - closest) <= 8]
-                xs[y] = float(np.median(local)) if local.size >= min_run else float(closest)
+                nearby = idx[np.abs(idx - guide[y]) <= search_radius]
+                if nearby.size >= min_run:
+                    xs[y] = float(np.median(nearby))
+                elif nearby.size == 1:
+                    xs[y] = float(nearby[0])
+                # else: leave NaN — smooth_nanmedian will bridge the gap linearly
 
     return xs
 
