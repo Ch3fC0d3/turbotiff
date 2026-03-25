@@ -10,19 +10,20 @@ from typing import List, Tuple, Optional, Dict
 # ----------------------------
 
 def hsv_red_mask(hsv_img):
-    lower1, upper1 = np.array([0, 80, 80]), np.array([10, 255, 255])
-    lower2, upper2 = np.array([170, 80, 80]), np.array([180, 255, 255])
+    # H=0-15: reds/oranges; H=140-180: magentas/pinks — both map to "red" mode
+    lower1, upper1 = np.array([0, 40, 40]), np.array([15, 255, 255])
+    lower2, upper2 = np.array([140, 40, 40]), np.array([180, 255, 255])
     return cv2.bitwise_or(
         cv2.inRange(hsv_img, lower1, upper1),
         cv2.inRange(hsv_img, lower2, upper2),
     )
 
 def hsv_blue_mask(hsv_img):
-    lower, upper = np.array([90, 80, 80]), np.array([140, 255, 255])
+    lower, upper = np.array([90, 40, 40]), np.array([140, 255, 255])
     return cv2.inRange(hsv_img, lower, upper)
 
 def hsv_green_mask(hsv_img):
-    lower, upper = np.array([40, 80, 80]), np.array([90, 255, 255])
+    lower, upper = np.array([35, 40, 40]), np.array([90, 255, 255])
     return cv2.inRange(hsv_img, lower, upper)
 
 def black_mask(gray_img):
@@ -53,6 +54,7 @@ def preprocess_curve_track(roi, mode="black"):
         return np.zeros((h, w), dtype=np.uint8)
     
     # Step 1: Color isolation
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
     if mode == "black":
         # For black-on-black grids, we need to balance between keeping faded ink
         # and dropping gridlines. A pure adaptive threshold often drops thin/faded log sections.
@@ -73,17 +75,14 @@ def preprocess_curve_track(roi, mode="black"):
         )
         curve_mask = cv2.bitwise_or(curve_mask, thresh)
     elif mode == "red":
-        b, g, r = cv2.split(roi)
-        curve_mask = ((r > 120) & (r > g + 20) & (r > b + 20)).astype(np.uint8) * 255
+        # HSV-based: catches red (H=0-15) AND magenta/pink (H=140-180)
+        curve_mask = hsv_red_mask(hsv)
     elif mode == "blue":
-        b, g, r = cv2.split(roi)
-        curve_mask = ((b > 120) & (b > r + 20) & (b > g + 20)).astype(np.uint8) * 255
+        curve_mask = hsv_blue_mask(hsv)
     elif mode == "green":
-        b, g, r = cv2.split(roi)
-        curve_mask = ((g > 120) & (g > r + 20) & (g > b + 20)).astype(np.uint8) * 255
+        curve_mask = hsv_green_mask(hsv)
     else:
-        # Fallback: use existing black mask logic
-        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        # Fallback: low-value (dark) pixels
         _, _, v = cv2.split(hsv)
         _, curve_mask = cv2.threshold(v, 80, 255, cv2.THRESH_BINARY_INV)
     
