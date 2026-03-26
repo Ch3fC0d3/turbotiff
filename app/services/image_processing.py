@@ -330,32 +330,34 @@ def pick_curve_x_per_row(mask, min_run=2):
     h, w = mask.shape
     xs = np.full(h, np.nan, dtype=np.float32)
 
-    # 1. First pass: trust only unambiguous rows (ink span narrow enough to be the curve, not a gridline)
     max_span = max(25, w // 8)
+    search_radius = max(30, w // 6)
+
+    # 1. First pass: trust only unambiguous rows (ink span narrow enough to be the curve, not a gridline)
     for y in range(h):
         idx = np.flatnonzero(mask[y, :] > 0)
-        if idx.size >= min_run:
-            if idx[-1] - idx[0] <= max_span:
-                xs[y] = float(np.median(idx))
+        if idx.size >= min_run and (idx[-1] - idx[0]) <= max_span:
+            xs[y] = float(np.median(idx))
 
     # 2. Interpolate anchors → continuous guide path
     s = pd.Series(xs)
     guide = s.interpolate(limit_direction='both').to_numpy()
 
-    # 3. Second pass: resolve wide / gridline rows by picking ink closest to the guide,
-    #    but only within a reasonable search radius so we never jump to annotations,
-    #    CSG text, tick marks, or the far border of the track.
-    search_radius = max(30, w // 6)
+    # 3. Second pass: for rows with wide ink spans (gridlines/annotations), pick the
+    #    pixels CLOSEST to the guide (not median-of-all-nearby which oscillates).
     for y in range(h):
-        if np.isnan(xs[y]):
+        if np.isnan(xs[y]) and np.isfinite(guide[y]):
             idx = np.flatnonzero(mask[y, :] > 0)
-            if idx.size >= min_run and np.isfinite(guide[y]):
+            if idx.size >= 1:
+                # Find pixels within search radius
                 nearby = idx[np.abs(idx - guide[y]) <= search_radius]
-                if nearby.size >= min_run:
-                    xs[y] = float(np.median(nearby))
-                elif nearby.size == 1:
-                    xs[y] = float(nearby[0])
-                # else: leave NaN — smooth_nanmedian will bridge the gap linearly
+                if nearby.size >= 1:
+                    # Among those, find the closest one(s) to the guide
+                    distances = np.abs(nearby - guide[y])
+                    min_dist = distances.min()
+                    # Take median of pixels within 3px of the closest (handles thick ink)
+                    closest_cluster = nearby[distances <= min_dist + 3]
+                    xs[y] = float(np.median(closest_cluster))
 
     return xs
 
