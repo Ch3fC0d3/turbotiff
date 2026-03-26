@@ -23,7 +23,7 @@ def hsv_blue_mask(hsv_img):
     return cv2.inRange(hsv_img, lower, upper)
 
 def hsv_green_mask(hsv_img):
-    lower, upper = np.array([35, 40, 40]), np.array([90, 255, 255])
+    lower, upper = np.array([35, 80, 40]), np.array([90, 255, 255])
     return cv2.inRange(hsv_img, lower, upper)
 
 def black_mask(gray_img):
