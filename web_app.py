@@ -893,6 +893,8 @@ def digitize():
             left_value = float(c['left_value'])
             right_value = float(c['right_value'])
             mode = c.get('mode', 'black')
+            curve_type = c.get('curve_type', mode.upper())
+            hot_side = c.get('hot_side', None)
             
             # --- Learning System Integration ---
             # Record the parameters used for this curve
@@ -928,11 +930,23 @@ def digitize():
                 prob_map = ai_tracer.predict_prob_map(roi)
                 mask = (prob_map * 255).astype(np.uint8)
 
-            # Two-pass gridline-immune row picker for all curve types.
-            # Spine removal + HSV isolation already clean the mask; the picker
-            # handles residual wide-span rows (gridlines/depth markers) via the
-            # guide path + search-radius guard.
-            xs = image_processing.pick_curve_x_per_row(mask, min_run)
+            # Bidirectional Viterbi DP tracer (same approach as tifflas).
+            # Runs forward + backward passes and merges results to eliminate
+            # directional bias. Gridline suppression is handled inside the DP
+            # via morphological cost-domain detection.
+            xs, _conf = curve_tracing.trace_curve_with_dp(
+                mask,
+                scale_min=scale_min,
+                scale_max=scale_max,
+                curve_type=curve_type if curve_type else "GR",
+                max_step=8,
+                smooth_lambda=0.5,
+                curv_lambda=0.0,
+                hot_side=hot_side if hot_side else None,
+            )
+
+            if xs is None or len(xs) == 0:
+                xs = image_processing.pick_curve_x_per_row(mask, min_run)
 
             xs = image_processing.smooth_nanmedian(xs, smooth_window)
             
