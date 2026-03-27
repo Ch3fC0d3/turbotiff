@@ -364,7 +364,7 @@ def pick_curve_x_per_row(mask, min_run=2):
     #    surrounding trend.  Clearing them lets smooth_nanmedian bridge cleanly.
     outlier_threshold = max(20, w // 8)
     local_med = (pd.Series(xs)
-                 .rolling(51, min_periods=5, center=True)
+                 .rolling(21, min_periods=3, center=True)
                  .median()
                  .to_numpy(dtype=np.float32))
     xs[np.abs(xs - local_med) > outlier_threshold] = np.nan
