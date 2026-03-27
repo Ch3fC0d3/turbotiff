@@ -359,6 +359,14 @@ def pick_curve_x_per_row(mask, min_run=2):
                     closest_cluster = nearby[distances <= min_dist + 3]
                     xs[y] = float(np.median(closest_cluster))
 
+    # 4. Outlier removal: clear picks that deviate too far from their local neighbours.
+    outlier_threshold = max(20, w // 8)
+    local_med = (pd.Series(xs)
+                 .rolling(21, min_periods=3, center=True)
+                 .median()
+                 .to_numpy(dtype=np.float32))
+    xs[np.abs(xs - local_med) > outlier_threshold] = np.nan
+
     return xs
 
 def smooth_nanmedian(series, window):
