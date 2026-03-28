@@ -6369,6 +6369,17 @@ def pricing():
             'highlight': True,
         },
     ]
+    return render_template(
+        'pricing.html',
+        user=user,
+        plans=plans,
+        current_plan_label=auth_billing.plan_label(user.get('plan_code')) if user else None,
+    )
+
+
+@app.route('/managed-conversion')
+def managed_conversion():
+    user = _current_user(require_access=False)
     managed_tiers = [
         {
             'name': 'Simple',
@@ -6402,11 +6413,9 @@ def pricing():
         },
     ]
     return render_template(
-        'pricing.html',
+        'managed_conversion.html',
         user=user,
-        plans=plans,
         managed_tiers=managed_tiers,
-        current_plan_label=auth_billing.plan_label(user.get('plan_code')) if user else None,
     )
 
 

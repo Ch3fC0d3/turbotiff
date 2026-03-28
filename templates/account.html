@@ -82,9 +82,9 @@
             </section>
 
             <section class="rounded-xl border border-slate-800 bg-slate-900 p-5 md:col-span-2">
-                <h2 class="text-lg font-semibold">Upgrade Options</h2>
+                <h2 class="text-lg font-semibold">Self-Serve Plans</h2>
                 <p class="mt-2 text-sm text-slate-400">
-                    Need the full pricing breakdown or managed conversion overview?
+                    Need the full pricing breakdown?
                     <a href="/pricing" class="font-semibold text-cyan-300 hover:text-cyan-200">View Pricing & Membership</a>.
                 </p>
                 <div class="mt-4 flex flex-wrap gap-3">
@@ -107,6 +107,30 @@
                     </form>
                 </div>
                 <p class="mt-2 text-xs text-slate-400">Annual plan highlighted as best value. {% if not trial_eligibility.eligible %}{{ trial_eligibility.reason }}{% endif %}</p>
+            </section>
+
+            <section class="rounded-xl border border-slate-800 bg-slate-900 p-5 md:col-span-2">
+                <h2 class="text-lg font-semibold">Managed Conversion Service</h2>
+                <p class="mt-2 text-sm text-slate-400">
+                    Prefer to let us handle the digitization? See the full breakdown on the
+                    <a href="/managed-conversion" class="font-semibold text-cyan-300 hover:text-cyan-200">Managed Conversion page</a>.
+                </p>
+                <div class="mt-4 flex flex-wrap gap-3">
+                    <form method="POST" action="/billing/create-checkout-session">
+                        <input type="hidden" name="plan" value="managed_simple">
+                        <input type="hidden" name="mode" value="managed">
+                        <button type="submit" class="rounded-md border border-slate-600 px-4 py-2 text-sm font-semibold text-slate-100 hover:bg-slate-800">Order Simple ($29.99)</button>
+                    </form>
+
+                    <form method="POST" action="/billing/create-checkout-session">
+                        <input type="hidden" name="plan" value="managed_standard">
+                        <input type="hidden" name="mode" value="managed">
+                        <button type="submit" class="rounded-md border border-slate-600 px-4 py-2 text-sm font-semibold text-slate-100 hover:bg-slate-800">Order Standard ($59.99)</button>
+                    </form>
+                    
+                    <a href="mailto:support@tiflas.com?subject=Custom Quote Request" class="rounded-md border border-slate-600 px-4 py-2 text-sm font-semibold text-slate-100 hover:bg-slate-800">Request Custom Quote</a>
+                </div>
+                <p class="mt-2 text-xs text-slate-400">One-time payment per log. Requires manual upload of files after purchase.</p>
             </section>
 
             <section class="rounded-xl border border-slate-800 bg-slate-900 p-5">
