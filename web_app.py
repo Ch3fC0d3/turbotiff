@@ -6503,10 +6503,21 @@ def signup():
                 company_name=company_name,
             )
             session['user_id'] = user_id
+            # Always start a local trial immediately so the user can access the
+            # dashboard right away, regardless of whether Stripe checkout completes.
+            trial_end_iso = (datetime.now(timezone.utc) + timedelta(days=auth_billing.TRIAL_DAYS)).isoformat()
+            auth_billing.update_user_fields(
+                config.AUTH_DB_PATH,
+                user_id,
+                subscription_status='trialing',
+                trial_used=1,
+                trial_started_at=datetime.now(timezone.utc).isoformat(),
+                trial_ends_at=trial_end_iso,
+            )
             if _is_stripe_configured():
                 return redirect(url_for('create_checkout_session', plan='monthly', mode='trial'))
-            flash('Account created. Add Stripe keys on Railway to enable paid signup and trial checkout.', 'warning')
-            return redirect(url_for('account'))
+            flash('Account created! Your 30-day free trial is now active.', 'success')
+            return redirect(url_for('dashboard'))
 
     return render_template('signup.html', error=error)
 
@@ -6658,7 +6669,7 @@ def admin_action():
             return jsonify({'success': True})
         return jsonify({'success': False, 'error': 'Missing key'})
         
-    elif action in ['ban', 'unban', 'extend_trial', 'make_lifetime', 'delete']:
+    elif action in ['ban', 'unban', 'extend_trial', 'grant_trial', 'make_lifetime', 'delete']:
         target_id = data.get('user_id')
         if target_id:
             try:

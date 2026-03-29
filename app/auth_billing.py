@@ -389,6 +389,12 @@ def admin_update_user_action(db_path: str, user_id: int, action: str) -> bool:
         elif action == 'extend_trial':
             # SQLite datetime modifier
             conn.execute("UPDATE users SET trial_ends_at = datetime(trial_ends_at, '+7 days') WHERE id = ?", (user_id,))
+        elif action == 'grant_trial':
+            trial_end = (datetime.now(timezone.utc) + timedelta(days=TRIAL_DAYS)).isoformat()
+            conn.execute(
+                "UPDATE users SET subscription_status = 'trialing', trial_used = 1, trial_started_at = ?, trial_ends_at = ? WHERE id = ?",
+                (_utc_now_iso(), trial_end, user_id),
+            )
         elif action == 'make_lifetime':
             conn.execute("UPDATE users SET subscription_status = 'active', plan_code = 'lifetime_comped' WHERE id = ?", (user_id,))
         elif action == 'delete':

@@ -164,6 +164,8 @@
                                             <div class="py-1" role="none">
                                                 {% if u.subscription_status == 'trialing' %}
                                                 <button onclick="adminAction('extend_trial', '{{ u.id }}')" class="text-slate-300 hover:bg-slate-700 block w-full px-4 py-2 text-left text-sm">+7 Days Trial</button>
+                                                {% else %}
+                                                <button onclick="adminAction('grant_trial', '{{ u.id }}')" class="text-blue-400 hover:bg-slate-700 block w-full px-4 py-2 text-left text-sm">Grant 30-Day Trial</button>
                                                 {% endif %}
                                                 <button onclick="adminAction('make_lifetime', '{{ u.id }}')" class="text-emerald-400 hover:bg-slate-700 block w-full px-4 py-2 text-left text-sm">Comp Lifetime</button>
                                                 {% if u.is_banned %}
