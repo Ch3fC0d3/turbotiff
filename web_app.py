@@ -7234,22 +7234,15 @@ def digitize():
         # Run both DP and Direct Centerline tracers, then merge per-row based on probability.
         # AND DISABLE EXTRA REFINEMENTS which cause the zig-zag snapping.
         elif mode in colored_modes:
-            # SUPER-RESOLUTION: Upscale mask by 2x to allow sub-pixel precision
-            # Use LINEAR interpolation to create smooth gradients between pixels
-            mask_orig = mask
-            h_orig, w_orig = mask.shape
-            mask = cv2.resize(mask, (w_orig * 2, h_orig * 2), interpolation=cv2.INTER_LINEAR)
-            
-            # Adjust parameters for 2x scale
-            max_step_dp_sr = max_step_dp * 2
-            
+            h_mask, w_mask = mask.shape
+
             # 1. Run DP Tracer (provides continuity)
             xs_dp, conf_dp = trace_curve_with_dp(
                 mask,
                 scale_min=left_value,
                 scale_max=right_value,
                 curve_type=curve_type,
-                max_step=max_step_dp_sr,
+                max_step=max_step_dp,
                 smooth_lambda=dp_smooth_lambda,
                 curv_lambda=dp_curv_lambda,
                 hot_side=hot_side,
@@ -7258,11 +7251,10 @@ def digitize():
             # 2. Local Peak Search Fusion
             # Instead of a global direct tracer (which gets distracted by far-away curves),
             # search locally around the DP path for the true tip of the spike.
-            h_mask, w_mask = mask.shape
             prob_map = mask.astype(np.float32) / 255.0
             xs = np.full(h_mask, np.nan, dtype=np.float32)
             
-            search_window = 100
+            search_window = 50
             
             for y in range(h_mask):
                 x_dp = xs_dp[y]
@@ -7362,25 +7354,6 @@ def digitize():
             s = pd.Series(xs)
             xs = s.interpolate(method='linear', limit_direction='both', limit=max(25, int(xs.size * 0.02))).to_numpy(dtype=np.float32)
             
-            # DOWNSAMPLE: Map back to original resolution
-            # Take every 2nd point and divide coordinate by 2
-            # Use averaging to reduce noise: (y*2 + y*2+1) / 2
-            xs_down = np.full(h_orig, np.nan, dtype=np.float32)
-            for y_orig in range(h_orig):
-                y_sr = y_orig * 2
-                val1 = xs[y_sr]
-                val2 = xs[y_sr + 1] if y_sr + 1 < h_mask else val1
-                
-                if np.isfinite(val1) and np.isfinite(val2):
-                    xs_down[y_orig] = (val1 + val2) / 4.0 # Divide by 2 (avg) then divide by 2 (scale) -> /4
-                elif np.isfinite(val1):
-                    xs_down[y_orig] = val1 / 2.0
-                elif np.isfinite(val2):
-                    xs_down[y_orig] = val2 / 2.0
-            
-            xs = xs_down
-            # Restore original mask for downstream
-            mask = mask_orig
 
             # 8b. Clean up artifacts (single-pixel horizontal glitches)
             # The high-sensitivity plateau logic can sometimes trigger on noise.
