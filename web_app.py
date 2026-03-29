@@ -7410,18 +7410,16 @@ def digitize():
                 pass
             
         else:
-            # For black/other modes, use enhanced multi-scale tracer
-            # This tracer now includes "Grid-Safe Snapping" to handle black grids.
-            # It fuses 5 different scales to find the most consistent path and rejects vertical rails.
-            xs, confidence = trace_curve_multiscale(
+            # For black/other modes, use the DP tracer directly (fast, no Vision API calls)
+            xs, confidence = trace_curve_with_dp(
                 mask,
                 scale_min=left_value,
                 scale_max=right_value,
                 curve_type=curve_type,
                 max_step=max_step_dp,
                 smooth_lambda=dp_smooth_lambda,
+                curv_lambda=dp_curv_lambda,
                 hot_side=hot_side,
-                bgr_roi=roi,
             )
 
             # Push trace to hot-side ink edge (tip/crest of each spike)
