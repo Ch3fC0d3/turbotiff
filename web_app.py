@@ -3050,7 +3050,7 @@ def trace_curve_pixel_perfect(mask: np.ndarray, grayscale: np.ndarray = None, bg
 
     return xs, confidence
 
-def trace_curve_multiscale(curve_mask, scale_min, scale_max, curve_type="GR", max_step=3, smooth_lambda=0.1, hot_side=None):
+def trace_curve_multiscale(curve_mask, scale_min, scale_max, curve_type="GR", max_step=3, smooth_lambda=0.1, hot_side=None, bgr_roi=None):
     """
     Enhanced multi-scale curve tracing with 5 scales and weighted fusion.
     
@@ -3383,7 +3383,7 @@ def trace_curve_multiscale(curve_mask, scale_min, scale_max, curve_type="GR", ma
     
     # Hybrid AI + Traditional peak detection
     peaks_traditional = detect_local_peaks(prob, min_prominence=0.005) if curve_type.upper() == "GR" else []
-    peaks_ai = ai_detect_peaks(roi, curve_type) if curve_type.upper() == "GR" and VISION_API_AVAILABLE else []
+    peaks_ai = ai_detect_peaks(bgr_roi if bgr_roi is not None else curve_mask, curve_type) if curve_type.upper() == "GR" and VISION_API_AVAILABLE else []
     
     # Merge traditional and AI peaks
     all_peaks = peaks_traditional + peaks_ai
@@ -7421,6 +7421,7 @@ def digitize():
                 max_step=max_step_dp,
                 smooth_lambda=dp_smooth_lambda,
                 hot_side=hot_side,
+                bgr_roi=roi,
             )
 
             # Push trace to hot-side ink edge (tip/crest of each spike)
