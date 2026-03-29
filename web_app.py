@@ -236,15 +236,8 @@ def _unix_to_iso(ts: Optional[int]) -> Optional[str]:
 
 def _current_user(require_access: bool = True):
     if session.get('admin_override'):
-        return {
-            'id': 0,
-            'email': 'admin@tiflas.com',
-            'full_name': 'Admin User',
-            'company_name': 'TifLAS Admin',
-            'subscription_status': 'active',
-            'plan_code': 'annual'
-        }
-
+        return {'id': 0, 'email': 'admin@tiflas.com', 'is_admin': 1, 'full_name': 'Admin User'}
+        
     user_id = session.get('user_id')
     
     # Check for impersonation
@@ -254,6 +247,12 @@ def _current_user(require_access: bool = True):
     if not user_id:
         return None
     user = auth_billing.get_user_by_id(config.AUTH_DB_PATH, int(user_id))
+    
+    # Auto-promote owner to admin so they don't get paywalled out of their own app
+    if user and user.get('email') == 'gabepell@hotmail.com' and not user.get('is_admin'):
+        with auth_billing.get_db(config.AUTH_DB_PATH) as conn:
+            conn.execute("UPDATE users SET is_admin = 1 WHERE id = ?", (user['id'],))
+        user['is_admin'] = 1
     
     # If standard auth, check banned status
     if user and user.get('is_banned') and not session.get('is_admin'):
