@@ -432,7 +432,7 @@ def trial_eligibility(db_path: str, user: Dict[str, Any]) -> Dict[str, Any]:
               )
             LIMIT 1
             """,
-            (user["id"], email, domain, company),
+            (user.get("id", -1), email, domain, company),
         ).fetchone()
 
     if row:
