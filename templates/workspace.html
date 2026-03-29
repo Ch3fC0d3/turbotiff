@@ -1268,7 +1268,7 @@
                                 </div>
                                 <div class="hint-text" id="headerSelectionSummary">No header captured.</div>
                                 <!-- Header Metadata Inputs -->
-                                <details id="headerMetadataDetails" class="mt-2">
+                                <details id="headerMetadataDetails" class="mt-2" open>
                                     <summary class="hint-text cursor-pointer" style="font-weight:600; color:#94a3b8; font-size:0.82rem; list-style:none; display:flex; align-items:center; gap:4px;">&#9654; LAS export fields (optional)</summary>
                                     <div id="headerMetadataFields" class="bg-slate-800 border-slate-700 rounded p-2 mt-2">
                                         <div class="grid-2-col gap-2">
@@ -6182,32 +6182,45 @@
                 return;
             }
 
+            // Always open the metadata fields panel so the user can see and edit results
+            const detailsEl = document.getElementById('headerMetadataDetails');
+            if (detailsEl) detailsEl.open = true;
+
             // Estimate header region as the top 25% of the image, or up to topPx if it's set
             const topPxInput = document.getElementById('topPx');
             let bottomBound = Math.floor(imageHeight * 0.25);
             
             if (topPxInput && topPxInput.value) {
                 const topPxVal = parseFloat(topPxInput.value);
-                if (topPxVal > 50) { // If there's a reasonable top panel selected
+                if (topPxVal > 50) {
                     bottomBound = topPxVal;
                 }
             }
 
+            // --- Scan top ---
             headerRegion = {
                 left_px: 0,
                 right_px: imageWidth,
                 top_px: 0,
                 bottom_px: bottomBound
             };
-            
             renderHeaderRegionOverlay();
-            
             const summaryEl = document.getElementById('headerSelectionSummary');
-            if (summaryEl) {
-                summaryEl.textContent = `Auto-extracting header from top of image...`;
-            }
-            
+            if (summaryEl) summaryEl.textContent = 'Auto-extracting header (scanning top + bottom)...';
+
             await aiCaptureHeaderFromRegion();
+
+            // --- Also scan bottom 50% for footer-style headers (e.g. ATR logs) ---
+            const bottomStart = Math.floor(imageHeight * 0.50);
+            if (bottomStart < imageHeight - 10) {
+                headerRegion = {
+                    left_px: 0,
+                    right_px: imageWidth,
+                    top_px: bottomStart,
+                    bottom_px: imageHeight
+                };
+                await aiCaptureHeaderFromRegion();
+            }
         }
 
         async function aiCaptureHeaderFromRegion() {

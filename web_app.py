@@ -7001,8 +7001,8 @@ def upload_file():
     ocr_suggestions = {}
     if VISION_API_AVAILABLE and vision_client is not None:
         try:
-            header_h = max(100, int(h * 0.30))
-            footer_h = max(100, int(h * 0.30))
+            header_h = max(100, int(h * 0.25))
+            footer_h = max(100, int(h * 0.50))
             top_crop = img[0:header_h, :]
             bottom_crop = img[max(0, h - footer_h):h, :]
             # Stack top and bottom sections so one OCR call covers logs whose
