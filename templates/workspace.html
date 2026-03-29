@@ -117,10 +117,17 @@
         .step h2 { color: #FFA81C; margin-bottom: 15px; }
         .control-pane .step,
         .curve-pane .step {
-            padding: 8px 12px;
+            padding: 6px 10px;
             margin-bottom: 0;
             background: #1e293b;
         }
+        .control-pane {
+            scrollbar-width: thin;
+            scrollbar-color: #475569 #1e293b;
+        }
+        .control-pane::-webkit-scrollbar { width: 6px; }
+        .control-pane::-webkit-scrollbar-track { background: #1e293b; }
+        .control-pane::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
         .control-pane .step h2,
         .curve-pane .step h2 {
             font-size: 1rem;
@@ -357,12 +364,30 @@
         .control-pane {
             display: flex;
             flex-direction: column;
-            gap: 12px;
-            height: 100%;
+            gap: 8px;
+            max-height: calc(100vh - 80px);
             overflow-y: auto;
+            overflow-x: hidden;
             position: sticky;
             top: 20px;
-            align-self: stretch;
+            align-self: start;
+        }
+        /* Compact LAS metadata fields */
+        #headerMetadataFields {
+            padding: 6px 8px !important;
+        }
+        #headerMetadataFields .grid-2-col {
+            gap: 4px !important;
+        }
+        #headerMetadataFields label.text-sm {
+            font-size: 0.68rem !important;
+            color: #94a3b8;
+            margin-bottom: 1px;
+            display: block;
+        }
+        #headerMetadataFields input {
+            padding: 3px 6px !important;
+            font-size: 0.78rem !important;
         }
         .viewer-pane {
             flex: 1 1 auto;
