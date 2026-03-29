@@ -6698,43 +6698,52 @@ def create_checkout_session():
             return redirect(url_for('account'))
 
     customer_id = user.get('stripe_customer_id')
-    if not customer_id:
-        customer = stripe.Customer.create(
-            email=user['email'],
-            name=user['full_name'],
+    try:
+        if not customer_id:
+            customer = stripe.Customer.create(
+                email=user.get('email') or '',
+                name=user.get('full_name') or '',
+                metadata={
+                    'user_id': str(user['id']),
+                    'company_name': user.get('company_name') or '',
+                },
+            )
+            customer_id = customer['id']
+            auth_billing.update_user_fields(config.AUTH_DB_PATH, user['id'], stripe_customer_id=customer_id)
+
+        subscription_data = {
+            'metadata': {
+                'user_id': str(user['id']),
+                'plan_code': plan,
+                'mode': mode,
+            }
+        }
+        if mode == 'trial':
+            subscription_data['trial_period_days'] = auth_billing.TRIAL_DAYS
+
+        checkout = stripe.checkout.Session.create(
+            mode='subscription',
+            customer=customer_id,
+            line_items=[{'price': price_id, 'quantity': 1}],
+            payment_method_collection='always',
             metadata={
                 'user_id': str(user['id']),
-                'company_name': user['company_name'],
+                'plan_code': plan,
+                'mode': mode,
             },
+            success_url=f"{config.APP_BASE_URL}/account?checkout=success",
+            cancel_url=f"{config.APP_BASE_URL}/account?checkout=cancel",
+            subscription_data=subscription_data,
         )
-        customer_id = customer['id']
-        auth_billing.update_user_fields(config.AUTH_DB_PATH, user['id'], stripe_customer_id=customer_id)
-
-    subscription_data = {
-        'metadata': {
-            'user_id': str(user['id']),
-            'plan_code': plan,
-            'mode': mode,
-        }
-    }
-    if mode == 'trial':
-        subscription_data['trial_period_days'] = auth_billing.TRIAL_DAYS
-
-    checkout = stripe.checkout.Session.create(
-        mode='subscription',
-        customer=customer_id,
-        line_items=[{'price': price_id, 'quantity': 1}],
-        payment_method_collection='always',
-        metadata={
-            'user_id': str(user['id']),
-            'plan_code': plan,
-            'mode': mode,
-        },
-        success_url=f"{config.APP_BASE_URL}/account?checkout=success",
-        cancel_url=f"{config.APP_BASE_URL}/account?checkout=cancel",
-        subscription_data=subscription_data,
-    )
-    return redirect(checkout.url, code=303)
+        return redirect(checkout.url, code=303)
+    except stripe.error.StripeError as exc:
+        import traceback; traceback.print_exc()
+        flash(f'Stripe error: {getattr(exc, "user_message", None) or str(exc)}', 'error')
+        return redirect(url_for('account'))
+    except Exception as exc:
+        import traceback; traceback.print_exc()
+        flash(f'Could not start checkout: {exc}', 'error')
+        return redirect(url_for('account'))
 
 
 
