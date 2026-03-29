@@ -5810,13 +5810,15 @@ def build_ocr_suggestions(numeric_entries):
         if y_vals_all:
             y_min = min(y_vals_all)
             y_max = max(y_vals_all)
-            # Top 25% of text as a rough "header" band
-            band_cut = y_min + 0.25 * (y_max - y_min)
+            # Top 25% OR bottom 25% of text as the "header" band
+            # (some logs, e.g. ATR, print header tables at the bottom)
+            top_band_cut = y_min + 0.25 * (y_max - y_min)
+            bottom_band_start = y_min + 0.75 * (y_max - y_min)
 
             header_depth_vals_strict = []  # require explicit "ft" (not us/ft)
             header_depth_vals_loose = []   # any plausible depth magnitude
             for e in sorted_entries:
-                if e['y'] > band_cut:
+                if top_band_cut < e['y'] < bottom_band_start:
                     continue
                 text_l = str(e.get('text', '')).lower()
                 val = e.get('value')
@@ -5915,9 +5917,10 @@ def attach_curve_label_hints(suggestions, raw_text):
 
     min_y = min(y_centers_all)
     max_y = max(y_centers_all)
-    header_threshold = min_y + 0.3 * (max_y - min_y)  # top ~30% of text as header band
+    header_threshold = min_y + 0.3 * (max_y - min_y)   # top ~30%
+    footer_threshold = min_y + 0.7 * (max_y - min_y)   # bottom ~30% starts here
 
-    # Build candidate labels from raw text restricted to the header band
+    # Build candidate labels from raw text restricted to top OR bottom header band
     candidates = []
     for entry in raw_text:
         text = (entry.get('text') or '').strip()
@@ -5949,8 +5952,8 @@ def attach_curve_label_hints(suggestions, raw_text):
             continue
 
         y_center = float(sum(ys)) / len(ys)
-        if y_center > header_threshold:
-            # Skip labels that are not in the header band above the tracks
+        if header_threshold < y_center < footer_threshold:
+            # Skip labels that are in the middle of the image (log body), not header/footer bands
             continue
 
         x_center = float(sum(xs)) / len(xs)
@@ -6998,8 +7001,13 @@ def upload_file():
     ocr_suggestions = {}
     if VISION_API_AVAILABLE and vision_client is not None:
         try:
-            header_h = max(100, int(h * 0.3))
-            header_crop = img[0:header_h, :]
+            header_h = max(100, int(h * 0.30))
+            footer_h = max(100, int(h * 0.30))
+            top_crop = img[0:header_h, :]
+            bottom_crop = img[max(0, h - footer_h):h, :]
+            # Stack top and bottom sections so one OCR call covers logs whose
+            # header info appears at the bottom (e.g. ATR / footer-style headers).
+            header_crop = np.vstack([top_crop, bottom_crop])
             ok_header, header_buf = cv2.imencode('.jpg', header_crop, [cv2.IMWRITE_JPEG_QUALITY, 90])
             if ok_header:
                 header_bytes = header_buf.tobytes()
