@@ -1654,7 +1654,6 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
     # Use enhanced image for better hue detection in faded areas
     colored_modes = {"green", "red", "blue", "auto", "cyan", "magenta", "yellow", "orange", "purple"}
     detected_hue = None
-    _pre_grid_col_frac = None  # Populated in black mode before grid removal
     if mode in colored_modes:
         detected_hue = detect_dominant_curve_hue(roi_enhanced)
     
@@ -1965,30 +1964,10 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
         try:
             sat = hsv[:, :, 1]
             val = hsv[:, :, 2]
-            colored = (sat > 30) & (val > 40)
+            colored = (sat > 55) & (val > 40)
             color_mask[colored] = 0
         except Exception:
             pass
-
-        # Compute column occupancy from the RAW gray image (before any Hough/aggressive
-        # pre-processing) so that edge_score can be gated at track borders and centre grid
-        # lines even when is_bw_log processing already erased them from color_mask.
-        # edge_score uses the unprocessed 'gray' via Canny/Sobel, so it still has strong
-        # responses at those boundaries.
-        if h >= 4 and w >= 2:
-            try:
-                _raw_thresh = cv2.adaptiveThreshold(
-                    gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 21, 4
-                )
-                # Suppress saturated (coloured) pixels so only achromatic dark ink counts
-                try:
-                    _colored_px = (hsv[:, :, 1] > 30) & (hsv[:, :, 2] > 40)
-                    _raw_thresh[_colored_px] = 0
-                except Exception:
-                    pass
-                _pre_grid_col_frac = (_raw_thresh > 0).mean(axis=0)
-            except Exception:
-                _pre_grid_col_frac = (color_mask > 0).mean(axis=0)
 
         # Additional grid removal on the mask itself (less aggressive if already processed)
         if h >= 20 and w >= 20:
@@ -2067,15 +2046,6 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
             if np.any(rail_rows):
                 color_score[rail_rows, :] *= 0.02
                 edge_score[rail_rows, :] *= 0.02
-
-            # Suppress edge_score at columns that were near-solid rails BEFORE grid removal.
-            # Those columns no longer appear in color_score (grid removal zeroed them), but
-            # Canny/Sobel in edge_score still responds to their boundaries.
-            if _pre_grid_col_frac is not None:
-                pre_rail_cols = _pre_grid_col_frac > 0.85
-                if np.any(pre_rail_cols):
-                    edge_score[:, pre_rail_cols] *= 0.005
-                    color_score[:, pre_rail_cols] *= 0.005
         
         # REMOVED edge suppression. Gamma Ray curves often hit the track edges.
         # We should rely on the specific 'preprocess_curve_track' logic for borders,
@@ -2216,26 +2186,10 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
             cleaned_binary = preprocess_curve_track(roi_bgr, mode=mode)
             if cleaned_binary is not None and cleaned_binary.size == prob.size:
                 cleaned_score = cleaned_binary.astype(np.float32) / 255.0
-                # Standard 5% floor gate — keeps a small baseline everywhere.
+                # Where cleaned_score == 0 (likely grid/border), push probability
+                # almost to zero; where == 1, keep prob as-is.
                 gate = 0.05 + 0.95 * cleaned_score
-                # For columns where preprocess_curve_track zeroed ALL rows
-                # (morphologically-detected grid lines / track borders), lower
-                # the floor to near-zero.  The 5% floor was enough for the DP
-                # tracer to lock onto a grid line during the gaps of a dashed
-                # curve (gap rows have 0 ink → grid line's 5% wins the row).
-                rail_cols_gate = (cleaned_score.max(axis=0) < 0.01)
-                if np.any(rail_cols_gate):
-                    gate[:, rail_cols_gate] = np.minimum(
-                        gate[:, rail_cols_gate], 0.002
-                    )
                 prob *= gate
-                # Final belt: also zero any columns flagged by the raw-gray
-                # pre-removal fraction check (catches rails that slipped through
-                # preprocess_curve_track, e.g. in very short ROIs).
-                if _pre_grid_col_frac is not None:
-                    raw_final_rails = _pre_grid_col_frac > 0.85
-                    if np.any(raw_final_rails):
-                        prob[:, raw_final_rails] *= 0.002
         except Exception:
             # If preprocessing fails for any reason, fall back to the ungated map.
             pass
@@ -3096,7 +3050,7 @@ def trace_curve_pixel_perfect(mask: np.ndarray, grayscale: np.ndarray = None, bg
 
     return xs, confidence
 
-def trace_curve_multiscale(curve_mask, scale_min, scale_max, curve_type="GR", max_step=3, smooth_lambda=0.1, curv_lambda=0.01, hot_side=None, bgr_roi=None):
+def trace_curve_multiscale(curve_mask, scale_min, scale_max, curve_type="GR", max_step=3, smooth_lambda=0.1, curv_lambda=0.01, hot_side=None):
     """
     Enhanced multi-scale curve tracing with 5 scales and weighted fusion.
     
@@ -3181,7 +3135,7 @@ def trace_curve_multiscale(curve_mask, scale_min, scale_max, curve_type="GR", ma
                 "smooth_lambda": smooth_lambda * scale,
                 "max_step": max(1, int(max_step * scale)),
                 "rail_threshold": 0.1 * scale,
-                "curv_lambda": curv_lambda * scale
+                "curv_lambda": 0.05 * scale
             }
     
     # Calculate jaggedness factor for parameter tuning
@@ -3429,7 +3383,7 @@ def trace_curve_multiscale(curve_mask, scale_min, scale_max, curve_type="GR", ma
     
     # Hybrid AI + Traditional peak detection
     peaks_traditional = detect_local_peaks(prob, min_prominence=0.005) if curve_type.upper() == "GR" else []
-    peaks_ai = ai_detect_peaks(bgr_roi if bgr_roi is not None else curve_mask, curve_type) if curve_type.upper() == "GR" and VISION_API_AVAILABLE else []
+    peaks_ai = ai_detect_peaks(roi, curve_type) if curve_type.upper() == "GR" and VISION_API_AVAILABLE else []
     
     # Merge traditional and AI peaks
     all_peaks = peaks_traditional + peaks_ai
@@ -4502,6 +4456,9 @@ def remove_outliers_and_smooth(xs, window=5, outlier_threshold=3.0):
         window += 1
     if window > 1:
         s = s.rolling(window, min_periods=1, center=True).median()
+    
+    # Interpolate remaining gaps
+    s = s.interpolate(limit_direction="both", limit=50)
     
     return s.to_numpy(dtype=np.float32)
 
@@ -7202,51 +7159,6 @@ def digitize():
         # and centerline boost that works well
         mask = compute_prob_map(roi, mode=mode, ui_filters=preview_filters)
 
-        # For black/non-colored modes: definitively zero out vertical rail columns
-        # in the final mask so the DP tracer has zero probability there.
-        # All the in-compute_prob_map suppression works at float level; this is a
-        # hard uint8 zero applied to the mask the tracer actually sees.
-        if mode not in colored_modes:
-            try:
-                h_roi, w_roi = roi.shape[:2]
-                _g_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY) if roi.ndim == 3 else roi
-                _t_roi = cv2.adaptiveThreshold(
-                    _g_roi, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
-                    cv2.THRESH_BINARY_INV, 21, 4
-                )
-                # Drop saturated colour pixels so only achromatic dark ink counts
-                _hsv_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV) if roi.ndim == 3 else None
-                if _hsv_roi is not None:
-                    _cp_roi = (_hsv_roi[:, :, 1] > 30) & (_hsv_roi[:, :, 2] > 40)
-                    _t_roi[_cp_roi] = 0
-                
-                # 1. Robust Slanted Grid Line Removal (Hough)
-                _lines = cv2.HoughLinesP(_t_roi, 1, np.pi/180, threshold=50, minLineLength=50, maxLineGap=10)
-                if _lines is not None:
-                    for _line in _lines:
-                        _x1, _y1, _x2, _y2 = _line[0]
-                        _angle = abs(np.arctan2(_y2 - _y1, _x2 - _x1) * 180.0 / np.pi)
-                        if _angle > 70:  # Near vertical
-                            cv2.line(mask, (_x1, _y1), (_x2, _y2), 0, 7)
-
-                # 2. Morphological open for strictly vertical fragments
-                if h_roi >= 20:
-                    _kv = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 25))
-                    _vl = cv2.morphologyEx(_t_roi, cv2.MORPH_OPEN, _kv)
-                    
-                    # Dilate horizontally to kill the anti-aliased "glow" / blur
-                    _kd = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 1))
-                    _vl = cv2.dilate(_vl, _kd)
-                    
-                    # Hard zero the ENTIRE COLUMN if it contains a vertical rail.
-                    # If we only zero specific pixels, gaps in the rail allow the free-moving
-                    # DP tracer to jump onto the rail fragments during gaps in dashed curves.
-                    _rail_cols = np.any(_vl > 0, axis=0)
-                    if np.any(_rail_cols):
-                        mask[:, _rail_cols] = 0
-            except Exception:
-                pass
-
         if mode not in {"green", "red", "blue", "auto", "cyan", "magenta", "yellow", "orange", "purple"}:
             _pm = mask.astype(np.float32) / 255.0
             _pct_nonzero = float(np.mean(_pm > 0.01) * 100)
@@ -7271,22 +7183,14 @@ def digitize():
             refine_kwargs = {"dominance_ratio": snap_threshold, "max_shift": 25, "min_prob": 0.005}
             # Disable outlier removal - keep every point for maximum accuracy
             outlier_threshold = 100.0  # Effectively disabled
-            dp_smooth_lambda = 0.005
-            dp_curv_lambda = 0.002
-            max_step_dp = 100
         else:
             # Use user threshold for non-colored modes too (default was 1.1)
             refine_kwargs = {"dominance_ratio": snap_threshold}
-            # For black/non-colored modes, we MUST allow large horizontal steps
-            # so the tracer can follow highly wobbly dashed curves like SPHI.
-            # If we constrain it too much, it will shoot straight through tight
-            # corners and leave a trail of disconnected vertical dots.
-            # The grid jumping is handled by the strict NaN gap enforcer below
-            # and the vertical rail removal above.
-            # Black mode needs tight control to prevent teleportation and vibrations
-            dp_smooth_lambda = 0.015 if curve_type != "GR" else 0.001
-            dp_curv_lambda = 0.005 if curve_type != "GR" else 0.001
-            max_step_dp = 200
+        # Effectively zero smoothness penalty for colored modes to prefer jagged ink over smooth artifacts
+        dp_smooth_lambda = 0.001 if mode in colored_modes else (0.001 if curve_type == 'GR' else 0.02)
+        # ALSO zero out curvature penalty to allow high-frequency wiggles/jitter
+        dp_curv_lambda = 0.001 if mode in colored_modes else (0.001 if curve_type == 'GR' else 0.005)
+        max_step_dp = 200 if mode in colored_modes else (30 if curve_type == 'GR' else 50)  # Restrict movement to prevent teleportation
 
         # Optional pixel-perfect skeleton tracer (preserve every bump)
         if ai_tracer.is_available() and trace_mode == "ai_tracer":
@@ -7297,7 +7201,7 @@ def digitize():
                 xs = ai_tracer.trace(roi)
                 confidence = np.ones_like(xs) * 0.95 # Mock high confidence for AI
             except Exception as e:
-                print(f"[WARN] AI Tracer failed for {name}: {e}")
+                print(f"⚠️ AI Tracer failed for {name}: {e}")
                 # Fallback to empty if AI fails
                 xs = np.full(roi.shape[0], np.nan)
                 confidence = np.zeros(roi.shape[0])
@@ -7330,15 +7234,22 @@ def digitize():
         # Run both DP and Direct Centerline tracers, then merge per-row based on probability.
         # AND DISABLE EXTRA REFINEMENTS which cause the zig-zag snapping.
         elif mode in colored_modes:
-            h_mask, w_mask = mask.shape
-
+            # SUPER-RESOLUTION: Upscale mask by 2x to allow sub-pixel precision
+            # Use LINEAR interpolation to create smooth gradients between pixels
+            mask_orig = mask
+            h_orig, w_orig = mask.shape
+            mask = cv2.resize(mask, (w_orig * 2, h_orig * 2), interpolation=cv2.INTER_LINEAR)
+            
+            # Adjust parameters for 2x scale
+            max_step_dp_sr = max_step_dp * 2
+            
             # 1. Run DP Tracer (provides continuity)
             xs_dp, conf_dp = trace_curve_with_dp(
                 mask,
                 scale_min=left_value,
                 scale_max=right_value,
                 curve_type=curve_type,
-                max_step=max_step_dp,
+                max_step=max_step_dp_sr,
                 smooth_lambda=dp_smooth_lambda,
                 curv_lambda=dp_curv_lambda,
                 hot_side=hot_side,
@@ -7347,10 +7258,11 @@ def digitize():
             # 2. Local Peak Search Fusion
             # Instead of a global direct tracer (which gets distracted by far-away curves),
             # search locally around the DP path for the true tip of the spike.
+            h_mask, w_mask = mask.shape
             prob_map = mask.astype(np.float32) / 255.0
             xs = np.full(h_mask, np.nan, dtype=np.float32)
             
-            search_window = 50
+            search_window = 100
             
             for y in range(h_mask):
                 x_dp = xs_dp[y]
@@ -7450,6 +7362,25 @@ def digitize():
             s = pd.Series(xs)
             xs = s.interpolate(method='linear', limit_direction='both', limit=max(25, int(xs.size * 0.02))).to_numpy(dtype=np.float32)
             
+            # DOWNSAMPLE: Map back to original resolution
+            # Take every 2nd point and divide coordinate by 2
+            # Use averaging to reduce noise: (y*2 + y*2+1) / 2
+            xs_down = np.full(h_orig, np.nan, dtype=np.float32)
+            for y_orig in range(h_orig):
+                y_sr = y_orig * 2
+                val1 = xs[y_sr]
+                val2 = xs[y_sr + 1] if y_sr + 1 < h_mask else val1
+                
+                if np.isfinite(val1) and np.isfinite(val2):
+                    xs_down[y_orig] = (val1 + val2) / 4.0 # Divide by 2 (avg) then divide by 2 (scale) -> /4
+                elif np.isfinite(val1):
+                    xs_down[y_orig] = val1 / 2.0
+                elif np.isfinite(val2):
+                    xs_down[y_orig] = val2 / 2.0
+            
+            xs = xs_down
+            # Restore original mask for downstream
+            mask = mask_orig
 
             # 8b. Clean up artifacts (single-pixel horizontal glitches)
             # The high-sensitivity plateau logic can sometimes trigger on noise.
@@ -7518,7 +7449,6 @@ def digitize():
                 smooth_lambda=dp_smooth_lambda,
                 curv_lambda=dp_curv_lambda,
                 hot_side=hot_side,
-                bgr_roi=roi,
             )
 
             # Push trace to hot-side ink edge (tip/crest of each spike)
@@ -7539,21 +7469,13 @@ def digitize():
         if xs.size > 0:
             s = pd.Series(xs)
             h_mask, w_mask = mask.shape
-        # We linearly interpolate these gaps to ensure continuity.
-        if xs.size > 0:
-            s = pd.Series(xs)
-            h_mask, w_mask = mask.shape
-            
-            # For colored modes, we allow larger gap filling to bridge track lines.
-            # For black/non-colored modes (especially dashed curves), we severely
-            # restrict gap filling. Interpolating across large gaps creates long,
-            # straight, artificial diagonal lines. It is better to return NaN (gaps)
-            # than to invent fake data bridging distant points.
+            # For black/non-colored modes (especially dashed curves), we restrict gap filling.
+            # Interpolating across large gaps creates straight, artificial diagonal lines.
             if mode in colored_modes:
                 max_gap = max(25, int(h_mask * 0.02))
             else:
-                max_gap = max(50, int(h_mask * 0.02)) # Allow ~50px to bridge dashes, big gaps caught by strict enforcement
-                
+                max_gap = max(25, int(h_mask * 0.02)) # strict
+            
             s = s.interpolate(method='linear', limit_direction='both', limit=max_gap, limit_area=None)
             # Handle edge cases
             if s.isna().any():
