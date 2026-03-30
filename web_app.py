@@ -7521,37 +7521,14 @@ def digitize():
             if curve_type.upper() != "GR":
                  xs = remove_outliers_and_smooth(xs, window=curve_smooth_window, outlier_threshold=outlier_threshold)
                  
-            # STRICT GAP ENFORCEMENT: For non-colored modes (like dashed black lines),
-            # if the traced path lands on a row where there is no ink in the mask near the path,
-            # we must explicitly set that point to NaN so it doesn't render as a long straight line.
+            width_px = mask.shape[1]
+
+            # UNIVERSAL GAP FILLING:
+            # Aggressive grid removal can leave small gaps where the curve crossed a grid line.
+            # We linearly interpolate these gaps to ensure continuity.
             if xs.size > 0:
+                s = pd.Series(xs)
                 h_mask, w_mask = mask.shape
-                # Only check rows that currently have a valid trace point
-                for y in range(h_mask):
-                    if not np.isfinite(xs[y]):
-                        continue
-                    ix = int(round(xs[y]))
-                    if ix < 0 or ix >= w_mask:
-                        xs[y] = np.nan
-                        continue
-                        
-                    # Check a slightly larger window to handle highly dashed/faded lines
-                    # where the DP path might be a few pixels off the exact center
-                    win = 5
-                    x_start = max(0, ix - win)
-                    x_end = min(w_mask, ix + win + 1)
-                    
-                    # If there's almost no ink in the mask near the traced point, it's a gap.
-                    # Mask is 0-255, but faded/dashed ink can be very weak on the edges.
-                    # Lower threshold to 1 so any non-zero pixel keeps the trace alive,
-                    # preventing the dashed line from being incorrectly NaN'd out.
-                    if np.max(mask[y, x_start:x_end]) < 1:
-                        xs[y] = np.nan
-
-        width_px = mask.shape[1]
-
-        # UNIVERSAL GAP FILLING:
-        # Aggressive grid removal can leave small gaps where the curve crossed a grid line.
         # We linearly interpolate these gaps to ensure continuity.
         if xs.size > 0:
             s = pd.Series(xs)
