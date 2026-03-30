@@ -4503,9 +4503,6 @@ def remove_outliers_and_smooth(xs, window=5, outlier_threshold=3.0):
     if window > 1:
         s = s.rolling(window, min_periods=1, center=True).median()
     
-    # Interpolate remaining gaps
-    s = s.interpolate(limit_direction="both", limit=50)
-    
     return s.to_numpy(dtype=np.float32)
 
 
@@ -7264,14 +7261,20 @@ def digitize():
             refine_kwargs = {"dominance_ratio": snap_threshold, "max_shift": 25, "min_prob": 0.005}
             # Disable outlier removal - keep every point for maximum accuracy
             outlier_threshold = 100.0  # Effectively disabled
+            dp_smooth_lambda = 0.001
+            dp_curv_lambda = 0.001
+            max_step_dp = 200
         else:
             # Use user threshold for non-colored modes too (default was 1.1)
             refine_kwargs = {"dominance_ratio": snap_threshold}
-        # Effectively zero smoothness penalty for colored modes to prefer jagged ink over smooth artifacts
-        dp_smooth_lambda = 0.001 if mode in colored_modes else (0.001 if curve_type == 'GR' else 0.05)
-        # ALSO zero out curvature penalty to allow high-frequency wiggles/jitter
-        dp_curv_lambda = 0.001 if mode in colored_modes else (0.001 if curve_type == 'GR' else 0.02)
-        max_step_dp = 200 if mode in colored_modes else (30 if curve_type == 'GR' else 50)  # Restrict movement to prevent teleportation
+            # For black/non-colored modes (like dashed lines), we want to STRONGLY penalize
+            # horizontal jumps. This prevents the DP tracer from jumping off a dashed line
+            # into a neighboring grid line just to avoid the "gap penalty".
+            # By keeping the path rigid, it will shoot straight through the gap, land on empty
+            # space, and get correctly NaN'd out by the STRICT GAP ENFORCEMENT below.
+            dp_smooth_lambda = 10.0
+            dp_curv_lambda = 5.0
+            max_step_dp = 5
 
         # Optional pixel-perfect skeleton tracer (preserve every bump)
         if ai_tracer.is_available() and trace_mode == "ai_tracer":
@@ -7503,15 +7506,33 @@ def digitize():
                 hot_side=hot_side,
             )
 
-            # Push trace to hot-side ink edge (tip/crest of each spike)
-            # max_dx_pixels=15: grid boundary lines are ~25-30px away, so
-            # a 15px hard cap accepts real tip snaps but rejects grid jumps.
-            prob_map_bm = mask.astype(np.float32) / 255.0
-            xs = ensure_gr_peak_crests(xs, prob_map_bm, hot_side=hot_side, max_dx_pixels=15)
-
             # Optional final smoothing for non-GR curves (GR needs to stay jagged)
             if curve_type.upper() != "GR":
                  xs = remove_outliers_and_smooth(xs, window=curve_smooth_window, outlier_threshold=outlier_threshold)
+                 
+            # STRICT GAP ENFORCEMENT: For non-colored modes (like dashed black lines),
+            # if the traced path lands on a row where there is no ink in the mask near the path,
+            # we must explicitly set that point to NaN so it doesn't render as a long straight line.
+            if xs.size > 0:
+                h_mask, w_mask = mask.shape
+                # Only check rows that currently have a valid trace point
+                for y in range(h_mask):
+                    if not np.isfinite(xs[y]):
+                        continue
+                    ix = int(round(xs[y]))
+                    if ix < 0 or ix >= w_mask:
+                        xs[y] = np.nan
+                        continue
+                        
+                    # Check a small window around the traced point
+                    win = 3
+                    x_start = max(0, ix - win)
+                    x_end = min(w_mask, ix + win + 1)
+                    
+                    # If there's almost no ink in the mask near the traced point, it's a gap.
+                    # Mask is 0-255, allow a small threshold (20) for JPEG artifacts
+                    if np.max(mask[y, x_start:x_end]) < 20:
+                        xs[y] = np.nan
 
         width_px = mask.shape[1]
 
