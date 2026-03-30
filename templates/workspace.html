@@ -1465,6 +1465,60 @@
                                     <div class="hint-text" style="font-size: 0.78em; margin-top: 3px;">Drag points to adjust. Ctrl+Z to undo.</div>
                                 </div>
 
+                                <!-- Advanced settings for selected curve -->
+                                <div id="step5AdvancedPanel" style="display:none; margin-top:10px; padding-top:8px; border-top:1px solid #334155;">
+                                    <div class="hint-text" style="font-weight:600; font-size:0.82rem; margin-bottom:6px;">
+                                        Advanced — <span id="step5CurveName" style="color:#94a3b8;">none selected</span>
+                                    </div>
+                                    <div class="grid" style="grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;">
+                                        <div class="field">
+                                            <label>X offset</label>
+                                            <input type="number" id="s5xOffset" placeholder="0" step="0.1" value="0" oninput="s5SyncToCurve('xOffset')">
+                                        </div>
+                                        <div class="field">
+                                            <label>X shift</label>
+                                            <div style="display:flex;gap:4px;align-items:center;">
+                                                <input type="number" id="s5curveShift" placeholder="0" step="0.1" value="0" style="flex:1;">
+                                                <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5ApplyXShift()">Apply</button>
+                                            </div>
+                                        </div>
+                                        <div class="field">
+                                            <label>Y shift</label>
+                                            <div style="display:flex;gap:4px;align-items:center;">
+                                                <input type="number" id="s5curveShiftY" placeholder="0" step="0.1" value="0" style="flex:1;">
+                                                <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5ApplyYShift()">Apply</button>
+                                            </div>
+                                        </div>
+                                        <div class="field">
+                                            <label>LAS mnemonic / unit</label>
+                                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;">
+                                                <input type="text" id="s5lasMnemonic" placeholder="e.g. GR" oninput="s5SyncToCurve('lasMnemonic')">
+                                                <input type="text" id="s5lasUnit" placeholder="e.g. API" oninput="s5SyncToCurve('lasUnit')">
+                                            </div>
+                                        </div>
+                                        <div class="field" style="grid-column:1/-1;">
+                                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:2px;">
+                                                <div>
+                                                    <label style="font-size:0.8rem;">Line color</label>
+                                                    <input type="color" id="s5lineColor" value="#ff00ff" oninput="s5SyncToCurve('lineColor')">
+                                                </div>
+                                                <div>
+                                                    <label style="font-size:0.8rem;">Point color</label>
+                                                    <input type="color" id="s5pointColor" value="#00ffff" oninput="s5SyncToCurve('pointColor')">
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="field" style="grid-column:1/-1;">
+                                            <label style="display:flex;align-items:center;gap:5px;font-size:0.82rem;">
+                                                <input type="checkbox" id="s5showTrace" checked onchange="s5SyncCheckToCurve('showTrace')"> Show overlay
+                                            </label>
+                                            <label style="display:flex;align-items:center;gap:5px;font-size:0.82rem;">
+                                                <input type="checkbox" id="s5hideTrackFill" onchange="s5SyncCheckToCurve('hideTrackFill')"> Hide track fill
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+
                                 <!-- Download + Save -->
                                 <div style="margin-top: 12px; padding-top: 10px; border-top: 1px solid #334155; display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
                                     <div style="display: flex; gap: 0;">
@@ -2368,6 +2422,8 @@
             loadAutoBlackCapturePreference();
             populateOverlayCurveSelectFromTracks();
             if (typeof syncToolbarCurveLockButton === 'function') syncToolbarCurveLockButton();
+            const editSel = document.getElementById('editCurveSelect');
+            if (editSel) editSel.addEventListener('change', syncStep5Advanced);
         });
 
         function closeIntroModal() {
@@ -2407,6 +2463,85 @@
 
             // Update ribbons visibility
             refreshTrackOverlaysFromCurves();
+
+            // Refresh Step 5 advanced panel when switching to it
+            if (targetId === 'calibPanel-edits') syncStep5Advanced();
+        }
+
+        // ── Step 5 Advanced panel sync ──────────────────────────────────────────
+        let step5ActiveCurveIndex = -1;
+
+        function findCurveCardIndex(mnemonic) {
+            if (!mnemonic) return -1;
+            const upper = mnemonic.trim().toUpperCase();
+            for (let i = 0; i < 6; i++) {
+                const mn = document.getElementById(`lasMnemonic${i}`);
+                if (mn && mn.value.trim().toUpperCase() === upper) return i;
+                const nm = document.getElementById(`name${i}`);
+                if (nm && nm.value.trim().toUpperCase() === upper) return i;
+            }
+            return -1;
+        }
+
+        function syncStep5Advanced() {
+            const sel = document.getElementById('editCurveSelect');
+            const mnemonic = sel ? sel.value : '';
+            const i = findCurveCardIndex(mnemonic);
+            step5ActiveCurveIndex = i;
+            const panel = document.getElementById('step5AdvancedPanel');
+            if (!panel) return;
+            if (i < 0) { panel.style.display = 'none'; return; }
+            panel.style.display = '';
+            const nameLabel = document.getElementById('step5CurveName');
+            const nameEl = document.getElementById(`name${i}`);
+            if (nameLabel) nameLabel.textContent = (nameEl ? nameEl.value : '') || `Curve ${i + 1}`;
+            const textFields = ['xOffset', 'curveShift', 'curveShiftY', 'lasMnemonic', 'lasUnit', 'lineColor', 'pointColor'];
+            textFields.forEach(f => {
+                const src = document.getElementById(`${f}${i}`);
+                const dst = document.getElementById(`s5${f}`);
+                if (src && dst) dst.value = src.value;
+            });
+            ['showTrace', 'hideTrackFill'].forEach(f => {
+                const src = document.getElementById(`${f}${i}`);
+                const dst = document.getElementById(`s5${f}`);
+                if (src && dst) dst.checked = src.checked;
+            });
+        }
+
+        function s5SyncToCurve(fieldId) {
+            const i = step5ActiveCurveIndex;
+            if (i < 0) return;
+            const src = document.getElementById(`s5${fieldId}`);
+            const dst = document.getElementById(`${fieldId}${i}`);
+            if (src && dst) { dst.value = src.value; dst.dispatchEvent(new Event('change')); }
+            if (typeof renderOverlay === 'function') renderOverlay();
+        }
+
+        function s5SyncCheckToCurve(fieldId) {
+            const i = step5ActiveCurveIndex;
+            if (i < 0) return;
+            const src = document.getElementById(`s5${fieldId}`);
+            const dst = document.getElementById(`${fieldId}${i}`);
+            if (src && dst) { dst.checked = src.checked; dst.dispatchEvent(new Event('change')); }
+            if (typeof renderOverlay === 'function') renderOverlay();
+        }
+
+        function s5ApplyXShift() {
+            const i = step5ActiveCurveIndex;
+            if (i < 0) return;
+            const src = document.getElementById('s5curveShift');
+            const dst = document.getElementById(`curveShift${i}`);
+            if (src && dst) dst.value = src.value;
+            applyCurveXShiftForCurve(i);
+        }
+
+        function s5ApplyYShift() {
+            const i = step5ActiveCurveIndex;
+            if (i < 0) return;
+            const src = document.getElementById('s5curveShiftY');
+            const dst = document.getElementById(`curveShiftY${i}`);
+            if (src && dst) dst.value = src.value;
+            applyCurveYShiftForCurve(i);
         }
 
         function beginPanelSelection() {
