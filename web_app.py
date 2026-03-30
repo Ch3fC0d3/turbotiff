@@ -7238,8 +7238,12 @@ def digitize():
                     _kd = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 1))
                     _vl = cv2.dilate(_vl, _kd)
                     
-                    # Hard zero ONLY the specific pixels, not the entire column
-                    mask[_vl > 0] = 0
+                    # Hard zero the ENTIRE COLUMN if it contains a vertical rail.
+                    # If we only zero specific pixels, gaps in the rail allow the free-moving
+                    # DP tracer to jump onto the rail fragments during gaps in dashed curves.
+                    _rail_cols = np.any(_vl > 0, axis=0)
+                    if np.any(_rail_cols):
+                        mask[:, _rail_cols] = 0
             except Exception:
                 pass
 
