@@ -1970,11 +1970,25 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
         except Exception:
             pass
 
-        # Capture pre-removal column fractions so edge_score can be gated at known rail columns.
-        # Grid removal will zero those columns in color_mask, making col_on_frac too low to catch them,
-        # but Canny/Sobel in edge_score still has strong responses at the rail boundaries.
+        # Compute column occupancy from the RAW gray image (before any Hough/aggressive
+        # pre-processing) so that edge_score can be gated at track borders and centre grid
+        # lines even when is_bw_log processing already erased them from color_mask.
+        # edge_score uses the unprocessed 'gray' via Canny/Sobel, so it still has strong
+        # responses at those boundaries.
         if h >= 4 and w >= 2:
-            _pre_grid_col_frac = (color_mask > 0).mean(axis=0)
+            try:
+                _raw_thresh = cv2.adaptiveThreshold(
+                    gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 21, 4
+                )
+                # Suppress saturated (coloured) pixels so only achromatic dark ink counts
+                try:
+                    _colored_px = (hsv[:, :, 1] > 55) & (hsv[:, :, 2] > 40)
+                    _raw_thresh[_colored_px] = 0
+                except Exception:
+                    pass
+                _pre_grid_col_frac = (_raw_thresh > 0).mean(axis=0)
+            except Exception:
+                _pre_grid_col_frac = (color_mask > 0).mean(axis=0)
 
         # Additional grid removal on the mask itself (less aggressive if already processed)
         if h >= 20 and w >= 20:
@@ -2058,7 +2072,7 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
             # Those columns no longer appear in color_score (grid removal zeroed them), but
             # Canny/Sobel in edge_score still responds to their boundaries.
             if _pre_grid_col_frac is not None:
-                pre_rail_cols = _pre_grid_col_frac > 0.70
+                pre_rail_cols = _pre_grid_col_frac > 0.85
                 if np.any(pre_rail_cols):
                     edge_score[:, pre_rail_cols] *= 0.005
                     color_score[:, pre_rail_cols] *= 0.005

@@ -2485,7 +2485,12 @@
 
         function syncStep5Advanced() {
             const sel = document.getElementById('editCurveSelect');
-            const mnemonic = sel ? sel.value : '';
+            if (!sel) return;
+            // Auto-select first available curve if none is currently selected
+            if (!sel.value && sel.options.length > 1) {
+                sel.value = sel.options[1].value;
+            }
+            const mnemonic = sel.value || '';
             const i = findCurveCardIndex(mnemonic);
             step5ActiveCurveIndex = i;
             const panel = document.getElementById('step5AdvancedPanel');
