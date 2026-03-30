@@ -7234,17 +7234,31 @@ def digitize():
             except Exception:
                 pass
 
-        # Pixel-level colored suppression for black mode: zero any pixel whose
-        # HSV saturation > 15 (faded DTCO blue / DTSM orange land here even
-        # when sat>30 column suppression inside compute_prob_map missed them).
-        # This also cancels any edge_score/sobel contribution those pixels carry
-        # since it operates on the final mask the DP tracer actually uses.
+        # Pixel-level colored suppression for black mode.
+        # Three layers: (1) general saturation gate, (2) hue-specific bands for
+        # faded DTCO (blue) and DTSM (orange) that may have sat < 15, (3) 1-px
+        # dilation so that edge-response pixels adjacent to colored curves are
+        # also zeroed (Canny/Sobel edge falls on the paper pixel next to the
+        # colored stroke, not on the stroke itself).
         if mode not in colored_modes and roi.ndim == 3:
             try:
                 _hsv_raw = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-                _cp_mask = (_hsv_raw[:, :, 1] > 15) & (_hsv_raw[:, :, 2] > 30)
-                if np.any(_cp_mask):
-                    mask[_cp_mask] = 0
+                _hue = _hsv_raw[:, :, 0]  # OpenCV: 0-180
+                _sat = _hsv_raw[:, :, 1]
+                _val = _hsv_raw[:, :, 2]
+                # General: any colour with sat > 15
+                _cp_gen = (_sat > 15) & (_val > 30)
+                # Blue band (DTCO): H 85-135 with sat > 8
+                _cp_blue = ((_hue >= 85) & (_hue <= 135)) & (_sat > 8) & (_val > 20)
+                # Orange/tan band (DTSM): H 8-30 with sat > 8
+                _cp_orange = ((_hue >= 8) & (_hue <= 30)) & (_sat > 8) & (_val > 20)
+                _cp_all = _cp_gen | _cp_blue | _cp_orange
+                if np.any(_cp_all):
+                    _cp_dil = cv2.dilate(
+                        _cp_all.view(np.uint8) if _cp_all.dtype == bool else _cp_all.astype(np.uint8),
+                        np.ones((3, 3), np.uint8), iterations=1
+                    ).astype(bool)
+                    mask[_cp_dil] = 0
             except Exception:
                 pass
 
