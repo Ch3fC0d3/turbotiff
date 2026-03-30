@@ -7205,6 +7205,35 @@ def digitize():
         # and centerline boost that works well
         mask = compute_prob_map(roi, mode=mode, ui_filters=preview_filters)
 
+        # For black/non-colored modes: definitively zero out vertical rail columns
+        # in the final mask so the DP tracer has zero probability there.
+        # All the in-compute_prob_map suppression works at float level; this is a
+        # hard uint8 zero applied to the mask the tracer actually sees.
+        if mode not in colored_modes:
+            try:
+                h_roi, w_roi = roi.shape[:2]
+                _g_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY) if roi.ndim == 3 else roi
+                _t_roi = cv2.adaptiveThreshold(
+                    _g_roi, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
+                    cv2.THRESH_BINARY_INV, 21, 4
+                )
+                # Drop saturated colour pixels so only achromatic dark ink counts
+                _hsv_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV) if roi.ndim == 3 else None
+                if _hsv_roi is not None:
+                    _cp_roi = (_hsv_roi[:, :, 1] > 55) & (_hsv_roi[:, :, 2] > 40)
+                    _t_roi[_cp_roi] = 0
+                # Morphological open: keeps only columns with ≥ kernel_h consecutive
+                # dark pixels — i.e. long vertical rails, not short dashes/ink strokes
+                if h_roi >= 20:
+                    _kh = max(15, min(60, h_roi // 3))
+                    _kv = cv2.getStructuringElement(cv2.MORPH_RECT, (1, _kh))
+                    _vl = cv2.morphologyEx(_t_roi, cv2.MORPH_OPEN, _kv)
+                    _rail_cols = np.any(_vl > 0, axis=0)
+                    if np.any(_rail_cols):
+                        mask[:, _rail_cols] = 0  # hard zero — DP tracer cannot pick these
+            except Exception:
+                pass
+
         if mode not in {"green", "red", "blue", "auto", "cyan", "magenta", "yellow", "orange", "purple"}:
             _pm = mask.astype(np.float32) / 255.0
             _pct_nonzero = float(np.mean(_pm > 0.01) * 100)
