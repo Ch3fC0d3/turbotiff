@@ -1440,15 +1440,6 @@
                                     <button class="btn" type="button" onclick="mlPredictCurve()" title="Use trained ML model to predict a single curve trace in the selected panel">
                                         🤖 ML predict curve
                                     </button>
-                                    <div style="display: flex; gap: 0;">
-                                        <select id="downloadFormat" class="btn" style="border-top-right-radius: 0; border-bottom-right-radius: 0; border-right: 1px solid rgba(0,0,0,0.1); padding-right: 25px; background-position: right 5px center;">
-                                            <option value="merged">Merged LAS</option>
-                                            <option value="individual">Individual Files (ZIP)</option>
-                                        </select>
-                                        <button class="btn" type="button" onclick="handleDownload()" id="downloadLasBtn" disabled style="border-top-left-radius: 0; border-bottom-left-radius: 0;">
-                                            💾 Download
-                                        </button>
-                                    </div>
                                 </div>
 
                                 <div class="form-group mt-2 max-w-420">
@@ -1472,18 +1463,19 @@
                                         </select>
                                     </div>
                                     <div class="hint-text" style="font-size: 0.78em; margin-top: 3px;">Drag points to adjust. Ctrl+Z to undo.</div>
-                                    <details class="mt-2" style="font-size:0.82rem;">
-                                        <summary class="hint-text cursor-pointer" style="font-weight:600; color:#64748b; list-style:none; display:flex; align-items:center; gap:4px;">&#9654; Training tools</summary>
-                                        <div class="flex-wrap-center mt-1" style="gap:6px;">
-                                            <input type="text" id="blackSegmentNote" placeholder="note e.g. right shoulder missed" style="flex: 1 1 200px; font-size: 0.8em; padding: 4px 7px;">
-                                            <button class="btn" type="button" id="saveBadBlackSegmentBtn" onclick="saveBadBlackSegment()" class="btn-xs">Save bad</button>
-                                            <button class="btn" type="button" id="saveCorrectedBlackSegmentBtn" onclick="saveCorrectedBlackSegment()" class="btn-xs">Save corrected</button>
-                                            <label for="autoBlackCaptureToggle" class="hint-text" style="font-size: 0.78em; display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
-                                                <input type="checkbox" id="autoBlackCaptureToggle" checked onchange="setAutoBlackCaptureEnabled(this.checked)" style="cursor: pointer;">
-                                                Auto-snapshot on digitize
-                                            </label>
-                                        </div>
-                                    </details>
+                                </div>
+
+                                <!-- Download + Save — pinned to bottom of Step 4 -->
+                                <div style="margin-top: 12px; padding-top: 10px; border-top: 1px solid #334155; display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
+                                    <div style="display: flex; gap: 0;">
+                                        <select id="downloadFormat" class="btn" style="border-top-right-radius: 0; border-bottom-right-radius: 0; border-right: 1px solid rgba(0,0,0,0.1); padding-right: 25px; background-position: right 5px center;">
+                                            <option value="merged">Merged LAS</option>
+                                            <option value="individual">Individual Files (ZIP)</option>
+                                        </select>
+                                        <button class="btn" type="button" onclick="handleDownload()" id="downloadLasBtn" disabled style="border-top-left-radius: 0; border-bottom-left-radius: 0;">
+                                            💾 Download
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -2360,16 +2352,8 @@
         }
 
         function loadAutoBlackCapturePreference() {
-            let enabled = true;
-            try {
-                if (window && window.localStorage) {
-                    const raw = window.localStorage.getItem(AUTO_BLACK_CAPTURE_STORAGE_KEY);
-                    if (raw === '0') enabled = false;
-                }
-            } catch (e) {
-                // ignore
-            }
-            setAutoBlackCaptureEnabled(enabled, { persist: false });
+            // Auto-snapshot is always on
+            setAutoBlackCaptureEnabled(true, { persist: false });
         }
 
         function resetAutoBlackCaptureSession() {
