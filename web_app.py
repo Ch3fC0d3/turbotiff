@@ -1965,7 +1965,7 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
         try:
             sat = hsv[:, :, 1]
             val = hsv[:, :, 2]
-            colored = (sat > 55) & (val > 40)
+            colored = (sat > 30) & (val > 40)
             color_mask[colored] = 0
         except Exception:
             pass
@@ -1982,7 +1982,7 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
                 )
                 # Suppress saturated (coloured) pixels so only achromatic dark ink counts
                 try:
-                    _colored_px = (hsv[:, :, 1] > 55) & (hsv[:, :, 2] > 40)
+                    _colored_px = (hsv[:, :, 1] > 30) & (hsv[:, :, 2] > 40)
                     _raw_thresh[_colored_px] = 0
                 except Exception:
                     pass
@@ -7220,7 +7220,7 @@ def digitize():
                 # Drop saturated colour pixels so only achromatic dark ink counts
                 _hsv_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV) if roi.ndim == 3 else None
                 if _hsv_roi is not None:
-                    _cp_roi = (_hsv_roi[:, :, 1] > 55) & (_hsv_roi[:, :, 2] > 40)
+                    _cp_roi = (_hsv_roi[:, :, 1] > 30) & (_hsv_roi[:, :, 2] > 40)
                     _t_roi[_cp_roi] = 0
                 # Morphological open: keeps only columns with ≥ kernel_h consecutive
                 # dark pixels — i.e. long vertical rails, not short dashes/ink strokes
