@@ -7278,9 +7278,9 @@ def digitize():
             # into a neighboring grid line just to avoid the "gap penalty".
             # By keeping the path rigid, it will shoot straight through the gap, land on empty
             # space, and get correctly NaN'd out by the STRICT GAP ENFORCEMENT below.
-            dp_smooth_lambda = 10.0
-            dp_curv_lambda = 5.0
-            max_step_dp = 5
+            dp_smooth_lambda = 0.5
+            dp_curv_lambda = 0.1
+            max_step_dp = 25
 
         # Optional pixel-perfect skeleton tracer (preserve every bump)
         if ai_tracer.is_available() and trace_mode == "ai_tracer":
