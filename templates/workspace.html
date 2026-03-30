@@ -8601,17 +8601,11 @@
                         ctx.lineWidth = connectorW;
                         ctx.strokeStyle = lineCoreColor;
                         ctx.beginPath();
-                        let started = false;
                         for (let i = 0; i < sortedPoints.length; i++) {
                             const xDom = (sortedPoints[i][0] * scaleX);
                             const yDom = (sortedPoints[i][1] * scaleY);
-                            const shouldBreak = i > 0 &&
-                                isImplausibleJump(sortedPoints[i - 1], sortedPoints[i]) &&
-                                !isShelfTransition(sortedPoints, i - 1, i) &&
-                                !isSteppedPlateauTransition(sortedPoints, i - 1, i);
-                            if (!started || shouldBreak) {
+                            if (i === 0) {
                                 ctx.moveTo(xDom, yDom);
-                                started = true;
                             } else {
                                 ctx.lineTo(xDom, yDom);
                             }
