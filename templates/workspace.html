@@ -1342,6 +1342,13 @@
                                     </div>
                                 </details>
                             </div>
+                        </div>
+
+                        <div class="step hidden" id="configStep">
+                            <h2>Step 3: Depth Setup</h2>
+                            <!-- Hidden pixel inputs — used by JS for depth mapping -->
+                            <input type="number" id="topPx" style="display:none">
+                            <input type="number" id="bottomPx" style="display:none">
                             <div class="form-group mt-2 max-w-420">
                                 <label>Select log panel</label>
                                 <div class="flex-wrap-center mt-1">
@@ -1350,13 +1357,6 @@
                                 </div>
                                 <div class="hint-text" id="selectionSummary">No panel selected. Using full image.</div>
                             </div>
-                        </div>
-
-                        <div class="step hidden" id="configStep">
-                            <h2>Step 3: Depth Setup</h2>
-                            <!-- Hidden pixel inputs — used by JS for depth mapping -->
-                            <input type="number" id="topPx" style="display:none">
-                            <input type="number" id="bottomPx" style="display:none">
                             <div class="form-group">
                                 <label>Depth Configuration</label>
 
