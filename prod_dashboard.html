@@ -7559,15 +7559,27 @@
                         ctx.lineWidth = connectorW;
                         ctx.strokeStyle = lineCoreColor;
                         ctx.beginPath();
-                        let started = false;
+                        
+                        let isNewSegment = true;
+                        const maxGapYDom = 15.0 * scaleY; // ~15 image pixels
+                        
                         for (let i = 0; i < sortedPoints.length; i++) {
                             const xDom = (sortedPoints[i][0] * scaleX);
                             const yDom = (sortedPoints[i][1] * scaleY);
-                            if (!started) {
+                            
+                            if (isNewSegment) {
                                 ctx.moveTo(xDom, yDom);
-                                started = true;
+                                isNewSegment = false;
                             } else {
                                 ctx.lineTo(xDom, yDom);
+                            }
+                            
+                            // Check gap to next point; if too large, break the line
+                            if (i < sortedPoints.length - 1) {
+                                const nextYDom = (sortedPoints[i+1][1] * scaleY);
+                                if (Math.abs(nextYDom - yDom) > maxGapYDom) {
+                                    isNewSegment = true;
+                                }
                             }
                         }
                         ctx.stroke();
@@ -7585,6 +7597,7 @@
                     const stickSamples = [];
                     const desiredDomStep = 3.0; // px between sticks on screen (any direction)
                     const maxStickSamples = 12000;
+                    const maxGapYImg = 15.0; // Don't interpolate sticks across large vertical gaps
                     for (let i = 0; i < sortedPoints.length && stickSamples.length < maxStickSamples; i++) {
                         const p0 = sortedPoints[i];
                         if (!Array.isArray(p0) || p0.length < 2) continue;
@@ -7614,8 +7627,14 @@
                         const dy = y1 - y0;
                         const domDx = dx * scaleX;
                         const domDy = dy * scaleY;
-                        const domDist = Math.hypot(domDx, domDy);
-                        if (domDist <= desiredDomStep) continue;
+                        
+                        // Break if jump is implausible or if vertical gap is too large (true missing data)
+                        if (
+                            Math.abs(dy) > maxGapYImg || 
+                            (isImplausibleJump(p0, p1) &&
+                            !isShelfTransition(sortedPoints, i, i + 1) &&
+                            !isSteppedPlateauTransition(sortedPoints, i, i + 1))
+                        ) continue;
 
                         const steps = Math.min(200, Math.ceil(domDist / desiredDomStep));
                         for (let s = 1; s < steps && stickSamples.length < maxStickSamples; s++) {
