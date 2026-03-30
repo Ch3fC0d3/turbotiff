@@ -7219,21 +7219,27 @@ def digitize():
                 if _hsv_roi is not None:
                     _cp_roi = (_hsv_roi[:, :, 1] > 30) & (_hsv_roi[:, :, 2] > 40)
                     _t_roi[_cp_roi] = 0
-                # Morphological open: keeps only columns with ≥ kernel_h consecutive
-                # dark pixels — i.e. long vertical rails, not short dashes/ink strokes
+                
+                # 1. Robust Slanted Grid Line Removal (Hough)
+                _lines = cv2.HoughLinesP(_t_roi, 1, np.pi/180, threshold=50, minLineLength=50, maxLineGap=10)
+                if _lines is not None:
+                    for _line in _lines:
+                        _x1, _y1, _x2, _y2 = _line[0]
+                        _angle = abs(np.arctan2(_y2 - _y1, _x2 - _x1) * 180.0 / np.pi)
+                        if _angle > 70:  # Near vertical
+                            cv2.line(mask, (_x1, _y1), (_x2, _y2), 0, 7)
+
+                # 2. Morphological open for strictly vertical fragments
                 if h_roi >= 20:
-                    _kh = max(15, min(60, h_roi // 3))
-                    _kv = cv2.getStructuringElement(cv2.MORPH_RECT, (1, _kh))
+                    _kv = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 25))
                     _vl = cv2.morphologyEx(_t_roi, cv2.MORPH_OPEN, _kv)
                     
                     # Dilate horizontally to kill the anti-aliased "glow" / blur
-                    # around the rail that the DP tracer could otherwise lock onto
-                    _kd = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 1))
+                    _kd = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 1))
                     _vl = cv2.dilate(_vl, _kd)
                     
-                    _rail_cols = np.any(_vl > 0, axis=0)
-                    if np.any(_rail_cols):
-                        mask[:, _rail_cols] = 0  # hard zero — DP tracer cannot pick these
+                    # Hard zero ONLY the specific pixels, not the entire column
+                    mask[_vl > 0] = 0
             except Exception:
                 pass
 
@@ -7551,7 +7557,7 @@ def digitize():
             if mode in colored_modes:
                 max_gap = max(25, int(h_mask * 0.02))
             else:
-                max_gap = max(3, int(h_mask * 0.005)) # ~10px max for a 2000px panel
+                max_gap = max(50, int(h_mask * 0.02)) # Allow ~50px to bridge dashes, big gaps caught by strict enforcement
                 
             s = s.interpolate(method='linear', limit_direction='both', limit=max_gap, limit_area=None)
             # Handle edge cases
