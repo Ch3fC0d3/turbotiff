@@ -7268,9 +7268,9 @@ def digitize():
             # Use user threshold for non-colored modes too (default was 1.1)
             refine_kwargs = {"dominance_ratio": snap_threshold}
         # Effectively zero smoothness penalty for colored modes to prefer jagged ink over smooth artifacts
-        dp_smooth_lambda = 0.001 if mode in colored_modes else (0.001 if curve_type == 'GR' else 0.02)
+        dp_smooth_lambda = 0.001 if mode in colored_modes else (0.001 if curve_type == 'GR' else 0.05)
         # ALSO zero out curvature penalty to allow high-frequency wiggles/jitter
-        dp_curv_lambda = 0.001 if mode in colored_modes else (0.001 if curve_type == 'GR' else 0.005)
+        dp_curv_lambda = 0.001 if mode in colored_modes else (0.001 if curve_type == 'GR' else 0.02)
         max_step_dp = 200 if mode in colored_modes else (30 if curve_type == 'GR' else 50)  # Restrict movement to prevent teleportation
 
         # Optional pixel-perfect skeleton tracer (preserve every bump)
