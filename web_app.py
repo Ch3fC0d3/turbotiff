@@ -7520,15 +7520,15 @@ def digitize():
             # Optional final smoothing for non-GR curves (GR needs to stay jagged)
             if curve_type.upper() != "GR":
                  xs = remove_outliers_and_smooth(xs, window=curve_smooth_window, outlier_threshold=outlier_threshold)
-                 
-            width_px = mask.shape[1]
 
-            # UNIVERSAL GAP FILLING:
-            # Aggressive grid removal can leave small gaps where the curve crossed a grid line.
-            # We linearly interpolate these gaps to ensure continuity.
-            if xs.size > 0:
-                s = pd.Series(xs)
-                h_mask, w_mask = mask.shape
+        width_px = mask.shape[1]
+
+        # UNIVERSAL GAP FILLING:
+        # Aggressive grid removal can leave small gaps where the curve crossed a grid line.
+        # We linearly interpolate these gaps to ensure continuity.
+        if xs.size > 0:
+            s = pd.Series(xs)
+            h_mask, w_mask = mask.shape
         # We linearly interpolate these gaps to ensure continuity.
         if xs.size > 0:
             s = pd.Series(xs)
