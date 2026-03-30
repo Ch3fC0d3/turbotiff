@@ -3096,7 +3096,7 @@ def trace_curve_pixel_perfect(mask: np.ndarray, grayscale: np.ndarray = None, bg
 
     return xs, confidence
 
-def trace_curve_multiscale(curve_mask, scale_min, scale_max, curve_type="GR", max_step=3, smooth_lambda=0.1, hot_side=None, bgr_roi=None):
+def trace_curve_multiscale(curve_mask, scale_min, scale_max, curve_type="GR", max_step=3, smooth_lambda=0.1, curv_lambda=0.01, hot_side=None, bgr_roi=None):
     """
     Enhanced multi-scale curve tracing with 5 scales and weighted fusion.
     
@@ -3181,7 +3181,7 @@ def trace_curve_multiscale(curve_mask, scale_min, scale_max, curve_type="GR", ma
                 "smooth_lambda": smooth_lambda * scale,
                 "max_step": max(1, int(max_step * scale)),
                 "rail_threshold": 0.1 * scale,
-                "curv_lambda": 0.05 * scale
+                "curv_lambda": curv_lambda * scale
             }
     
     # Calculate jaggedness factor for parameter tuning
@@ -7271,9 +7271,9 @@ def digitize():
             refine_kwargs = {"dominance_ratio": snap_threshold, "max_shift": 25, "min_prob": 0.005}
             # Disable outlier removal - keep every point for maximum accuracy
             outlier_threshold = 100.0  # Effectively disabled
-            dp_smooth_lambda = 0.001
-            dp_curv_lambda = 0.001
-            max_step_dp = 200
+            dp_smooth_lambda = 0.005
+            dp_curv_lambda = 0.002
+            max_step_dp = 100
         else:
             # Use user threshold for non-colored modes too (default was 1.1)
             refine_kwargs = {"dominance_ratio": snap_threshold}
@@ -7283,8 +7283,9 @@ def digitize():
             # corners and leave a trail of disconnected vertical dots.
             # The grid jumping is handled by the strict NaN gap enforcer below
             # and the vertical rail removal above.
-            dp_smooth_lambda = 0.001
-            dp_curv_lambda = 0.001
+            # Black mode needs tight control to prevent teleportation and vibrations
+            dp_smooth_lambda = 0.015 if curve_type != "GR" else 0.001
+            dp_curv_lambda = 0.005 if curve_type != "GR" else 0.001
             max_step_dp = 200
 
         # Optional pixel-perfect skeleton tracer (preserve every bump)
@@ -7515,6 +7516,7 @@ def digitize():
                 curve_type=curve_type,
                 max_step=max_step_dp,
                 smooth_lambda=dp_smooth_lambda,
+                curv_lambda=dp_curv_lambda,
                 hot_side=hot_side,
                 bgr_roi=roi,
             )
