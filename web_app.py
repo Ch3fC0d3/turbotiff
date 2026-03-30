@@ -1965,7 +1965,7 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
         try:
             sat = hsv[:, :, 1]
             val = hsv[:, :, 2]
-            colored = (sat > 15) & (val > 30)
+            colored = (sat > 30) & (val > 40)
             color_mask[colored] = 0
         except Exception:
             pass
@@ -1982,7 +1982,7 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
                 )
                 # Suppress saturated (coloured) pixels so only achromatic dark ink counts
                 try:
-                    _colored_px = (hsv[:, :, 1] > 15) & (hsv[:, :, 2] > 30)
+                    _colored_px = (hsv[:, :, 1] > 30) & (hsv[:, :, 2] > 40)
                     _raw_thresh[_colored_px] = 0
                 except Exception:
                     pass
@@ -7228,23 +7228,15 @@ def digitize():
                     _kh = max(15, min(60, h_roi // 3))
                     _kv = cv2.getStructuringElement(cv2.MORPH_RECT, (1, _kh))
                     _vl = cv2.morphologyEx(_t_roi, cv2.MORPH_OPEN, _kv)
+                    
+                    # Dilate horizontally to kill the anti-aliased "glow" / blur
+                    # around the rail that the DP tracer could otherwise lock onto
+                    _kd = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 1))
+                    _vl = cv2.dilate(_vl, _kd)
+                    
                     _rail_cols = np.any(_vl > 0, axis=0)
                     if np.any(_rail_cols):
                         mask[:, _rail_cols] = 0  # hard zero — DP tracer cannot pick these
-            except Exception:
-                pass
-
-        # Pixel-level colored suppression for black mode: zero any pixel whose
-        # HSV saturation > 15 (faded DTCO blue / DTSM orange land here even
-        # when sat>30 column suppression inside compute_prob_map missed them).
-        # This also cancels any edge_score/sobel contribution those pixels carry
-        # since it operates on the final mask the DP tracer actually uses.
-        if mode not in colored_modes and roi.ndim == 3:
-            try:
-                _hsv_raw = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-                _cp_mask = (_hsv_raw[:, :, 1] > 15) & (_hsv_raw[:, :, 2] > 30)
-                if np.any(_cp_mask):
-                    mask[_cp_mask] = 0
             except Exception:
                 pass
 
