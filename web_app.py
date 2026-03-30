@@ -2216,10 +2216,26 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
             cleaned_binary = preprocess_curve_track(roi_bgr, mode=mode)
             if cleaned_binary is not None and cleaned_binary.size == prob.size:
                 cleaned_score = cleaned_binary.astype(np.float32) / 255.0
-                # Where cleaned_score == 0 (likely grid/border), push probability
-                # almost to zero; where == 1, keep prob as-is.
+                # Standard 5% floor gate — keeps a small baseline everywhere.
                 gate = 0.05 + 0.95 * cleaned_score
+                # For columns where preprocess_curve_track zeroed ALL rows
+                # (morphologically-detected grid lines / track borders), lower
+                # the floor to near-zero.  The 5% floor was enough for the DP
+                # tracer to lock onto a grid line during the gaps of a dashed
+                # curve (gap rows have 0 ink → grid line's 5% wins the row).
+                rail_cols_gate = (cleaned_score.max(axis=0) < 0.01)
+                if np.any(rail_cols_gate):
+                    gate[:, rail_cols_gate] = np.minimum(
+                        gate[:, rail_cols_gate], 0.002
+                    )
                 prob *= gate
+                # Final belt: also zero any columns flagged by the raw-gray
+                # pre-removal fraction check (catches rails that slipped through
+                # preprocess_curve_track, e.g. in very short ROIs).
+                if _pre_grid_col_frac is not None:
+                    raw_final_rails = _pre_grid_col_frac > 0.85
+                    if np.any(raw_final_rails):
+                        prob[:, raw_final_rails] *= 0.002
         except Exception:
             # If preprocessing fails for any reason, fall back to the ungated map.
             pass
