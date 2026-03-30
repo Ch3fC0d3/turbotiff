@@ -7517,12 +7517,21 @@ def digitize():
 
         # UNIVERSAL GAP FILLING:
         # Aggressive grid removal can leave small gaps where the curve crossed a grid line.
-        # We linearly interpolate these gaps for all modes to ensure continuity.
+        # We linearly interpolate these gaps to ensure continuity.
         if xs.size > 0:
             s = pd.Series(xs)
             h_mask, w_mask = mask.shape
-            # Allow filling gaps up to 2% of image height or 25px (to cover 15px grid cuts), whichever is larger
-            max_gap = max(25, int(h_mask * 0.02))
+            
+            # For colored modes, we allow larger gap filling to bridge track lines.
+            # For black/non-colored modes (especially dashed curves), we severely
+            # restrict gap filling. Interpolating across large gaps creates long,
+            # straight, artificial diagonal lines. It is better to return NaN (gaps)
+            # than to invent fake data bridging distant points.
+            if mode in colored_modes:
+                max_gap = max(25, int(h_mask * 0.02))
+            else:
+                max_gap = max(3, int(h_mask * 0.005)) # ~10px max for a 2000px panel
+                
             s = s.interpolate(method='linear', limit_direction='both', limit=max_gap, limit_area=None)
             # Handle edge cases
             if s.isna().any():
