@@ -1654,6 +1654,7 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
     # Use enhanced image for better hue detection in faded areas
     colored_modes = {"green", "red", "blue", "auto", "cyan", "magenta", "yellow", "orange", "purple"}
     detected_hue = None
+    _pre_grid_col_frac = None  # Populated in black mode before grid removal
     if mode in colored_modes:
         detected_hue = detect_dominant_curve_hue(roi_enhanced)
     
@@ -1969,6 +1970,12 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
         except Exception:
             pass
 
+        # Capture pre-removal column fractions so edge_score can be gated at known rail columns.
+        # Grid removal will zero those columns in color_mask, making col_on_frac too low to catch them,
+        # but Canny/Sobel in edge_score still has strong responses at the rail boundaries.
+        if h >= 4 and w >= 2:
+            _pre_grid_col_frac = (color_mask > 0).mean(axis=0)
+
         # Additional grid removal on the mask itself (less aggressive if already processed)
         if h >= 20 and w >= 20:
             if is_bw_log:
@@ -2046,6 +2053,15 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
             if np.any(rail_rows):
                 color_score[rail_rows, :] *= 0.02
                 edge_score[rail_rows, :] *= 0.02
+
+            # Suppress edge_score at columns that were near-solid rails BEFORE grid removal.
+            # Those columns no longer appear in color_score (grid removal zeroed them), but
+            # Canny/Sobel in edge_score still responds to their boundaries.
+            if _pre_grid_col_frac is not None:
+                pre_rail_cols = _pre_grid_col_frac > 0.70
+                if np.any(pre_rail_cols):
+                    edge_score[:, pre_rail_cols] *= 0.005
+                    color_score[:, pre_rail_cols] *= 0.005
         
         # REMOVED edge suppression. Gamma Ray curves often hit the track edges.
         # We should rely on the specific 'preprocess_curve_track' logic for borders,
