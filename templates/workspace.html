@@ -1271,6 +1271,7 @@
                         <div class="calibration-tab-header">
                             <button type="button" class="tab-btn calibration-tab-btn active" data-target="calibPanel-main">Steps 2 &amp; 3</button>
                             <button type="button" class="tab-btn calibration-tab-btn" data-target="calibPanel-curves">Step 4</button>
+                            <button type="button" class="tab-btn calibration-tab-btn" data-target="calibPanel-edits">Step 5</button>
                         </div>
                     </div>
 
@@ -1432,7 +1433,16 @@
                                     </button>
                                 </div>
 
-                                <div class="form-group mt-2 max-w-420">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tab 3: Step 5 manual edits + download -->
+                    <div id="calibPanel-edits" class="tab-panel tab-hidden">
+                        <div class="curve-pane">
+                            <div class="step">
+                                <h2>Step 5: Manual Curve Edits &amp; Export</h2>
+                                <div class="form-group mt-1 max-w-420">
                                     <label>Manual curve edits</label>
                                     <div class="flex-wrap-center">
                                         <select id="editCurveSelect" style="max-width: 140px;">
@@ -1455,7 +1465,7 @@
                                     <div class="hint-text" style="font-size: 0.78em; margin-top: 3px;">Drag points to adjust. Ctrl+Z to undo.</div>
                                 </div>
 
-                                <!-- Download + Save — pinned to bottom of Step 4 -->
+                                <!-- Download + Save -->
                                 <div style="margin-top: 12px; padding-top: 10px; border-top: 1px solid #334155; display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
                                     <div style="display: flex; gap: 0;">
                                         <select id="downloadFormat" class="btn" style="border-top-right-radius: 0; border-bottom-right-radius: 0; border-right: 1px solid rgba(0,0,0,0.1); padding-right: 25px; background-position: right 5px center;">
@@ -1473,9 +1483,9 @@
                 </div>
             </div>
 
-            <!-- Step 5: AI Insights -->
+            <!-- Step 6: AI Insights -->
             <div class="step hidden" id="insightsStep">
-                <h2>Step 5: AI Insights</h2>
+                <h2>Step 6: AI Insights</h2>
                 <div id="digitizationSummary" class="insight-card hidden"></div>
                 <div id="aiInsightContent" class="insight-card">
                     <p>Upload a log image to see Vision OCR suggestions here.</p>
@@ -2374,7 +2384,7 @@
 
         function setCalibrationTab(targetId) {
             currentTabId = targetId;
-            const panels = ['calibPanel-main', 'calibPanel-curves'];
+            const panels = ['calibPanel-main', 'calibPanel-curves', 'calibPanel-edits'];
             panels.forEach((id) => {
                 const el = document.getElementById(id);
                 if (!el) return;
