@@ -7273,14 +7273,15 @@ def digitize():
         else:
             # Use user threshold for non-colored modes too (default was 1.1)
             refine_kwargs = {"dominance_ratio": snap_threshold}
-            # For black/non-colored modes (like dashed lines), we want to STRONGLY penalize
-            # horizontal jumps. This prevents the DP tracer from jumping off a dashed line
-            # into a neighboring grid line just to avoid the "gap penalty".
-            # By keeping the path rigid, it will shoot straight through the gap, land on empty
-            # space, and get correctly NaN'd out by the STRICT GAP ENFORCEMENT below.
-            dp_smooth_lambda = 0.5
-            dp_curv_lambda = 0.1
-            max_step_dp = 25
+            # For black/non-colored modes, we MUST allow large horizontal steps
+            # so the tracer can follow highly wobbly dashed curves like SPHI.
+            # If we constrain it too much, it will shoot straight through tight
+            # corners and leave a trail of disconnected vertical dots.
+            # The grid jumping is handled by the strict NaN gap enforcer below
+            # and the vertical rail removal above.
+            dp_smooth_lambda = 0.001
+            dp_curv_lambda = 0.001
+            max_step_dp = 200
 
         # Optional pixel-perfect skeleton tracer (preserve every bump)
         if ai_tracer.is_available() and trace_mode == "ai_tracer":
