@@ -7535,14 +7535,17 @@ def digitize():
                         xs[y] = np.nan
                         continue
                         
-                    # Check a small window around the traced point
-                    win = 3
+                    # Check a slightly larger window to handle highly dashed/faded lines
+                    # where the DP path might be a few pixels off the exact center
+                    win = 5
                     x_start = max(0, ix - win)
                     x_end = min(w_mask, ix + win + 1)
                     
                     # If there's almost no ink in the mask near the traced point, it's a gap.
-                    # Mask is 0-255, allow a small threshold (20) for JPEG artifacts
-                    if np.max(mask[y, x_start:x_end]) < 20:
+                    # Mask is 0-255, but faded/dashed ink can be very weak on the edges.
+                    # Lower threshold to 1 so any non-zero pixel keeps the trace alive,
+                    # preventing the dashed line from being incorrectly NaN'd out.
+                    if np.max(mask[y, x_start:x_end]) < 1:
                         xs[y] = np.nan
 
         width_px = mask.shape[1]
