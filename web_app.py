@@ -1444,12 +1444,12 @@ def remove_grid_lines_aggressive(gray_img, aggressive=True):
     # Detect vertical lines (most common in grid)
     if aggressive:
         # Very aggressive vertical line detection
-        v_kernel_size = max(15, min(80, h // 3))  # Larger kernel for aggressive detection
+        v_kernel_size = max(5, min(30, h // 5))  # Smaller kernel = more aggressive detection of broken lines
         v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, v_kernel_size))
         v_lines = cv2.morphologyEx(result, cv2.MORPH_OPEN, v_kernel)
         
         # Detect horizontal lines
-        h_kernel_size = max(15, min(80, w // 3))
+        h_kernel_size = max(5, min(30, w // 5))
         h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (h_kernel_size, 1))
         h_lines = cv2.morphologyEx(result, cv2.MORPH_OPEN, h_kernel)
         
@@ -1457,7 +1457,7 @@ def remove_grid_lines_aggressive(gray_img, aggressive=True):
         grid_lines = cv2.bitwise_or(v_lines, h_lines)
         
         # Dilate slightly to ensure complete removal
-        dilate_kernel = np.ones((2, 2), np.uint8)
+        dilate_kernel = np.ones((3, 3), np.uint8)  # Larger dilation to wipe out the intersection bleed
         grid_lines = cv2.dilate(grid_lines, dilate_kernel, iterations=1)
         
         # Remove grid lines from original
@@ -2474,19 +2474,20 @@ def trace_curve_with_dp(
 
     cost = -np.log(live_score)
 
+    curve_type_upper = str(curve_type or "").upper()
+
     # Soft rail penalty: down-weight columns that stay on for many rows, without banning them
     if h >= 4 and w >= 2:
         col_frac = bin_mask.mean(axis=0)
-        curve_type_upper = (curve_type or "").upper()
-        # Slow black curves like RHOB/DT can legitimately occupy nearly the
-        # same column for a long span, so keep the threshold high enough that
-        # we only punish near-solid grid rails.
-        rail_thresh = 0.72 if curve_type_upper == 'GR' else 0.86
+        # Lower threshold so we catch dashed or interrupted vertical grid lines.
+        # It's a soft penalty, so a truly straight curve can still power through it.
+        rail_thresh = 0.40 if curve_type_upper == 'GR' else 0.50
         rail_mask = col_frac > rail_thresh
-        # Expand to runs of length ≥3 using a 3-wide moving window
-        rail_run = np.convolve(rail_mask.astype(np.float32), np.ones(3, dtype=np.float32), mode='same') >= 2.5
-        rail_weight = 12.0 if curve_type_upper == 'GR' else 5.0
+        # Expand to runs of length >=2 using a 2-wide moving window (grid lines are usually 2+ px wide)
+        rail_run = np.convolve(rail_mask.astype(np.float32), np.ones(2, dtype=np.float32), mode='same') >= 1.5
         if np.any(rail_run):
+            # Increase the rail penalty so the trace actively avoids vertical grids
+            rail_weight = 12.0 if curve_type_upper == 'GR' else 8.0
             cost += (rail_weight * rail_run.astype(np.float32))[np.newaxis, :]
 
     # Use live_score for Viterbi likelihoods
@@ -2527,15 +2528,17 @@ def trace_curve_with_dp(
     # curve only spans ~1-5 pixels per row and won't survive a wide horizontal
     # opening. This is more discriminative than a raw row-fraction threshold.
     if h >= 4 and w >= 8:
-        horiz_kernel_w = max(5, w // 4)
+        # Use a slightly smaller kernel for horizontal lines so we catch broken grid rails too
+        horiz_kernel_w = max(3, w // 5)
         horiz_kern = cv2.getStructuringElement(cv2.MORPH_RECT, (horiz_kernel_w, 1))
         horiz_detected = cv2.morphologyEx(bin_mask.astype(np.uint8), cv2.MORPH_OPEN, horiz_kern)
         horiz_row_frac = horiz_detected.mean(axis=1)
-        horiz_mask = horiz_row_frac > 0.30  # >30% of row survived wide-kernel opening → true grid line
+        # Lower threshold so more horizontal rails get penalized
+        horiz_mask = horiz_row_frac > 0.20  # >20% of row survived wide-kernel opening → true grid line
         if np.any(horiz_mask):
-            uniform_cost = float(-np.log(1e-3))
+            uniform_cost = float(-np.log(1e-5))  # Much stronger penalty
             cost[horiz_mask, :] = uniform_cost
-            prob[horiz_mask, :] = 1e-3
+            prob[horiz_mask, :] = 1e-5
 
     # Run optimized DP (Forward Pass)
     xs_fwd, conf_fwd = fast_tracer.run_viterbi(
@@ -5006,6 +5009,94 @@ def refine_black_trace_to_dark_run_center(
         prev_target = float(x_target)
 
     return xs_ref
+
+
+def recenter_black_trace_post_dp(roi_bgr, xs):
+    """
+    A purely mathematical post-processing step to center an edge-hugging black trace.
+    It looks at the dark ink immediately around the existing trace and shifts the 
+    point to the midpoint of that contiguous ink blob.
+    """
+    if roi_bgr is None or xs is None:
+        return xs
+    if not hasattr(xs, "size") or xs.size < 3:
+        return xs
+
+    try:
+        gray = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
+        # Simple threshold for ink
+        _, ink_mask = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY_INV)
+    except Exception:
+        return xs
+
+    h, w = ink_mask.shape
+    xs_centered = xs.copy()
+    
+    for y in range(min(h, xs.size)):
+        x_current = xs[y]
+        if not np.isfinite(x_current):
+            continue
+            
+        ix = int(round(float(x_current)))
+        if ix < 0 or ix >= w:
+            continue
+            
+        # Only center if the current point is actually on ink
+        if ink_mask[y, ix] == 0:
+            # Search nearby for ink (up to 15px since thick traces can be quite far from the center)
+            found_ink = False
+            for offset in range(1, 16):
+                if ix - offset >= 0 and ink_mask[y, ix - offset] > 0:
+                    ix = ix - offset
+                    found_ink = True
+                    break
+                if ix + offset < w and ink_mask[y, ix + offset] > 0:
+                    ix = ix + offset
+                    found_ink = True
+                    break
+            if not found_ink:
+                continue
+                
+        # We are on ink. Find the left and right boundaries of this continuous ink blob.
+        left_bound = ix
+        while left_bound > 0 and ink_mask[y, left_bound - 1] > 0:
+            left_bound -= 1
+            
+        right_bound = ix
+        while right_bound < w - 1 and ink_mask[y, right_bound + 1] > 0:
+            right_bound += 1
+            
+        blob_width = right_bound - left_bound + 1
+        
+        # If the blob is reasonably thick but not obviously a massive grid intersection, center it
+        if 3 <= blob_width <= 40:
+            # Shift towards the center, but don't move more than 15 pixels to avoid wild jumps
+            target_center = float(left_bound + right_bound) / 2.0
+            max_shift = 15.0
+            dx = target_center - x_current
+            dx = max(-max_shift, min(max_shift, dx))
+            xs_centered[y] = x_current + dx
+        elif blob_width > 40:
+            # It's a grid intersection. Don't center on the whole track.
+            # Mark as NaN so we can interpolate through it
+            xs_centered[y] = np.nan
+            
+    # Apply interpolation to fill the grid intersection gaps
+    try:
+        import pandas as pd
+        s = pd.Series(xs_centered)
+        s = s.interpolate(method='linear', limit_direction='both', limit=20)
+        xs_centered = s.to_numpy()
+        
+        # Apply a rolling median to remove jagged 1-pixel snaps, then a light mean
+        s2 = pd.Series(xs_centered)
+        s2 = s2.rolling(window=5, center=True, min_periods=1).median()
+        s2 = s2.rolling(window=3, center=True, min_periods=1).mean()
+        xs_centered = s2.to_numpy()
+    except Exception:
+        pass
+        
+    return xs_centered
 
 
 def suppress_black_grid_lock_runs(roi_bgr, xs, curve_type=None):
@@ -8484,13 +8575,13 @@ def digitize():
         else:
             curve_type_upper = curve_type.upper()
             if curve_type_upper == "GR":
-                dp_smooth_lambda = 0.24
-                dp_curv_lambda = 0.03
-                max_step_dp = 5
+                dp_smooth_lambda = 0.001
+                dp_curv_lambda = 0.001
+                max_step_dp = 150
             else:
-                dp_smooth_lambda = 0.18
-                dp_curv_lambda = 0.02
-                max_step_dp = 6
+                dp_smooth_lambda = 0.005
+                dp_curv_lambda = 0.001
+                max_step_dp = 150
 
         # Optional pixel-perfect skeleton tracer (preserve every bump)
         if ai_tracer.is_available() and trace_mode == "ai_tracer":
@@ -9381,18 +9472,24 @@ def refine_edit():
         # Run multi-scale tracing on this segment
         # Use parameters consistent with the main digitization loop
         smooth_l = 0.001 if (mode in colored_modes or curve_type == 'GR') else 0.02
-        curv_l = 0.001 if (mode in colored_modes or curve_type == 'GR') else 0.005
         max_s = 200 if mode in colored_modes else (30 if curve_type == 'GR' else 50)
-
+        curv_l = 0.001 if (mode in colored_modes or curve_type == 'GR') else 0.005
+        
+        # For non-colored modes (black), we need higher max_step to track large excursions
+        # and slightly lower smoothing so it doesn't just average through peaks
+        max_step_eff = max_s if curve_type == 'GR' else 35
+        smooth_eff = smooth_l if curve_type == 'GR' else 0.005
+        curv_eff = curv_l if curve_type == 'GR' else 0.001
+        
         try:
             xs_refined, confidence = trace_curve_multiscale(
                 mask,
                 scale_min=left_value,
                 scale_max=right_value,
                 curve_type=curve_type,
-                max_step=max_s,
-                smooth_lambda=smooth_l,
-                curv_lambda=curv_l,
+                max_step=max_step_eff,
+                smooth_lambda=smooth_eff,
+                curv_lambda=curv_eff,
                 hot_side=None,
             )
         except Exception as _trace_err:
@@ -9438,6 +9535,13 @@ def refine_edit():
             except Exception:
                 pass
             return x_viterbi
+
+        if not (pixel_perfect and mode not in colored_modes):
+            try:
+                # Mathmatical centering pass for thick black ink inside refine segment
+                xs_refined = recenter_black_trace_post_dp(track_proc, xs_refined)
+            except Exception:
+                pass
 
         if 0 <= edit_row_in_window < len(xs_refined) and np.isfinite(xs_refined[edit_row_in_window]):
             # Refine the specific click point
