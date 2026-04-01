@@ -14,13 +14,16 @@ Free hosting: Deploy to Render.com, Railway.app, or Google Cloud Run
 # Vision API is optional; initialize later after env vars are loaded.
 VISION_API_AVAILABLE = False
 vision_client = None
+LOCAL_OCR_AVAILABLE = False
+easyocr = None
+_easyocr_reader = None
 
 # Load environment variables from .env and .env.local
 from dotenv import load_dotenv
 load_dotenv()  # Load .env
 load_dotenv('.env.local', override=True)  # Load .env.local (overrides .env)
 
-from flask import Flask, render_template, request, jsonify, send_file, Response, session, redirect, url_for, flash
+from flask import Flask, render_template, request, jsonify, send_file, Response, session, redirect, url_for, flash, make_response
 import math
 import os
 import random
@@ -63,6 +66,16 @@ try:
 except Exception:
     torch = None
     nn = None
+
+try:
+    import easyocr as _easyocr_mod
+    easyocr = _easyocr_mod
+    LOCAL_OCR_AVAILABLE = True
+    print("[OK] EasyOCR available for local OCR fallback.")
+except Exception as e:
+    easyocr = None
+    LOCAL_OCR_AVAILABLE = False
+    print(f"[INFO] EasyOCR unavailable; local OCR fallback disabled: {e}")
 
 # Phase 1 & 2: Learning system imports
 from user_tracker import tracker
@@ -1489,6 +1502,69 @@ def detect_if_black_and_white_log(roi_bgr):
         return False
 
 
+def compute_black_curve_residual(gray_img):
+    """Estimate dark curve ink after subtracting long straight grid lines.
+
+    Returns a tuple of float32 images in [0, 1]:
+      - residual_score: dark-ink signal with most straight grid energy removed
+      - grid_score: confidence that a pixel belongs to a long straight grid line
+    """
+    if gray_img is None or gray_img.size == 0:
+        z = np.zeros((1, 1), dtype=np.float32)
+        return z, z
+
+    h, w = gray_img.shape[:2]
+    if h < 3 or w < 3:
+        z = np.zeros((h, w), dtype=np.float32)
+        return z, z
+
+    try:
+        dark = cv2.GaussianBlur(255 - gray_img, (3, 3), 0)
+    except Exception:
+        dark = (255 - gray_img).astype(np.uint8, copy=False)
+
+    # Use grayscale morphology to model the repeated straight grid pattern.
+    # The curve itself is jagged, so it usually does not survive these long,
+    # axis-aligned openings as strongly as the grid does.
+    k_v = max(31, min(111, h // 90 if h >= 90 else h - (1 - h % 2)))
+    k_h = max(21, min(71, w // 20 if w >= 20 else w - (1 - w % 2)))
+    k_v = max(3, int(k_v))
+    k_h = max(3, int(k_h))
+
+    try:
+        v_lines = cv2.morphologyEx(
+            dark, cv2.MORPH_OPEN,
+            cv2.getStructuringElement(cv2.MORPH_RECT, (1, k_v))
+        )
+        h_lines = cv2.morphologyEx(
+            dark, cv2.MORPH_OPEN,
+            cv2.getStructuringElement(cv2.MORPH_RECT, (k_h, 1))
+        )
+        grid = cv2.max(v_lines, h_lines)
+        grid = cv2.GaussianBlur(grid, (3, 3), 0)
+        residual = cv2.subtract(dark, grid)
+    except Exception:
+        z = np.zeros((h, w), dtype=np.float32)
+        return z, z
+
+    residual_score = residual.astype(np.float32)
+    grid_score = grid.astype(np.float32)
+
+    r_max = float(residual_score.max())
+    if r_max > 0:
+        residual_score /= r_max
+    else:
+        residual_score.fill(0.0)
+
+    g_max = float(grid_score.max())
+    if g_max > 0:
+        grid_score /= g_max
+    else:
+        grid_score.fill(0.0)
+
+    return residual_score, grid_score
+
+
 def enhance_curve_roi(roi_bgr):
     """
     Apply lightweight denoise + horizontal super-resolution to a curve ROI.
@@ -1654,6 +1730,8 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
     # Use enhanced image for better hue detection in faded areas
     colored_modes = {"green", "red", "blue", "auto", "cyan", "magenta", "yellow", "orange", "purple"}
     detected_hue = None
+    black_residual_score = None
+    black_grid_score = None
     if mode in colored_modes:
         detected_hue = detect_dominant_curve_hue(roi_enhanced)
     
@@ -1953,11 +2031,32 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
             gray_processed = suppress_grid_hough(gray_processed)
             # Use original morphology as backup but less aggressive
             gray_processed = remove_grid_lines_aggressive(gray_processed, aggressive=False)
+
+        # Build a grayscale residual where long straight grid energy is
+        # subtracted out before we threshold. This helps black-on-black scans
+        # where the curve and grid share the same color, but only the grid is
+        # strongly straight and repetitive.
+        try:
+            black_residual_score, black_grid_score = compute_black_curve_residual(gray_processed)
+        except Exception:
+            black_residual_score = None
+            black_grid_score = None
         
         color_mask = cv2.adaptiveThreshold(
             gray_processed, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
             cv2.THRESH_BINARY_INV, 21, 4
         )
+
+        if black_residual_score is not None and black_residual_score.size == color_mask.size:
+            try:
+                residual_u8 = np.clip(black_residual_score * 255.0, 0, 255).astype(np.uint8)
+                residual_mask = cv2.adaptiveThreshold(
+                    255 - residual_u8, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
+                    cv2.THRESH_BINARY_INV, 21, 6
+                )
+                color_mask = cv2.bitwise_or(color_mask, residual_mask)
+            except Exception:
+                pass
 
         # Suppress colored pixels (grid/track lines are often red/green/blue).
         # In black mode we want low-saturation dark ink.
@@ -2172,10 +2271,41 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
                 skel_score = skel_f / skel_max
 
         if skel_score is not None:
-            # Skeleton gets 35% — massive bias to true centerline to prevent corner cutting
-            prob = 0.10 * color_score + 0.15 * edge_enhanced + 0.15 * center_score + 0.10 * sobel_y_score + 0.10 * harris_score + 0.05 * diag_score + 0.35 * skel_score
+            # Skeleton gets the strongest single vote so thick black strokes
+            # stay centered, but we lean more on the residual-dark score than
+            # on raw corners to avoid snapping to grid intersections.
+            residual_score = black_residual_score if black_residual_score is not None and black_residual_score.size == color_score.size else color_score
+            prob = (
+                0.12 * color_score +
+                0.22 * residual_score +
+                0.12 * edge_enhanced +
+                0.18 * center_score +
+                0.09 * sobel_y_score +
+                0.04 * harris_score +
+                0.03 * diag_score +
+                0.20 * skel_score
+            )
         else:
-            prob = 0.15 * color_score + 0.30 * edge_enhanced + 0.20 * center_score + 0.15 * sobel_y_score + 0.10 * harris_score + 0.10 * diag_score
+            residual_score = black_residual_score if black_residual_score is not None and black_residual_score.size == color_score.size else color_score
+            prob = (
+                0.18 * color_score +
+                0.24 * residual_score +
+                0.18 * edge_enhanced +
+                0.22 * center_score +
+                0.10 * sobel_y_score +
+                0.04 * harris_score +
+                0.04 * diag_score
+            )
+
+        if black_grid_score is not None and black_grid_score.size == prob.size:
+            try:
+                # Penalize long straight-line evidence, but keep a floor so the
+                # curve can survive where it legitimately crosses a grid line.
+                prob *= np.clip(1.0 - 0.82 * black_grid_score, 0.10, 1.0)
+                if black_residual_score is not None and black_residual_score.size == prob.size:
+                    prob = np.maximum(prob, 0.35 * black_residual_score)
+            except Exception:
+                pass
 
     # 6) Reuse the stronger grid-removal heuristics from preprocess_curve_track
     #    as a gating mask. This aggressively down-weights columns/rows that
@@ -2347,10 +2477,15 @@ def trace_curve_with_dp(
     # Soft rail penalty: down-weight columns that stay on for many rows, without banning them
     if h >= 4 and w >= 2:
         col_frac = bin_mask.mean(axis=0)
-        rail_mask = col_frac > 0.60
+        curve_type_upper = (curve_type or "").upper()
+        # Slow black curves like RHOB/DT can legitimately occupy nearly the
+        # same column for a long span, so keep the threshold high enough that
+        # we only punish near-solid grid rails.
+        rail_thresh = 0.72 if curve_type_upper == 'GR' else 0.86
+        rail_mask = col_frac > rail_thresh
         # Expand to runs of length ≥3 using a 3-wide moving window
         rail_run = np.convolve(rail_mask.astype(np.float32), np.ones(3, dtype=np.float32), mode='same') >= 2.5
-        rail_weight = 15.0  # keep modest per guidance (5–30)
+        rail_weight = 12.0 if curve_type_upper == 'GR' else 5.0
         if np.any(rail_run):
             cost += (rail_weight * rail_run.astype(np.float32))[np.newaxis, :]
 
@@ -2363,9 +2498,14 @@ def trace_curve_with_dp(
             dist = frac
         else:
             dist = 1.0 - frac
-        side_lambda = 1.0
-        side_penalty = side_lambda * dist
-        cost += side_penalty[np.newaxis, :]
+        # A strong hot-side prior is useful for GR-style crest picking, but on
+        # slower black curves such as RHOB/DT it can pull the path onto a
+        # neighboring rail when the signal gets weak. Keep the directional bias
+        # for GR and effectively disable it for other curve families.
+        side_lambda = 1.0 if curve_type_upper == "GR" else 0.0
+        if side_lambda > 0.0:
+            side_penalty = side_lambda * dist
+            cost += side_penalty[np.newaxis, :]
     
     # Add plausibility penalty only when the display scale is in physical units.
     # If scale_min/scale_max don't overlap the known physical range at all (e.g.
@@ -2418,35 +2558,163 @@ def trace_curve_with_dp(
     # Flip results back to match original orientation
     xs_bwd = xs_bwd_flipped[::-1]
     conf_bwd = conf_bwd_flipped[::-1]
+
+    # Each directional pass already follows a smooth DP path, but the fast
+    # tracer marks low-probability rows as NaN. On black scans that creates
+    # tiny one-row dropouts right where the curve crosses grid lines, and the
+    # forward/backward merge then "zipper switches" onto the other branch.
+    # Interpolating the per-pass dropouts preserves each branch's continuity
+    # before we decide which direction to trust per span.
+    try:
+        if xs_fwd.size:
+            xs_fwd = pd.Series(xs_fwd).interpolate(
+                method='linear',
+                limit_direction='both',
+            ).to_numpy(dtype=np.float32)
+        if xs_bwd.size:
+            xs_bwd = pd.Series(xs_bwd).interpolate(
+                method='linear',
+                limit_direction='both',
+            ).to_numpy(dtype=np.float32)
+    except Exception:
+        pass
     
-    # Merge Forward and Backward results
-    # Averaging the positions cancels out directional lag/hysteresis
+    # Merge Forward and Backward results with a continuity-aware branch choice.
+    # The forward/backward passes can occasionally lock onto different rails on
+    # black scans. Picking the locally brighter branch *per row* causes visual
+    # teleportation, so resolve disagreements as contiguous spans instead.
     xs = np.full_like(xs_fwd, np.nan)
     confidence = np.zeros_like(conf_fwd)
-    
-    for y in range(h):
-        v1 = xs_fwd[y]
-        v2 = xs_bwd[y]
-        valid1 = np.isfinite(v1)
-        valid2 = np.isfinite(v2)
-        
-        if valid1 and valid2:
-            # If the two passes disagree significantly (e.g. took different paths around an obstacle),
-            # pick the one with higher local probability instead of averaging (which would land in the middle of nowhere).
-            if abs(v1 - v2) > 5:
-                p1 = prob[y, int(min(w-1, max(0, v1)))]
-                p2 = prob[y, int(min(w-1, max(0, v2)))]
-                xs[y] = v1 if p1 > p2 else v2
-            else:
-                # Otherwise, average them to center the trace on peaks
-                xs[y] = (v1 + v2) * 0.5
-            confidence[y] = (conf_fwd[y] + conf_bwd[y]) * 0.5
-        elif valid1:
-            xs[y] = v1
-            confidence[y] = conf_fwd[y]
-        elif valid2:
-            xs[y] = v2
-            confidence[y] = conf_bwd[y]
+
+    merge_tol = 5.0
+    switch_penalty = 0.25
+    merge_smooth_lambda = max(0.02, float(smooth_lambda) * 0.05)
+
+    candidates = np.stack(
+        (xs_fwd.astype(np.float32), xs_bwd.astype(np.float32)),
+        axis=1,
+    )
+    candidate_conf = np.stack(
+        (conf_fwd.astype(np.float32), conf_bwd.astype(np.float32)),
+        axis=1,
+    )
+    candidate_valid = np.isfinite(candidates)
+
+    def _candidate_cost(y_idx, x_val, conf_val):
+        x_idx = int(min(w - 1, max(0, int(round(float(x_val))))))
+        p_here = float(prob[y_idx, x_idx])
+        # Favor high-probability pixels first, with a mild confidence tie-breaker.
+        return float(-np.log(max(eps, p_here)) - 0.15 * max(0.0, float(conf_val)))
+
+    y = 0
+    while y < h:
+        if not np.any(candidate_valid[y]):
+            y += 1
+            continue
+
+        seg_start = y
+        while y < h and np.any(candidate_valid[y]):
+            y += 1
+        seg_end = y
+        seg_len = seg_end - seg_start
+
+        merge_dp = np.full((seg_len, 2), np.inf, dtype=np.float64)
+        merge_prev = np.full((seg_len, 2), -1, dtype=np.int8)
+
+        for state in range(2):
+            if candidate_valid[seg_start, state]:
+                merge_dp[0, state] = _candidate_cost(
+                    seg_start,
+                    candidates[seg_start, state],
+                    candidate_conf[seg_start, state],
+                )
+
+        for off in range(1, seg_len):
+            yy = seg_start + off
+            for state in range(2):
+                if not candidate_valid[yy, state]:
+                    continue
+
+                x_cur = float(candidates[yy, state])
+                node_cost = _candidate_cost(yy, x_cur, candidate_conf[yy, state])
+                best_val = np.inf
+                best_prev_state = -1
+
+                for prev_state in range(2):
+                    if not candidate_valid[yy - 1, prev_state]:
+                        continue
+                    prev_val = float(merge_dp[off - 1, prev_state])
+                    if not np.isfinite(prev_val):
+                        continue
+
+                    x_prev = float(candidates[yy - 1, prev_state])
+                    dx = x_cur - x_prev
+                    transition_cost = merge_smooth_lambda * (dx * dx)
+                    if prev_state != state:
+                        transition_cost += switch_penalty
+
+                    total_cost = prev_val + node_cost + transition_cost
+                    if total_cost < best_val:
+                        best_val = total_cost
+                        best_prev_state = prev_state
+
+                if best_prev_state >= 0:
+                    merge_dp[off, state] = best_val
+                    merge_prev[off, state] = best_prev_state
+                else:
+                    merge_dp[off, state] = node_cost
+
+        states = np.full(seg_len, -1, dtype=np.int8)
+        end_state = 0
+        if not np.isfinite(merge_dp[-1, end_state]) and np.isfinite(merge_dp[-1, 1]):
+            end_state = 1
+        elif np.isfinite(merge_dp[-1, 1]) and merge_dp[-1, 1] < merge_dp[-1, 0]:
+            end_state = 1
+        states[-1] = np.int8(end_state)
+
+        for off in range(seg_len - 1, 0, -1):
+            state = int(states[off])
+            prev_state = int(merge_prev[off, state]) if state >= 0 else -1
+            if prev_state < 0:
+                if np.isfinite(merge_dp[off - 1, state]):
+                    prev_state = state
+                elif np.isfinite(merge_dp[off - 1, 1 - state]):
+                    prev_state = 1 - state
+            states[off - 1] = np.int8(prev_state)
+
+        if states[0] < 0:
+            if np.isfinite(merge_dp[0, 0]):
+                states[0] = np.int8(0)
+            elif np.isfinite(merge_dp[0, 1]):
+                states[0] = np.int8(1)
+
+        for off in range(seg_len):
+            yy = seg_start + off
+            v1 = candidates[yy, 0]
+            v2 = candidates[yy, 1]
+            valid1 = bool(candidate_valid[yy, 0])
+            valid2 = bool(candidate_valid[yy, 1])
+
+            if valid1 and valid2 and abs(float(v1) - float(v2)) <= merge_tol:
+                xs[yy] = float(v1 + v2) * 0.5
+                confidence[yy] = float(candidate_conf[yy, 0] + candidate_conf[yy, 1]) * 0.5
+                continue
+
+            state = int(states[off])
+            if state < 0 or not candidate_valid[yy, state]:
+                if valid1 and valid2:
+                    c1 = _candidate_cost(yy, v1, candidate_conf[yy, 0])
+                    c2 = _candidate_cost(yy, v2, candidate_conf[yy, 1])
+                    state = 0 if c1 <= c2 else 1
+                elif valid1:
+                    state = 0
+                elif valid2:
+                    state = 1
+                else:
+                    continue
+
+            xs[yy] = float(candidates[yy, state])
+            confidence[yy] = float(candidate_conf[yy, state])
     
     return xs, confidence
 
@@ -4540,6 +4808,607 @@ def refine_to_stroke_centerline(mask, xs, threshold_ratio=0.5, window_size=None)
     return xs_ref
 
 
+def refine_black_trace_to_dark_run_center(
+    roi_bgr,
+    xs,
+    threshold_block=21,
+    threshold_c=4,
+    search_radius=28,
+    max_shift=12.0,
+    blend=0.95,
+    hot_side=None,
+    curve_type=None,
+):
+    """Recenter a black trace onto the visible dark stroke body.
+
+    Unlike the probability-map centerline pass, this works from the ROI's
+    grayscale ink directly, which better matches thick filled black curves.
+    When the stroke gets wide, bias the target toward the chart-reading side
+    so black curves hit visible crest tips instead of sitting on the inner half
+    of the printed stroke.
+    """
+    if roi_bgr is None or xs is None:
+        return xs
+    if not hasattr(xs, "size") or xs.size < 3:
+        return xs
+
+    try:
+        gray = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
+    except Exception:
+        return xs
+
+    h, w = gray.shape[:2]
+    if h < 3 or w < 3:
+        return xs
+
+    try:
+        if detect_if_black_and_white_log(roi_bgr):
+            gray = suppress_grid_hough(gray)
+            gray = remove_grid_lines_aggressive(gray, aggressive=False)
+    except Exception:
+        pass
+
+    try:
+        dark_mask = cv2.adaptiveThreshold(
+            gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
+            cv2.THRESH_BINARY_INV, int(threshold_block), int(threshold_c)
+        )
+        dark_mask = cv2.morphologyEx(
+            dark_mask, cv2.MORPH_CLOSE,
+            cv2.getStructuringElement(cv2.MORPH_RECT, (3, 1)), 1
+        )
+    except Exception:
+        return xs
+
+    dark_score = (255.0 - gray.astype(np.float32)) / 255.0
+    residual_support = None
+    grid_support = None
+    try:
+        residual_score, grid_score = compute_black_curve_residual(gray)
+        if residual_score is not None and residual_score.shape[:2] == (h, w):
+            residual_support = cv2.GaussianBlur(
+                np.clip(residual_score, 0.0, 1.0).astype(np.float32),
+                (5, 5),
+                0,
+            )
+        if grid_score is not None and grid_score.shape[:2] == (h, w):
+            grid_support = cv2.GaussianBlur(
+                np.clip(grid_score, 0.0, 1.0).astype(np.float32),
+                (5, 5),
+                0,
+            )
+    except Exception:
+        residual_support = None
+        grid_support = None
+
+    xs_ref = xs.copy().astype(np.float32)
+    radius = max(4, int(search_radius))
+    base_max_shift = max(1.0, float(max_shift))
+    blend = float(np.clip(blend, 0.0, 1.0))
+    curve_type_upper = str(curve_type or "").upper()
+    use_hot_bias = hot_side in ("left", "right")
+    prev_target = None
+
+    for y in range(min(h, xs_ref.size)):
+        x_prev = xs_ref[y]
+        if not np.isfinite(x_prev):
+            prev_target = None
+            continue
+
+        x_center = int(round(float(x_prev)))
+        if x_center < 0 or x_center >= w:
+            prev_target = None
+            continue
+
+        x0 = max(0, x_center - radius)
+        x1 = min(w, x_center + radius + 1)
+        row_mask = dark_mask[y, x0:x1] > 0
+        if row_mask.size == 0 or not np.any(row_mask):
+            prev_target = None
+            continue
+
+        segs = []
+        in_seg = False
+        seg_start = 0
+        for i in range(int(row_mask.size)):
+            if bool(row_mask[i]) and not in_seg:
+                in_seg = True
+                seg_start = i
+            elif (not bool(row_mask[i])) and in_seg:
+                segs.append((int(seg_start), int(i - 1)))
+                in_seg = False
+        if in_seg:
+            segs.append((int(seg_start), int(row_mask.size) - 1))
+        if not segs:
+            continue
+
+        x_rel = float(x_prev) - float(x0)
+        chosen = None
+        best = None
+        chosen_info = None
+        for l, r in segs:
+            if l <= x_rel <= r:
+                dist = 0.0
+            elif x_rel < l:
+                dist = float(l) - x_rel
+            else:
+                dist = x_rel - float(r)
+
+            width = float(r - l + 1)
+            seg_dark = dark_score[y, x0 + l:x0 + r + 1]
+            darkness = float(seg_dark.mean()) if seg_dark.size > 0 else 0.0
+            res_peak = 0.0
+            grid_mean = 0.0
+            if residual_support is not None:
+                seg_res = residual_support[y, x0 + l:x0 + r + 1]
+                res_peak = float(seg_res.max()) if seg_res.size > 0 else 0.0
+            if grid_support is not None:
+                seg_grid = grid_support[y, x0 + l:x0 + r + 1]
+                grid_mean = float(seg_grid.mean()) if seg_grid.size > 0 else 0.0
+            score = (dist, -width, -darkness)
+            if best is None or score < best:
+                best = score
+                chosen = (l, r)
+                chosen_info = (res_peak, grid_mean)
+
+        if chosen is None:
+            prev_target = None
+            continue
+
+        l, r = chosen
+        if (
+            curve_type_upper != "GR"
+            and prev_target is not None
+            and chosen_info is not None
+        ):
+            chosen_res_peak, chosen_grid_mean = chosen_info
+            # If the nearest dark run looks overwhelmingly grid-like, do not
+            # reacquire on this row at all. For RHOB/DT-type curves, holding
+            # the incoming trace for one row is more stable than jumping onto
+            # a likely rail and then trying to recover a few rows later.
+            if chosen_grid_mean > 0.90 and chosen_res_peak < 0.08:
+                continue
+
+        seg_dark = dark_score[y, x0 + l:x0 + r + 1]
+        xs_local = np.arange(x0 + l, x0 + r + 1, dtype=np.float32)
+        weights = np.power(np.clip(seg_dark, 0.0, 1.0), 1.8)
+        if float(weights.sum()) > 1e-8:
+            x_center = float((xs_local * weights).sum() / weights.sum())
+        else:
+            x_center = float(x0 + (l + r) * 0.5)
+
+        x_target = x_center
+        local_max_shift = base_max_shift
+        local_blend = blend
+
+        if use_hot_bias:
+            run_width = float(r - l + 1)
+            hot_edge = float(x0 + r) if hot_side == "right" else float(x0 + l)
+            if curve_type_upper == "GR":
+                # GR should preserve visible right-side crest tips, but still
+                # stay anchored to the same dark run.
+                width_t = float(np.clip((run_width - 3.0) / 14.0, 0.0, 1.0))
+                bias = 0.58 + 0.38 * width_t
+                local_max_shift = max(local_max_shift, 22.0)
+                local_blend = max(local_blend, 0.98)
+            else:
+                # RHOB/DT-like strokes are slower and thicker; bias more gently
+                # but still move well past the geometric center on wide rows.
+                width_t = float(np.clip((run_width - 3.0) / 18.0, 0.0, 1.0))
+                bias = 0.48 + 0.42 * width_t
+                local_max_shift = max(local_max_shift, 22.0)
+                local_blend = max(local_blend, 0.94)
+            x_target = float(x_center + (hot_edge - x_center) * bias)
+
+        dx = x_target - float(x_prev)
+        dx = max(-local_max_shift, min(local_max_shift, dx))
+        xs_ref[y] = float((1.0 - local_blend) * float(x_prev) + local_blend * (float(x_prev) + dx))
+        prev_target = float(x_target)
+
+    return xs_ref
+
+
+def suppress_black_grid_lock_runs(roi_bgr, xs, curve_type=None):
+    """Remove suspicious black-mode lock-ons to grid-like columns.
+
+    If the trace sits on the same x-column for several rows while the residual
+    model says that location is mostly grid and not curve ink, blank that short
+    span and let interpolation reconnect the surrounding curve.
+
+    Also catch the common "rail jitter" case where the trace wiggles a couple of
+    pixels around one vertical grid column for several rows. That pattern looks
+    continuous to a simple dx<=1 detector, but it is still visually locked to a
+    grid rail instead of following the printed curve body.
+    """
+    if roi_bgr is None or xs is None:
+        return xs
+    if not hasattr(xs, "size") or xs.size < 3:
+        return xs
+
+    try:
+        gray = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
+    except Exception:
+        return xs
+
+    try:
+        if detect_if_black_and_white_log(roi_bgr):
+            gray = suppress_grid_hough(gray)
+            gray = remove_grid_lines_aggressive(gray, aggressive=False)
+    except Exception:
+        pass
+
+    try:
+        residual_score, grid_score = compute_black_curve_residual(gray)
+    except Exception:
+        return xs
+
+    if residual_score is None or grid_score is None:
+        return xs
+    if residual_score.shape[:2] != gray.shape[:2] or grid_score.shape[:2] != gray.shape[:2]:
+        return xs
+
+    xs_ref = xs.copy().astype(np.float32)
+    h, w = gray.shape[:2]
+    valid = np.isfinite(xs_ref)
+    if not np.any(valid):
+        return xs_ref
+
+    curve_type_upper = str(curve_type or "").upper()
+    residual_thr = 0.10 if curve_type_upper == "GR" else 0.08
+    min_len = 8 if curve_type_upper == "GR" else 6
+    bad = np.zeros(xs_ref.size, dtype=bool)
+    rvals = np.full(xs_ref.size, np.nan, dtype=np.float32)
+    gvals = np.full(xs_ref.size, np.nan, dtype=np.float32)
+
+    for y in range(min(h, xs_ref.size)):
+        if not valid[y]:
+            continue
+        ix = int(np.clip(round(float(xs_ref[y])), 0, w - 1))
+        rvals[y] = float(residual_score[y, ix])
+        gvals[y] = float(grid_score[y, ix])
+
+    for y in range(1, min(h, xs_ref.size) - 1):
+        if not valid[y - 1] or not valid[y] or not valid[y + 1]:
+            continue
+        rv = float(rvals[y])
+        gv = float(gvals[y])
+        dx_prev = abs(float(xs_ref[y] - xs_ref[y - 1]))
+        dx_next = abs(float(xs_ref[y + 1] - xs_ref[y]))
+        if rv < residual_thr and gv > 0.90 and dx_prev <= 1.0 and dx_next <= 1.0:
+            bad[y] = True
+
+    # A rail lock often jitters by 1-3 px while staying pinned to the same
+    # vertical grid column. Mark those short near-vertical windows too.
+    band_radius = 3 if curve_type_upper == "GR" else 2
+    max_band_span = 3.5 if curve_type_upper == "GR" else 3.0
+    mean_residual_thr = 0.10 if curve_type_upper == "GR" else 0.08
+    mean_grid_thr = 0.90 if curve_type_upper == "GR" else 0.88
+    for y in range(band_radius, min(h, xs_ref.size) - band_radius):
+        sl = slice(y - band_radius, y + band_radius + 1)
+        if not np.all(valid[sl]):
+            continue
+        window_x = xs_ref[sl]
+        if float(np.nanmax(window_x) - np.nanmin(window_x)) > max_band_span:
+            continue
+        if (
+            float(np.nanmean(rvals[sl])) < mean_residual_thr
+            and float(np.nanmean(gvals[sl])) > mean_grid_thr
+        ):
+            bad[sl] = True
+
+    spans = []
+    in_span = False
+    seg_start = 0
+    for i, flag in enumerate(bad):
+        if bool(flag) and not in_span:
+            in_span = True
+            seg_start = i
+        elif (not bool(flag)) and in_span:
+            spans.append((int(seg_start), int(i - 1)))
+            in_span = False
+    if in_span:
+        spans.append((int(seg_start), int(xs_ref.size - 1)))
+
+    spans = [(s, e) for (s, e) in spans if (e - s + 1) >= min_len]
+    if not spans:
+        return xs_ref
+
+    for s, e in spans:
+        xs_ref[s:e + 1] = np.nan
+
+    try:
+        xs_ref = pd.Series(xs_ref).interpolate(
+            method='linear',
+            limit_direction='both',
+            limit=max(25, int(xs_ref.size * 0.03)),
+            limit_area=None,
+        ).to_numpy(dtype=np.float32)
+    except Exception:
+        pass
+
+    return xs_ref
+
+
+def refine_black_trace_to_hot_side_crests(roi_bgr, xs, hot_side=None, threshold_block=21, threshold_c=4, search_radius=22, min_run_width=6.0, max_shift=14.0, blend=0.9, curve_type=None):
+    """Snap black traces toward visible crest tips on the chart-reading side.
+
+    This is conservative: it only moves rows where the local black stroke is
+    wide enough to indicate a crest/shoulder and the current trace is still
+    sitting on the wrong side of that run.
+    """
+    if roi_bgr is None or xs is None:
+        return xs
+    if hot_side not in ("left", "right"):
+        return xs
+    if not hasattr(xs, "size") or xs.size < 3:
+        return xs
+
+    try:
+        gray = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
+    except Exception:
+        return xs
+
+    h, w = gray.shape[:2]
+    if h < 3 or w < 3:
+        return xs
+
+    curve_type_upper = str(curve_type or "").upper()
+    is_gr_curve = curve_type_upper == "GR"
+
+    try:
+        if detect_if_black_and_white_log(roi_bgr):
+            gray = suppress_grid_hough(gray)
+            gray = remove_grid_lines_aggressive(gray, aggressive=False)
+    except Exception:
+        pass
+
+    residual_support = None
+    residual_binary = None
+    edge_mask = None
+    try:
+        residual_score, grid_score = compute_black_curve_residual(gray)
+        if residual_score is not None and residual_score.shape[:2] == (h, w):
+            residual_support = cv2.GaussianBlur(
+                residual_score.astype(np.float32), (5, 5), 0
+            )
+            residual_support = np.clip(residual_support, 0.0, 1.0)
+            residual_binary = (residual_support >= (0.18 if is_gr_curve else 0.12)).astype(np.uint8) * 255
+            residual_binary = cv2.morphologyEx(
+                residual_binary,
+                cv2.MORPH_CLOSE,
+                cv2.getStructuringElement(cv2.MORPH_RECT, (5 if is_gr_curve else 9, 1)),
+                1,
+            )
+            residual_binary = cv2.morphologyEx(
+                residual_binary,
+                cv2.MORPH_OPEN,
+                cv2.getStructuringElement(cv2.MORPH_RECT, (2, 1)),
+                1,
+            )
+    except Exception:
+        residual_support = None
+        residual_binary = None
+        edge_mask = None
+
+    try:
+        dark_mask = cv2.adaptiveThreshold(
+            gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
+            cv2.THRESH_BINARY_INV, int(threshold_block), int(threshold_c)
+        )
+        dark_mask = cv2.morphologyEx(
+            dark_mask, cv2.MORPH_CLOSE,
+            cv2.getStructuringElement(cv2.MORPH_RECT, (3, 1)), 1
+        )
+    except Exception:
+        return xs
+
+    try:
+        if grid_score is not None and grid_score.shape[:2] == (h, w):
+            edge_mask = ((dark_mask > 0) & (grid_score < 0.85)).astype(np.uint8) * 255
+            edge_mask = cv2.morphologyEx(
+                edge_mask,
+                cv2.MORPH_CLOSE,
+                cv2.getStructuringElement(cv2.MORPH_RECT, (7, 1)),
+                1,
+            )
+            edge_mask = cv2.morphologyEx(
+                edge_mask,
+                cv2.MORPH_OPEN,
+                cv2.getStructuringElement(cv2.MORPH_RECT, (2, 1)),
+                1,
+            )
+    except Exception:
+        edge_mask = None
+
+    xs_ref = xs.copy().astype(np.float32)
+    radius = max(4, int(search_radius))
+    max_shift = max(1.0, float(max_shift))
+    min_run_width = max(1.0, float(min_run_width))
+    blend = float(np.clip(blend, 0.0, 1.0))
+    if not is_gr_curve:
+        max_shift = max(max_shift, 22.0)
+        blend = max(blend, 0.98)
+    back_radius = max(6 if is_gr_curve else 10, int(round(radius * 0.35)))
+    hot_radius = max(radius + (8 if is_gr_curve else 28), 28 if is_gr_curve else 55)
+    residual_min_strength = 0.18 if is_gr_curve else 0.14
+    residual_peak_frac = 0.72 if is_gr_curve else 0.65
+    min_extension = 5.0 if is_gr_curve else 4.0
+
+    def _collect_segments(mask_1d):
+        segs = []
+        in_seg = False
+        seg_start = 0
+        for i in range(int(mask_1d.size)):
+            if bool(mask_1d[i]) and not in_seg:
+                in_seg = True
+                seg_start = i
+            elif (not bool(mask_1d[i])) and in_seg:
+                segs.append((int(seg_start), int(i - 1)))
+                in_seg = False
+        if in_seg:
+            segs.append((int(seg_start), int(mask_1d.size) - 1))
+        return segs
+
+    def _merge_segments(segs, max_gap=0):
+        if not segs:
+            return []
+        merged = [list(segs[0])]
+        for l, r in segs[1:]:
+            if int(l) - int(merged[-1][1]) - 1 <= int(max_gap):
+                merged[-1][1] = int(r)
+            else:
+                merged.append([int(l), int(r)])
+        return [(int(l), int(r)) for (l, r) in merged]
+
+    prev_hot_x = None
+
+    for y in range(min(h, xs_ref.size)):
+        x_prev = xs_ref[y]
+        if not np.isfinite(x_prev):
+            prev_hot_x = None
+            continue
+
+        x_center = int(round(float(x_prev)))
+        if x_center < 0 or x_center >= w:
+            prev_hot_x = None
+            continue
+
+        moved = False
+
+        if not is_gr_curve and edge_mask is not None:
+            anchor_x = float(x_prev)
+            if prev_hot_x is not None and np.isfinite(prev_hot_x):
+                anchor_x = float(prev_hot_x)
+            anchor_center = int(round(anchor_x))
+            if anchor_center < 0 or anchor_center >= w:
+                anchor_center = x_center
+            if hot_side == "right":
+                x0 = max(0, anchor_center - max(back_radius, 14))
+                x1 = min(w, anchor_center + max(hot_radius, 64) + 1)
+            else:
+                x0 = max(0, anchor_center - max(hot_radius, 64))
+                x1 = min(w, anchor_center + max(back_radius, 14) + 1)
+            row_binary = edge_mask[y, x0:x1] > 0
+            if row_binary.size >= 4 and np.any(row_binary):
+                segs = []
+                for l, r in _collect_segments(row_binary):
+                    if float(r - l + 1) >= max(3.0, min_run_width - 1.0):
+                        segs.append((l, r))
+                segs = _merge_segments(segs, max_gap=5)
+                if segs:
+                    x_rel = anchor_x - float(x0)
+                    chosen = None
+                    min_width = max(8.0, min_run_width + 2.0)
+                    min_peak = 0.22
+                    max_gap = 20.0
+                    if hot_side == "right":
+                        cand_iter = reversed(segs)
+                    else:
+                        cand_iter = iter(segs)
+
+                    for l, r in cand_iter:
+                        width = float(r - l + 1)
+                        if width < min_width:
+                            continue
+                        peak = 0.0
+                        if residual_support is not None:
+                            seg = residual_support[y, x0 + l:x0 + r + 1]
+                            peak = float(seg.max()) if seg.size > 0 else 0.0
+                        if peak < min_peak:
+                            continue
+                        if hot_side == "right":
+                            gap = max(0.0, float(l) - x_rel)
+                        else:
+                            gap = max(0.0, x_rel - float(r))
+                        if gap <= max_gap:
+                            chosen = (l, r)
+                            break
+
+                    if chosen is None:
+                        best = None
+                        for l, r in segs:
+                            if hot_side == "right":
+                                hot_edge = float(x0 + r)
+                                dist = 0.0 if l <= x_rel <= r else (float(l) - x_rel if x_rel < l else x_rel - float(r))
+                            else:
+                                hot_edge = float(x0 + l)
+                                dist = 0.0 if l <= x_rel <= r else (x_rel - float(r) if x_rel > r else float(l) - x_rel)
+                            width = float(r - l + 1)
+                            score = (max(0.0, dist), -width, abs(hot_edge - float(x_prev)))
+                            if best is None or score < best:
+                                best = score
+                                chosen = (l, r)
+                    if chosen is not None:
+                        l, r = chosen
+                        x_target = float(x0 + r) if hot_side == "right" else float(x0 + l)
+                        dx = x_target - float(x_prev)
+                        dx = max(-18.0, min(18.0, dx))
+                        if abs(dx) >= 0.5:
+                            xs_ref[y] = float((1.0 - blend) * float(x_prev) + blend * (float(x_prev) + dx))
+                            moved = True
+
+        if moved:
+            prev_hot_x = float(xs_ref[y])
+            continue
+
+        if not is_gr_curve:
+            prev_hot_x = float(xs_ref[y])
+            continue
+
+        x0 = max(0, x_center - radius)
+        x1 = min(w, x_center + radius + 1)
+        row_mask = dark_mask[y, x0:x1] > 0
+        if row_mask.size == 0 or not np.any(row_mask):
+            continue
+
+        segs = _collect_segments(row_mask)
+        if not segs:
+            continue
+
+        x_rel = float(x_prev) - float(x0)
+        chosen = None
+        best = None
+        for l, r in segs:
+            if l <= x_rel <= r:
+                dist = 0.0
+            elif x_rel < l:
+                dist = float(l) - x_rel
+            else:
+                dist = x_rel - float(r)
+            width = float(r - l + 1)
+            score = (dist, -width)
+            if best is None or score < best:
+                best = score
+                chosen = (l, r)
+
+        if chosen is None:
+            continue
+
+        l, r = chosen
+        run_width = float(r - l)
+        if run_width < min_run_width:
+            continue
+
+        frac = (float(x_prev) - float(x0 + l)) / max(1.0, run_width)
+        if hot_side == "right":
+            keep_frac = 0.58 if is_gr_curve else 0.66
+            if frac >= keep_frac:
+                continue
+            x_target = float(x0 + r)
+        else:
+            keep_frac = 0.42 if is_gr_curve else 0.34
+            if frac <= keep_frac:
+                continue
+            x_target = float(x0 + l)
+
+        dx = x_target - float(x_prev)
+        dx = max(-max_shift, min(max_shift, dx))
+        xs_ref[y] = float((1.0 - blend) * float(x_prev) + blend * (float(x_prev) + dx))
+        prev_hot_x = float(xs_ref[y])
+
+    return xs_ref
+
+
 def remove_outliers_and_smooth(xs, window=5, outlier_threshold=3.0):
     """Remove isolated spikes and smooth the curve.
     
@@ -4800,10 +5669,147 @@ def downsample_for_ocr(image_bytes, max_height=2000):
     _, buffer = cv2.imencode('.jpg', resized, [cv2.IMWRITE_JPEG_QUALITY, 85])
     return buffer.tobytes()
 
-def detect_text_vision_api(image_bytes):
-    """Use Google Vision API to detect text in image"""
-    if not VISION_API_AVAILABLE or vision_client is None:
+
+def _get_easyocr_reader():
+    global _easyocr_reader
+    if not LOCAL_OCR_AVAILABLE or easyocr is None:
+        return None
+    if _easyocr_reader is None:
+        use_gpu = bool(TORCH_AVAILABLE and torch is not None and torch.cuda.is_available())
+        try:
+            import contextlib
+            with contextlib.redirect_stdout(StringIO()), contextlib.redirect_stderr(StringIO()):
+                _easyocr_reader = easyocr.Reader(['en'], gpu=use_gpu)
+            print(f"[OK] EasyOCR reader initialized ({'GPU' if use_gpu else 'CPU'}).")
+        except Exception as exc:
+            print(f"[WARN] EasyOCR initialization failed: {exc}")
+            _easyocr_reader = False
+    return _easyocr_reader if _easyocr_reader is not False else None
+
+
+def _detect_text_easyocr(image_bytes):
+    reader = _get_easyocr_reader()
+    if reader is None:
         return {'raw': [], 'numbers': [], 'suggestions': {}}
+
+    try:
+        image_bytes = downsample_for_ocr(image_bytes, max_height=2200)
+        nparr = np.frombuffer(image_bytes, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        if img is None or img.size == 0:
+            return {'raw': [], 'numbers': [], 'suggestions': {}}
+
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        gray = cv2.GaussianBlur(gray, (3, 3), 0)
+        gray = cv2.adaptiveThreshold(
+            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 11
+        )
+        ocr_img = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
+        if max(ocr_img.shape[:2]) < 1800:
+            ocr_img = cv2.resize(ocr_img, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
+
+        results = reader.readtext(
+            ocr_img,
+            detail=1,
+            paragraph=False,
+            text_threshold=0.5,
+            low_text=0.25,
+            link_threshold=0.3,
+        )
+
+        raw_text = []
+        numeric_entries = []
+        line_items = []
+        scale_x = img.shape[1] / float(ocr_img.shape[1]) if ocr_img.shape[1] else 1.0
+        scale_y = img.shape[0] / float(ocr_img.shape[0]) if ocr_img.shape[0] else 1.0
+
+        for entry in results or []:
+            if not isinstance(entry, (list, tuple)) or len(entry) < 2:
+                continue
+            bbox = entry[0]
+            text = str(entry[1] or '').strip()
+            if not text:
+                continue
+
+            verts = []
+            xs = []
+            ys = []
+            for pt in bbox:
+                try:
+                    x = int(round(float(pt[0]) * scale_x))
+                    y = int(round(float(pt[1]) * scale_y))
+                except Exception:
+                    continue
+                verts.append({'x': x, 'y': y})
+                xs.append(x)
+                ys.append(y)
+            if not verts:
+                continue
+
+            raw_text.append({
+                'text': text,
+                'vertices': verts,
+            })
+
+            if xs and ys:
+                x_center = float(sum(xs)) / len(xs)
+                y_center = float(sum(ys)) / len(ys)
+                line_items.append((y_center, x_center, text))
+
+            numbers = re.findall(r'-?\d*\.?\d+', text)
+            if numbers and verts:
+                x0 = verts[0]['x']
+                y0 = verts[0]['y']
+                for num in numbers:
+                    try:
+                        numeric_entries.append({
+                            'value': float(num),
+                            'text': text,
+                            'x': x0,
+                            'y': y0,
+                        })
+                    except ValueError:
+                        continue
+
+        full_text = ""
+        if line_items:
+            line_items.sort(key=lambda t: (t[0], t[1]))
+            lines = []
+            current_line = []
+            current_y = None
+            y_tol = max(10.0, img.shape[0] * 0.01)
+            for y, x, text in line_items:
+                if current_y is None or abs(y - current_y) <= y_tol:
+                    if current_y is None:
+                        current_y = y
+                    current_line.append((x, text))
+                else:
+                    current_line.sort(key=lambda t: t[0])
+                    lines.append(' '.join(t[1] for t in current_line if t[1]).strip())
+                    current_line = [(x, text)]
+                    current_y = y
+            if current_line:
+                current_line.sort(key=lambda t: t[0])
+                lines.append(' '.join(t[1] for t in current_line if t[1]).strip())
+            full_text = '\n'.join(line for line in lines if line)
+
+        suggestions = build_ocr_suggestions(numeric_entries)
+        suggestions = attach_curve_label_hints(suggestions, raw_text)
+
+        return {
+            'raw': raw_text,
+            'numbers': numeric_entries,
+            'suggestions': suggestions,
+            'full_text': full_text
+        }
+    except Exception as e:
+        print(f"EasyOCR error: {e}")
+        return {'raw': [], 'numbers': [], 'suggestions': {}}
+
+def detect_text_vision_api(image_bytes):
+    """Use Google Vision API or local OCR fallback to detect text in image"""
+    if not VISION_API_AVAILABLE or vision_client is None:
+        return _detect_text_easyocr(image_bytes)
 
     try:
         image = vision.Image(content=image_bytes)
@@ -4851,7 +5857,7 @@ def detect_text_vision_api(image_bytes):
         }
     except Exception as e:
         print(f"Vision API error: {e}")
-        return {'raw': [], 'numbers': [], 'suggestions': {}}
+        return _detect_text_easyocr(image_bytes)
 
 
 @app.route('/reanalyze_panel', methods=['POST'])
@@ -5356,12 +6362,14 @@ def auto_layout_tracks():
 
     detected_text = detect_text_vision_api(header_bytes)
     raw_text = detected_text.get('raw', []) or []
+    full_text_blob = detected_text.get('full_text', '')
 
-    def _extract_header_metadata(raw_entries):
+    def _extract_header_metadata(raw_entries, full_text=''):
         if not isinstance(raw_entries, list) or not raw_entries:
-            return None
+            raw_entries = []
         try:
             items_local = []
+            entry_items = []
             for entry in raw_entries:
                 if not isinstance(entry, dict):
                     continue
@@ -5373,60 +6381,184 @@ def auto_layout_tracks():
                 xs_local = [v.get('x') for v in verts if isinstance(v, dict) and 'x' in v]
                 if not ys_local or not xs_local:
                     continue
+                left_local = float(min(xs_local))
+                right_local = float(max(xs_local))
+                top_local = float(min(ys_local))
+                bottom_local = float(max(ys_local))
                 y = float(sum(ys_local)) / len(ys_local)
                 x = float(sum(xs_local)) / len(xs_local)
                 items_local.append((y, x, text))
-            if not items_local:
-                return None
-            items_local.sort(key=lambda t: (t[0], t[1]))
-
+                entry_items.append({
+                    'text': text,
+                    'left': left_local,
+                    'right': right_local,
+                    'top': top_local,
+                    'bottom': bottom_local,
+                    'x': x,
+                    'y': y,
+                    'width': max(1.0, right_local - left_local),
+                    'height': max(1.0, bottom_local - top_local),
+                })
             lines = []
-            y_tol = 8.0
-            current_y = None
-            current_tokens = []
-            for y, x, text in items_local:
-                if current_y is None or abs(y - current_y) <= y_tol:
-                    if current_y is None:
+            if items_local:
+                items_local.sort(key=lambda t: (t[0], t[1]))
+
+                y_tol = 8.0
+                current_y = None
+                current_tokens = []
+                for y, x, text in items_local:
+                    if current_y is None or abs(y - current_y) <= y_tol:
+                        if current_y is None:
+                            current_y = y
+                        current_tokens.append((x, text))
+                    else:
+                        current_tokens.sort(key=lambda t: t[0])
+                        lines.append(' '.join(t[1] for t in current_tokens if t[1]).strip())
                         current_y = y
-                    current_tokens.append((x, text))
-                else:
+                        current_tokens = [(x, text)]
+                if current_tokens:
                     current_tokens.sort(key=lambda t: t[0])
                     lines.append(' '.join(t[1] for t in current_tokens if t[1]).strip())
-                    current_y = y
-                    current_tokens = [(x, text)]
-            if current_tokens:
-                current_tokens.sort(key=lambda t: t[0])
-                lines.append(' '.join(t[1] for t in current_tokens if t[1]).strip())
+
+            if isinstance(full_text, str) and full_text.strip():
+                for raw_line in full_text.splitlines():
+                    line = raw_line.strip()
+                    if line and line not in lines:
+                        lines.append(line)
+
+            if not lines:
+                return None
 
             import re
+            next_label_re = re.compile(
+                r"\b(?:COMPANY|WELL|FIELD|LOCATION|COUNTY|STATE|PROV(?:INCE)?|SERVICE\s+COMPANY|DATE|API|UWI)\b",
+                flags=re.IGNORECASE,
+            )
+            next_label_with_delim_re = re.compile(
+                r"\b(?:COMPANY|WELL|FIELD|LOCATION|COUNTY|STATE|PROV(?:INCE)?|SERVICE\s+COMPANY|DATE|API|UWI)\b(?=\s*[:=])",
+                flags=re.IGNORECASE,
+            )
 
             def pick_after(label_re, s):
                 m = re.search(label_re, s, flags=re.IGNORECASE)
                 if not m:
                     return None
                 tail = s[m.end():].strip(" :-\t")
+                if not tail:
+                    return None
+                next_match = next_label_with_delim_re.search(tail)
+                if next_match and next_match.start() > 0:
+                    tail = tail[:next_match.start()].strip(" :-\t")
                 return tail.strip() if tail else None
 
+            def clean_value_text(text):
+                value = str(text or '').strip()
+                value = re.sub(r"^[\s:._,\-=/\\|]+", "", value)
+                value = re.sub(r"[\s:._,\-=/\\|]+$", "", value)
+                value = re.sub(r"\s{2,}", " ", value)
+                return value.strip()
+
+            def looks_like_another_label(text, current_pattern):
+                raw = str(text or '').strip()
+                if not raw:
+                    return False
+                if re.search(current_pattern, raw, flags=re.IGNORECASE):
+                    return False
+                return bool(next_label_re.search(raw))
+
+            def is_label_anchor(text, label_pattern):
+                raw = str(text or '').strip()
+                if not raw:
+                    return False
+                return bool(re.match(rf"^\W*(?:{label_pattern})(?:\W|$)", raw, flags=re.IGNORECASE))
+
+            label_specs = (
+                ('comp', r"\bCOMPANY\b"),
+                ('well', r"\bWELL\b"),
+                ('fld', r"\bFIELD\b"),
+                ('loc', r"\bLOCATION\b"),
+                ('county', r"\bCOUNTY\b"),
+                ('state', r"\bSTATE\b"),
+                ('prov', r"\bPROV(?:INCE)?\b"),
+                ('srvc', r"\bSERVICE\s+COMPANY\b"),
+                ('date', r"\bDATE\b"),
+                ('api', r"\bAPI\b"),
+                ('uwi', r"\bUWI\b"),
+            )
+
+            median_height = float(np.median([item['height'] for item in entry_items])) if entry_items else 14.0
+
+            def spatial_pick_value(label_pattern):
+                if not entry_items:
+                    return None
+
+                best_value = None
+                best_score = None
+                for label_entry in entry_items:
+                    label_text = label_entry['text']
+                    if not is_label_anchor(label_text, label_pattern):
+                        continue
+
+                    inline_value = clean_value_text(pick_after(label_pattern, label_text))
+                    if inline_value:
+                        score = (3, len(inline_value), -int(label_entry['left']))
+                        if best_score is None or score > best_score:
+                            best_score = score
+                            best_value = inline_value
+
+                    row_tol = max(14.0, median_height * 0.9, label_entry['height'] * 0.8)
+                    max_dx = max(180.0, panel_w * 0.45)
+                    max_gap = max(26.0, median_height * 2.5)
+
+                    candidates = [
+                        other for other in entry_items
+                        if other is not label_entry
+                        and other['left'] >= label_entry['right'] - 4.0
+                        and abs(other['y'] - label_entry['y']) <= row_tol
+                        and (other['left'] - label_entry['right']) <= max_dx
+                    ]
+                    candidates.sort(key=lambda item: item['left'])
+
+                    parts = []
+                    prev_right = label_entry['right']
+                    first_dx = None
+                    for cand in candidates:
+                        gap = cand['left'] - prev_right
+                        if gap > max_gap and parts:
+                            break
+                        if first_dx is None:
+                            first_dx = max(0.0, cand['left'] - label_entry['right'])
+                        if looks_like_another_label(cand['text'], label_pattern):
+                            if parts:
+                                break
+                            continue
+                        parts.append(cand['text'])
+                        prev_right = cand['right']
+
+                    spatial_value = clean_value_text(' '.join(parts))
+                    if spatial_value:
+                        score = (2, len(spatial_value), -int(first_dx or 0), -int(label_entry['left']))
+                        if best_score is None or score > best_score:
+                            best_score = score
+                            best_value = spatial_value
+
+                return best_value or None
+
             md = {}
+            for key, pat in label_specs:
+                if key in md:
+                    continue
+                val = spatial_pick_value(pat)
+                if val:
+                    md[key] = val
+
             for s in lines:
                 if not s:
                     continue
-                for key, pat in (
-                    ('comp', r"\bCOMPANY\b"),
-                    ('well', r"\bWELL\b"),
-                    ('fld', r"\bFIELD\b"),
-                    ('loc', r"\bLOCATION\b"),
-                    ('county', r"\bCOUNTY\b"),
-                    ('state', r"\bSTATE\b"),
-                    ('prov', r"\bPROV(?:INCE)?\b"),
-                    ('srvc', r"\bSERVICE\s+COMPANY\b"),
-                    ('date', r"\bDATE\b"),
-                    ('api', r"\bAPI\b"),
-                    ('uwi', r"\bUWI\b"),
-                ):
+                for key, pat in label_specs:
                     if key in md:
                         continue
-                    val = pick_after(pat, s)
+                    val = clean_value_text(pick_after(pat, s))
                     if val:
                         md[key] = val
 
@@ -5443,7 +6575,7 @@ def auto_layout_tracks():
         except Exception:
             return None
 
-    header_metadata = _extract_header_metadata(raw_text) if treat_region_as_header else None
+    header_metadata = _extract_header_metadata(raw_text, full_text_blob) if treat_region_as_header else None
 
     items = []
     for entry in raw_text:
@@ -5462,8 +6594,6 @@ def auto_layout_tracks():
             'x': x_center,
             'y': y_center,
         })
-
-    full_text_blob = detected_text.get('full_text', '')
 
     # If no header text found, fall back to edge-based track detection
     if not items and not full_text_blob:
@@ -5503,6 +6633,7 @@ def auto_layout_tracks():
             'success': True,
             'tracks': tracks_out,
             'raw_layout': {'tracks': [], 'fallback': 'edge_detection'},
+            'header_metadata': header_metadata,
         })
 
     layout_payload = {
@@ -5516,16 +6647,15 @@ def auto_layout_tracks():
 
     layout = call_ai_auto_layout(layout_payload)
     if not layout:
-        # If no AI providers are configured, give an actionable error.
         has_provider = bool((GEMINI_API_KEY and GEMINI_MODEL_ID) or (OPENAI_API_KEY and OPENAI_MODEL_ID) or (HF_API_TOKEN and HF_MODEL_ID))
-        if not has_provider:
-            return jsonify({
-                'success': False,
-                'error': 'AI layout detection is not configured. Set GEMINI_API_KEY (or OPENAI_API_KEY / HF_API_TOKEN) in the server environment.'
-            }), 500
 
-        # Otherwise fall back to edge-based track detection on the panel.
-        print("[WARN] AI layout inference returned no result; falling back to edge-based track detection")
+        # Fall back to edge-based track detection on the panel, even when no AI
+        # provider is configured. Header capture can still be useful with OCR-
+        # extracted metadata plus geometric track boxes.
+        if not has_provider:
+            print("[WARN] AI layout detection is not configured; falling back to edge-based track detection")
+        else:
+            print("[WARN] AI layout inference returned no result; falling back to edge-based track detection")
         try:
             local_tracks = auto_detect_tracks(panel)
             tracks_out = []
@@ -5561,9 +6691,22 @@ def auto_layout_tracks():
                 'tracks': tracks_out,
                 'raw_layout': {
                     'tracks': [],
-                    'fallback': 'edge_detection_after_ai_failure',
+                    'fallback': 'edge_detection_no_ai_provider' if not has_provider else 'edge_detection_after_ai_failure',
                     'ocr_items': len(items),
                 },
+                'header_metadata': header_metadata,
+            })
+
+        if treat_region_as_header and header_metadata:
+            return jsonify({
+                'success': True,
+                'tracks': [],
+                'raw_layout': {
+                    'tracks': [],
+                    'fallback': 'metadata_only_after_ai_failure',
+                    'ocr_items': len(items),
+                },
+                'header_metadata': header_metadata,
             })
 
         return jsonify({
@@ -5618,6 +6761,13 @@ def auto_layout_tracks():
         tracks_out.append(track_out)
 
     if not tracks_out:
+        if treat_region_as_header and header_metadata:
+            return jsonify({
+                'success': True,
+                'tracks': [],
+                'raw_layout': layout,
+                'header_metadata': header_metadata,
+            })
         return jsonify({'success': False, 'error': 'AI layout returned no usable tracks.'}), 400
 
     return jsonify({
@@ -7050,13 +8200,17 @@ def workspace():
     user = _current_user(require_access=True)
     if not user:
         return redirect(url_for('login'))
-        
-    return render_template('workspace.html',
+
+    response = make_response(render_template('workspace.html',
                            user=user,
                            app_version=APP_VERSION,
                            build_time=APP_BUILD_TIME,
                            vision_available=VISION_API_AVAILABLE,
-                           impersonating=bool(session.get('impersonate_user_id')))
+                           impersonating=bool(session.get('impersonate_user_id'))))
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
 
 @app.route('/dashboard')
 @login_required
@@ -7125,7 +8279,7 @@ def upload_file():
     # (e.g. from a Pass Summary table) without running full-panel OCR yet.
     detected_text = {'raw': [], 'numbers': [], 'suggestions': {}}
     ocr_suggestions = {}
-    if VISION_API_AVAILABLE and vision_client is not None:
+    if (VISION_API_AVAILABLE and vision_client is not None) or LOCAL_OCR_AVAILABLE:
         try:
             header_h = max(100, int(h * 0.25))
             footer_h = max(100, int(h * 0.50))
@@ -7158,7 +8312,7 @@ def upload_file():
         } if primary_region else None,
         'detected_text': detected_text,
         'ocr_suggestions': ocr_suggestions or detected_text.get('suggestions', {}),
-        'vision_api_available': bool(VISION_API_AVAILABLE)
+        'vision_api_available': bool(VISION_API_AVAILABLE or LOCAL_OCR_AVAILABLE)
     })
 
 @app.route('/digitize', methods=['POST'])
@@ -7312,11 +8466,31 @@ def digitize():
         else:
             # Use user threshold for non-colored modes too (default was 1.1)
             refine_kwargs = {"dominance_ratio": snap_threshold}
-        # Effectively zero smoothness penalty for colored modes to prefer jagged ink over smooth artifacts
-        dp_smooth_lambda = 0.001 if mode in colored_modes else 0.5
-        # ALSO zero out curvature penalty to allow high-frequency wiggles/jitter
-        dp_curv_lambda = 0.001 if mode in colored_modes else 0.05
-        max_step_dp = 200 if mode in colored_modes else 3  # Allow unlimited movement to follow gamma ray spikes
+            # Non-GR black curves are supposed to follow visible crest tips.
+            # Any median smoothing here flattens short visible crest tips, so
+            # leave the trace unsmoothed and let the black-specific edge snap
+            # shape it instead.
+            if curve_type.upper() != "GR":
+                curve_smooth_window = 1
+                outlier_threshold = 12.0
+        # Effectively zero smoothness penalty for colored modes to prefer jagged ink over smooth artifacts.
+        # Black mode needs looser DP than the old max_step=3 / smooth_lambda=0.5 settings;
+        # otherwise the path lags real excursions and the later black refiners are forced to
+        # drag a too-stiff base trace sideways after the fact.
+        if mode in colored_modes:
+            dp_smooth_lambda = 0.001
+            dp_curv_lambda = 0.001
+            max_step_dp = 200  # Allow unlimited movement to follow gamma ray spikes
+        else:
+            curve_type_upper = curve_type.upper()
+            if curve_type_upper == "GR":
+                dp_smooth_lambda = 0.24
+                dp_curv_lambda = 0.03
+                max_step_dp = 5
+            else:
+                dp_smooth_lambda = 0.18
+                dp_curv_lambda = 0.02
+                max_step_dp = 6
 
         # Optional pixel-perfect skeleton tracer (preserve every bump)
         if ai_tracer.is_available() and trace_mode == "ai_tracer":
@@ -7571,19 +8745,53 @@ def digitize():
                 curve_type=curve_type,
                 max_step=max_step_dp,
                 smooth_lambda=dp_smooth_lambda,
-                curv_lambda=0.05,
+                curv_lambda=dp_curv_lambda,
                 hot_side=hot_side,
             )
 
             # Snap the DP path toward obvious local maxima in the prob mask
             xs = refine_trace_with_local_maxima(mask, xs, **refine_kwargs)
 
-            # Refine peaks and valleys where curve changes direction sharply
-            xs = refine_peaks_and_valleys(mask, xs, search_radius=50, min_prob=0.03)
+            # Skip the aggressive peak/valley pusher for black traces. On
+            # dense black logs it can snap sideways onto neighboring rails or
+            # filled blocks, which is what creates the horizontal "shelf"
+            # artifacts. DP + local maxima already finds the right branch;
+            # re-center on the stroke body instead of pushing to extrema.
+            try:
+                # Give black traces a wider recentering window so thick strokes
+                # can settle onto the body of the ink instead of staying pinned
+                # near whichever edge the DP pass first touched.
+                xs = refine_to_stroke_centerline(mask, xs, threshold_ratio=0.55, window_size=14)
+            except Exception:
+                pass
 
-        # Optional final smoothing for non-GR curves (GR needs to stay jagged)
-            if curve_type.upper() != "GR":
-                 xs = remove_outliers_and_smooth(xs, window=curve_smooth_window, outlier_threshold=outlier_threshold)
+            try:
+                # Probability maps still bias toward one stroke edge on dense
+                # black logs. Recenter once more against the raw dark stroke
+                # body in the grayscale ROI so the trace sits in the visual
+                # middle of the black ink.
+                xs = refine_black_trace_to_dark_run_center(
+                    roi,
+                    xs,
+                    hot_side=hot_side,
+                    curve_type=curve_type,
+                )
+            except Exception:
+                pass
+
+            try:
+                # Once the trace is back on the visible black stroke body,
+                # nudge wide local runs toward the chart-reading side so crest
+                # tips are actually hit instead of averaged through.
+                if curve_type.upper() == "GR":
+                    xs = refine_black_trace_to_hot_side_crests(roi, xs, hot_side=hot_side, curve_type=curve_type)
+            except Exception:
+                pass
+
+        # Do not run the old non-GR black smoother here. After the dark-run
+        # recenter/hot-side bias pass, even light smoothing pulls RHOB/DT-type
+        # traces back toward the inner half of the stroke and weakens the
+        # actual printed excursions we are trying to follow.
 
         width_px = mask.shape[1]
 
@@ -7602,6 +8810,17 @@ def digitize():
             if s.isna().any():
                 s = s.fillna(method='ffill', limit=max_gap).fillna(method='bfill', limit=max_gap)
             xs = s.to_numpy(dtype=np.float32)
+
+        if mode not in colored_modes:
+            try:
+                xs = suppress_black_grid_lock_runs(roi, xs, curve_type=curve_type)
+            except Exception:
+                pass
+
+        # Likewise, skip the old final non-GR black crest snap. The dark-run
+        # recenter helper now already biases wide rows toward the reading-side
+        # edge, and a second crest-only shove consistently degraded RHOB on the
+        # saved black capture set.
 
         # For colored modes, apply specific enhancements (peaks, centerline refinement)
         if mode in colored_modes:
@@ -7713,8 +8932,11 @@ def digitize():
                 # This creates a completely solid line that shows the exact trace.
                 for row_idx in valid_rows:
                     x_val = xs[row_idx]
-                    x_img = round(left_px + x_val)
-                    y_img = int(top + row_idx)
+                    # Preserve sub-pixel X precision so the zoomed browser
+                    # overlay stays centered on narrow or thick strokes instead
+                    # of stair-stepping to one side after rounding.
+                    x_img = float(left_px) + float(x_val)
+                    y_img = float(top + row_idx)
                     trace_points.append([x_img, y_img])
 
         curve_traces[name] = trace_points
@@ -9248,7 +10470,12 @@ if __name__ == '__main__':
     os.makedirs('static', exist_ok=True)
     
     print("Starting TIFF-to-LAS Web App")
-    print(f"Google Vision API: {'Available' if VISION_API_AVAILABLE else 'Not configured'}")
+    if VISION_API_AVAILABLE:
+        print("Google Vision API: Available")
+    elif LOCAL_OCR_AVAILABLE:
+        print("Google Vision API: Not configured (using EasyOCR fallback)")
+    else:
+        print("Google Vision API: Not configured")
     print("Open: http://localhost:5000")
     
     app.run(debug=False, use_reloader=False, host='0.0.0.0', port=5000)

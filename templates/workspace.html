@@ -393,7 +393,31 @@
             flex: 1 1 auto;
             min-width: 0;
             display: flex;
-            flex-direction: column;
+        }
+        .viewer-pane-layout {
+            flex: 1 1 auto;
+            min-width: 0;
+            display: grid;
+            grid-template-columns: 138px minmax(0, 1fr);
+            gap: 10px;
+            align-items: start;
+        }
+        .viewer-toolbar-stack {
+            position: sticky;
+            top: 20px;
+            align-self: start;
+            min-width: 0;
+            max-height: calc(100vh - 40px);
+            overflow-y: auto;
+            scrollbar-width: thin;
+            scrollbar-color: #94a3b8 transparent;
+        }
+        .viewer-toolbar-stack::-webkit-scrollbar {
+            width: 6px;
+        }
+        .viewer-toolbar-stack::-webkit-scrollbar-thumb {
+            background: #94a3b8;
+            border-radius: 999px;
         }
         .viewer-frame {
             background: #ffffff;
@@ -403,48 +427,158 @@
             flex: 1 1 auto;
             display: flex;
             flex-direction: column;
+            min-width: 0;
         }
         .viewer-controls {
             display: flex;
-            gap: 8px;
-            padding: 6px 10px;
-            background: #f5f5f5;
+            flex-direction: column;
+            gap: 0;
+            padding: 0;
+            background: rgba(255, 255, 255, 0.96);
             color: #334155;
-            border-bottom: 1px solid #ddd;
+            border: 1px solid rgba(148, 163, 184, 0.45);
+            border-radius: 14px;
+            box-shadow: 0 10px 24px rgba(15, 23, 42, 0.12);
             margin-bottom: 0;
-            flex-wrap: wrap;
-            align-items: center;
-            font-size: 0.75rem;
+            align-items: stretch;
+            font-size: 0.7rem;
+            overflow: hidden;
+            backdrop-filter: blur(10px);
         }
         .viewer-controls .btn {
-            padding: 3px 7px;
-            font-size: 0.75rem;
-            min-width: auto;
+            padding: 4px 6px;
+            font-size: 0.62rem;
+            min-width: 0;
             white-space: nowrap;
+            text-align: center;
+            line-height: 1.1;
         }
         .viewer-controls .control-section {
             display: flex;
-            gap: 4px;
-            align-items: center;
-            padding: 0 6px;
-            border-left: 1px solid #ddd;
+            flex-direction: column;
+            gap: 5px;
+            align-items: stretch;
+            padding: 7px 8px;
+            border-top: 1px solid rgba(226, 232, 240, 0.95);
         }
         .viewer-controls .control-section:first-child {
-            border-left: none;
-            padding-left: 0;
+            border-top: none;
         }
         .viewer-controls label {
-            font-size: 0.75rem;
+            font-size: 0.64rem;
             font-weight: 600;
             margin: 0;
             color: #1e293b;
+            line-height: 1.1;
         }
         .viewer-controls input[type="range"] {
-            width: 80px;
+            width: 100%;
+            margin: 0;
         }
         .viewer-controls .hint-text {
-            font-size: 0.7rem;
+            font-size: 0.62rem;
             color: #64748b;
+        }
+        .control-title {
+            display: block;
+            font-size: 0.58rem;
+            font-weight: 800;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: #64748b;
+            line-height: 1;
+        }
+        .toolbar-button-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+        }
+        .toolbar-button-row .btn {
+            flex: 1 1 0;
+        }
+        .toolbar-pill-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 4px;
+        }
+        .toolbar-slider-row {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 5px;
+            align-items: center;
+        }
+        .toolbar-slider-row .hint-text {
+            min-width: 2rem;
+            text-align: right;
+        }
+        .toolbar-toggle-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 4px 6px;
+        }
+        .toolbar-inline-checkbox {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            font-weight: 500;
+            color: #334155;
+            line-height: 1.1;
+        }
+        .toolbar-inline-checkbox input {
+            margin: 0;
+            transform: scale(0.9);
+        }
+        .viewer-controls select {
+            width: 100%;
+            background: #ffffff;
+            color: #1e293b;
+            border: 1px solid #cbd5e1;
+            border-radius: 9px;
+            padding: 4px 6px;
+            font-size: 0.64rem;
+            line-height: 1.1;
+        }
+        .toolbar-icon-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 4px;
+        }
+        .toolbar-icon-grid-compact {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .viewer-frame-toolbar {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 74px;
+            background: rgba(255, 255, 255, 0.96);
+            color: #334155;
+            border: 1px solid rgba(148, 163, 184, 0.45);
+            border-radius: 14px;
+            box-shadow: 0 10px 24px rgba(15, 23, 42, 0.12);
+            overflow: hidden;
+            backdrop-filter: blur(10px);
+            z-index: 110;
+        }
+        .viewer-frame-toolbar .control-section {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            padding: 7px 6px;
+            border-top: 1px solid rgba(226, 232, 240, 0.95);
+        }
+        .viewer-frame-toolbar .control-section:first-child {
+            border-top: none;
+        }
+        .viewer-frame-toolbar .toolbar-icon-grid,
+        .viewer-frame-toolbar .toolbar-icon-grid-compact {
+            grid-template-columns: minmax(0, 1fr);
+        }
+        .toolbar-inline-checkbox-compact {
+            font-size: 0.56rem;
+            font-weight: 600;
+            justify-content: flex-start;
+            gap: 3px;
         }
         .viewer-scroll {
             height: calc(100vh - 120px) !important;
@@ -542,6 +676,20 @@
             .workspace {
                 grid-template-columns: 1fr;
                 gap: 16px;
+            }
+            .viewer-pane-layout {
+                grid-template-columns: 1fr;
+            }
+            .viewer-toolbar-stack {
+                position: static;
+                max-height: none;
+                overflow: visible;
+            }
+            .viewer-frame-toolbar {
+                position: static;
+                width: auto;
+                margin-top: 12px;
+                align-self: flex-start;
             }
             .viewer-scroll {
                 height: 70vh;
@@ -920,6 +1068,96 @@
             font-size: 18px;
             cursor: pointer;
         }
+        .guided-tour-backdrop {
+            position: fixed;
+            inset: 0;
+            background: rgba(15, 23, 42, 0.42);
+            z-index: 2100;
+        }
+        .guided-tour-backdrop.hidden {
+            display: none;
+        }
+        .guided-tour-spotlight {
+            position: fixed;
+            border-radius: 16px;
+            border: 2px solid rgba(129, 140, 248, 0.95);
+            box-shadow: 0 0 0 9999px rgba(15, 23, 42, 0.46);
+            z-index: 2101;
+            pointer-events: none;
+            transition: top 0.18s ease, left 0.18s ease, width 0.18s ease, height 0.18s ease;
+        }
+        .guided-tour-spotlight.hidden {
+            display: none;
+        }
+        .guided-tour-card {
+            position: fixed;
+            width: min(360px, calc(100vw - 24px));
+            background: rgba(255, 255, 255, 0.98);
+            color: #0f172a;
+            border: 1px solid rgba(148, 163, 184, 0.5);
+            border-radius: 18px;
+            box-shadow: 0 20px 48px rgba(15, 23, 42, 0.28);
+            padding: 16px 16px 14px;
+            z-index: 2102;
+            backdrop-filter: blur(10px);
+        }
+        .guided-tour-card.hidden {
+            display: none;
+        }
+        .guided-tour-close {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            border: none;
+            background: transparent;
+            color: #64748b;
+            font-size: 18px;
+            cursor: pointer;
+            line-height: 1;
+        }
+        .guided-tour-kicker {
+            font-size: 0.74rem;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: #6366f1;
+            margin-bottom: 6px;
+        }
+        .guided-tour-title {
+            margin: 0 28px 8px 0;
+            font-size: 1.1rem;
+            line-height: 1.25;
+            color: #0f172a;
+        }
+        .guided-tour-body {
+            font-size: 0.92rem;
+            line-height: 1.5;
+            color: #334155;
+        }
+        .guided-tour-body p {
+            margin: 0 0 8px;
+        }
+        .guided-tour-footer {
+            margin-top: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+        }
+        .guided-tour-progress {
+            font-size: 0.78rem;
+            color: #64748b;
+            font-weight: 700;
+        }
+        .guided-tour-actions {
+            display: flex;
+            gap: 8px;
+            justify-content: flex-end;
+        }
+        .guided-tour-target {
+            position: relative !important;
+            z-index: 2103 !important;
+        }
         .curve-trace-dot {
             position: absolute;
             width: 1px;
@@ -930,53 +1168,34 @@
             z-index: 30;
         }
         /* Toolbar Styles */
-        .floating-toolbar {
-            position: absolute;
-            bottom: 10px;
-            left: 50%;
-            transform: translateX(-50%);
-            background: rgba(255, 255, 255, 0.95);
-            border-radius: 8px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
-            padding: 6px;
-            display: flex;
-            gap: 8px;
-            z-index: 100;
-            border: 1px solid #ddd;
-            width: fit-content;
-            pointer-events: auto;
-        }
-        .toolbar-group {
-            display: flex;
-            gap: 4px;
-        }
-        .toolbar-divider {
-            width: 1px;
-            background: #ddd;
-            margin: 0 4px;
-        }
         .tool-btn {
-            background: transparent;
-            border: 1px solid transparent;
-            border-radius: 4px;
-            width: 36px;
-            height: 36px;
-            font-size: 18px;
+            background: #ffffff;
+            border: 1px solid #cbd5e1;
+            border-radius: 9px;
+            width: 100%;
+            min-width: 0;
+            height: 28px;
+            font-size: 14px;
             cursor: pointer;
             display: flex;
             align-items: center;
             justify-content: center;
             transition: all 0.2s;
+            color: #475569;
         }
         .tool-btn:hover {
-            background: #f0f4ff;
-            border-color: #dbeafe;
+            background: #f8fafc;
+            border-color: #94a3b8;
         }
         .tool-btn.active {
-            background: #e0e7ff;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             border-color: #667eea;
-            color: #4c51bf;
-            box-shadow: inset 0 2px 4px rgba(0,0,0,0.05);
+            color: #ffffff;
+            box-shadow: 0 8px 16px rgba(102, 126, 234, 0.25);
+        }
+        .tool-btn:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
         }
         /* Eraser Selection Box */
         .eraser-box {
@@ -1104,6 +1323,21 @@
             </div>
         </div>
     </div>
+    <div id="guidedTourBackdrop" class="guided-tour-backdrop hidden"></div>
+    <div id="guidedTourSpotlight" class="guided-tour-spotlight hidden"></div>
+    <div id="guidedTourCard" class="guided-tour-card hidden" role="dialog" aria-live="polite" aria-modal="true">
+        <button type="button" class="guided-tour-close" onclick="skipWorkspaceTour()" aria-label="Close tour">×</button>
+        <div id="guidedTourKicker" class="guided-tour-kicker">Guided tour</div>
+        <h3 id="guidedTourTitle" class="guided-tour-title">How TurboTIFFLAS works</h3>
+        <div id="guidedTourBody" class="guided-tour-body"></div>
+        <div class="guided-tour-footer">
+            <span id="guidedTourProgress" class="guided-tour-progress">1 / 1</span>
+            <div class="guided-tour-actions">
+                <button type="button" class="btn btn-sm" id="guidedTourPrevBtn" onclick="previousWorkspaceTourStep()">Back</button>
+                <button type="button" class="btn btn-sm" id="guidedTourNextBtn" onclick="nextWorkspaceTourStep()">Next</button>
+            </div>
+        </div>
+    </div>
 
     <div class="container">
         <div class="header">
@@ -1117,7 +1351,7 @@
             </div>
         </div>
         <div class="content">
-            <button type="button" class="btn" onclick="openIntroModal()">❓ How to use this tool</button>
+            <button type="button" class="btn" id="tourTriggerBtn" onclick="startWorkspaceTour()">❓ How to use this tool</button>
         </div>
 
         <div class="content">
@@ -1140,126 +1374,141 @@
             <div id="workspace" class="workspace hidden">
                 <!-- Left: log viewer -->
                 <div class="viewer-pane">
-                    <div class="viewer-frame" style="position: relative;">
-                        <!-- Crosshair Overlay Elements -->
-                        <div id="crosshairX" class="crosshair-line hidden"></div>
-                        <div id="crosshairY" class="crosshair-line hidden"></div>
-                        <div id="crosshairLabel" class="crosshair-label hidden"></div>
+                    <div class="viewer-pane-layout">
+                        <div class="viewer-toolbar-stack">
+                            <div class="viewer-controls">
+                                <div class="control-section">
+                                    <span class="control-title">Locks</span>
+                                    <div class="toolbar-button-row">
+                                        <button type="button" class="btn" onclick="toggleScrollLock()" id="scrollLockBtn" title="Lock/Unlock Viewer Scroll">🔓</button>
+                                        <button type="button" class="btn" onclick="togglePageLock()" id="pageLockBtn" title="Lock/Unlock Page Scroll">📄</button>
+                                    </div>
+                                </div>
 
-                        <!-- Unified Viewer Controls -->
-                        <div class="viewer-controls">
-                            <!-- Lock Controls -->
-                            <div class="control-section">
-                                <button type="button" class="btn" onclick="toggleScrollLock()" id="scrollLockBtn" title="Lock/Unlock Viewer Scroll">🔓</button>
-                                <button type="button" class="btn" onclick="togglePageLock()" id="pageLockBtn" title="Lock/Unlock Page Scroll">📄</button>
-                            </div>
+                                <div class="control-section">
+                                    <span class="control-title">Zoom</span>
+                                    <div class="toolbar-pill-grid">
+                                        <button type="button" class="btn" onclick="setZoom(0.25)">25%</button>
+                                        <button type="button" class="btn" onclick="setZoom(0.5)">50%</button>
+                                        <button type="button" class="btn" onclick="setZoom(1.0)">100%</button>
+                                        <button type="button" class="btn" onclick="setZoom(2.0)">200%</button>
+                                        <button type="button" class="btn" onclick="setZoom(4.0)">400%</button>
+                                    </div>
+                                    <div class="toolbar-slider-row">
+                                        <input type="range" id="zoomSlider" min="50" max="4800" value="100" step="5" oninput="setZoom(this.value / 100)" />
+                                        <span id="zoomLabel" class="hint-text">100%</span>
+                                    </div>
+                                </div>
 
-                            <!-- Zoom Controls -->
-                            <div class="control-section">
-                                <label>Zoom:</label>
-                                <button type="button" class="btn" onclick="setZoom(0.25)">25%</button>
-                                <button type="button" class="btn" onclick="setZoom(0.5)">50%</button>
-                                <button type="button" class="btn" onclick="setZoom(1.0)">100%</button>
-                                <button type="button" class="btn" onclick="setZoom(2.0)">200%</button>
-                                <button type="button" class="btn" onclick="setZoom(4.0)">400%</button>
-                                <input type="range" id="zoomSlider" min="50" max="4800" value="100" step="5" oninput="setZoom(this.value / 100)" style="width: 120px;" />
-                                <span id="zoomLabel" class="hint-text">100%</span>
-                            </div>
+                                <div class="control-section">
+                                    <span class="control-title">Curve</span>
+                                    <select id="overlayCurveSelect" onchange="onOverlayCurveTargetChange()">
+                                        <option value="__all_unlocked__">All (unlocked)</option>
+                                    </select>
+                                    <label class="toolbar-inline-checkbox" title="Lock this curve's overlay settings">
+                                        <input type="checkbox" id="overlayCurveLock" onchange="toggleOverlayCurveLock()"> Lock
+                                    </label>
+                                </div>
 
-                            <div class="control-section">
-                                <label class="text-slate-300">Curve:</label>
-                                <select id="overlayCurveSelect" class="bg-slate-800 text-slate-200 border-slate-600 rounded" onchange="onOverlayCurveTargetChange()" style="max-width: 140px; font-size: 0.75rem; padding: 2px 6px;">
-                                    <option value="__all_unlocked__">All (unlocked)</option>
-                                </select>
-                                <label class="flex-center gap-1 cursor-pointer font-normal" title="Lock this curve's overlay settings">
-                                    <input type="checkbox" id="overlayCurveLock" onchange="toggleOverlayCurveLock()"> Lock
-                                </label>
-                            </div>
+                                <div class="control-section">
+                                    <span class="control-title">Line</span>
+                                    <div class="toolbar-slider-row">
+                                        <input type="range" id="lineWidthSlider" min="0.10" max="24" value="2" step="0.05" oninput="updateOverlaySize()" />
+                                        <span id="lineWidthLabel" class="hint-text">2</span>
+                                    </div>
+                                </div>
 
-                            <!-- Overlay Size Controls -->
-                            <div class="control-section">
-                                <label>Line:</label>
-                                <input type="range" id="lineWidthSlider" min="0.10" max="24" value="2" step="0.05" oninput="updateOverlaySize()" />
-                                <span id="lineWidthLabel" class="hint-text">2</span>
-                            </div>
+                                <div class="control-section">
+                                    <span class="control-title">Length</span>
+                                    <div class="toolbar-slider-row">
+                                        <input type="range" id="lineLengthSlider" min="2" max="80" value="12" step="1" oninput="updateOverlaySize()" />
+                                        <span id="lineLengthLabel" class="hint-text">12</span>
+                                    </div>
+                                </div>
 
-                            <div class="control-section">
-                                <label>Length:</label>
-                                <input type="range" id="lineLengthSlider" min="2" max="80" value="12" step="1" oninput="updateOverlaySize()" />
-                                <span id="lineLengthLabel" class="hint-text">12</span>
-                            </div>
+                                <div class="control-section">
+                                    <span class="control-title">Height</span>
+                                    <div class="toolbar-slider-row">
+                                        <input type="range" id="lineHeightSlider" min="0.2" max="12" value="2" step="0.1" oninput="updateOverlaySize()" />
+                                        <span id="lineHeightLabel" class="hint-text">2.0</span>
+                                    </div>
+                                </div>
 
-                            <div class="control-section">
-                                <label>Height:</label>
-                                <input type="range" id="lineHeightSlider" min="0.2" max="12" value="2" step="0.1" oninput="updateOverlaySize()" />
-                                <span id="lineHeightLabel" class="hint-text">2.0</span>
-                            </div>
+                                <div class="control-section">
+                                    <span class="control-title">Points</span>
+                                    <div class="toolbar-slider-row">
+                                        <input type="range" id="pointSizeSlider" min="0.1" max="4" value="0.8" step="0.05" oninput="updateOverlaySize()" />
+                                        <span id="pointSizeLabel" class="hint-text">0.8</span>
+                                    </div>
+                                </div>
 
-                            <div class="control-section">
-                                <label>Points:</label>
-                                <input type="range" id="pointSizeSlider" min="0.1" max="4" value="0.8" step="0.05" oninput="updateOverlaySize()" />
-                                <span id="pointSizeLabel" class="hint-text">0.8</span>
-                            </div>
+                                <div class="control-section">
+                                    <span class="control-title">Overlay</span>
+                                    <div class="toolbar-toggle-grid">
+                                        <label class="toolbar-inline-checkbox">
+                                            <input type="checkbox" id="showLine" checked onchange="toggleOverlayVisibility()"> Line
+                                        </label>
+                                        <label class="toolbar-inline-checkbox" title="Show only the continuous line">
+                                            <input type="checkbox" id="mainLineOnly" onchange="toggleOverlayVisibility()"> Main only
+                                        </label>
+                                        <label class="toolbar-inline-checkbox">
+                                            <input type="checkbox" id="showPoints" checked onchange="toggleOverlayVisibility()"> Pts
+                                        </label>
+                                    </div>
+                                </div>
 
-                            <div class="control-section">
-                                <label class="flex-center gap-1 cursor-pointer font-normal">
-                                    <input type="checkbox" id="showLine" checked onchange="toggleOverlayVisibility()"> Line
-                                </label>
-                                <label class="flex-center gap-1 cursor-pointer font-normal" title="Show only the continuous line">
-                                    <input type="checkbox" id="mainLineOnly" onchange="toggleOverlayVisibility()"> Main only
-                                </label>
-                                <label class="flex-center gap-1 cursor-pointer font-normal">
-                                    <input type="checkbox" id="showPoints" checked onchange="toggleOverlayVisibility()"> Pts
-                                </label>
-                            </div>
+                                <div class="control-section">
+                                    <span class="control-title">Render</span>
+                                    <div class="toolbar-toggle-grid">
+                                        <label class="toolbar-inline-checkbox">
+                                            <input type="checkbox" id="highContrastOverlay" checked onchange="toggleOverlayVisibility()"> High contrast
+                                        </label>
+                                        <label class="toolbar-inline-checkbox">
+                                            <input type="checkbox" id="crispOverlay" onchange="toggleOverlayVisibility()"> Crisp
+                                        </label>
+                                        <label class="toolbar-inline-checkbox">
+                                            <input type="checkbox" id="compactOverlay" onchange="toggleOverlayVisibility()"> Compact
+                                        </label>
+                                    </div>
+                                </div>
 
-                            <div class="control-section">
-                                <label class="flex-center gap-1 cursor-pointer font-normal">
-                                    <input type="checkbox" id="highContrastOverlay" checked onchange="toggleOverlayVisibility()"> High contrast
-                                </label>
-                                <label class="flex-center gap-1 cursor-pointer font-normal">
-                                    <input type="checkbox" id="crispOverlay" onchange="toggleOverlayVisibility()"> Crisp
-                                </label>
-                                <label class="flex-center gap-1 cursor-pointer font-normal">
-                                    <input type="checkbox" id="compactOverlay" onchange="toggleOverlayVisibility()"> Compact
-                                </label>
                             </div>
                         </div>
 
-                        <div class="overlay-scroll viewer-scroll">
-                            <div id="overlay">
-                                <img id="imagePreview" alt="Log preview">
-                                <canvas id="curveCanvas"></canvas>
+                        <div class="viewer-frame" style="position: relative;">
+                            <!-- Crosshair Overlay Elements -->
+                            <div id="crosshairX" class="crosshair-line hidden"></div>
+                            <div id="crosshairY" class="crosshair-line hidden"></div>
+                            <div id="crosshairLabel" class="crosshair-label hidden"></div>
+
+                            <div class="overlay-scroll viewer-scroll">
+                                <div id="overlay">
+                                    <img id="imagePreview" alt="Log preview">
+                                    <canvas id="curveCanvas"></canvas>
+                                </div>
                             </div>
-                        </div>
-                        <!-- Floating Toolbar (additional tools shown in Edit Mode) -->
-                        <div class="floating-toolbar hidden" id="digitizerToolbar">
-                            <div class="toolbar-group">
-                                <button class="tool-btn active" id="toolPointer" title="Pointer (Edit/Move)" onclick="setTool('pointer')">🖱️</button>
-                                <button class="tool-btn" id="toolAddPoint" title="Add Point" onclick="setTool('addPoint')">➕</button>
-                                <button class="tool-btn" id="toolEraser" title="Eraser (Box Delete)" onclick="setTool('eraser')">🧽</button>
-                                <button class="tool-btn" id="toolCrosshair" title="Smart Crosshair" onclick="toggleCrosshair()">⌖</button>
-                            </div>
-                            <div class="toolbar-divider"></div>
-                            <div class="toolbar-group">
-                                <button class="tool-btn" id="toolUndo" title="Undo Last Edit (Ctrl+Z)" onclick="undoLastCurveEdit()">↩️</button>
-                            </div>
-                            <div class="toolbar-divider"></div>
-                            <div class="toolbar-group">
-                                <button class="tool-btn" id="toolViewerLock" title="Viewer Scroll Lock" onclick="toggleScrollLock()">🔓</button>
-                                <button class="tool-btn" id="toolPageLock" title="Page Scroll Lock" onclick="togglePageLock()">📄</button>
-                                <button class="tool-btn" id="toolCurveLock" title="Lock Selected Curve Overlay" onclick="toggleOverlayCurveLockFromToolbar()">🎚️🔒</button>
-                            </div>
-                            <div class="toolbar-divider"></div>
-                            <div class="toolbar-group" style="display: flex; align-items: center; padding: 0 4px;">
-                                <label class="flex-center gap-1 cursor-pointer text-xs select-none text-slate-200" title="Move neighbors with drag">
-                                    <input type="checkbox" id="smoothEditToggle"> Smooth
-                                </label>
-                            </div>
-                            <div class="toolbar-divider"></div>
-                            <div class="toolbar-group">
-                                <button class="tool-btn" id="btnFilterInvert" title="Invert Colors" onclick="toggleFilter('invert')">🌗</button>
-                                <button class="tool-btn" id="btnFilterContrast" title="High Contrast" onclick="toggleFilter('contrast')">◐</button>
+                            <div class="viewer-frame-toolbar hidden" id="digitizerToolbar">
+                                <div class="control-section">
+                                    <span class="control-title">Edit</span>
+                                    <div class="toolbar-icon-grid toolbar-icon-grid-compact">
+                                        <button class="tool-btn active" id="toolPointer" title="Pointer (Edit/Move)" onclick="setTool('pointer')">🖱️</button>
+                                        <button class="tool-btn" id="toolAddPoint" title="Add Point" onclick="setTool('addPoint')">➕</button>
+                                        <button class="tool-btn" id="toolEraser" title="Eraser (Box Delete)" onclick="setTool('eraser')">🧽</button>
+                                        <button class="tool-btn" id="toolCrosshair" title="Smart Crosshair" onclick="toggleCrosshair()">⌖</button>
+                                        <button class="tool-btn" id="toolUndo" title="Undo Last Edit (Ctrl+Z)" onclick="undoLastCurveEdit()">↩️</button>
+                                        <button class="tool-btn" id="toolCurveLock" title="Lock Selected Curve Overlay" onclick="toggleOverlayCurveLockFromToolbar()">🎚️🔒</button>
+                                    </div>
+                                </div>
+                                <div class="control-section">
+                                    <span class="control-title">View</span>
+                                    <div class="toolbar-icon-grid toolbar-icon-grid-compact">
+                                        <button class="tool-btn" id="btnFilterInvert" title="Invert Colors" onclick="toggleFilter('invert')">🌗</button>
+                                        <button class="tool-btn" id="btnFilterContrast" title="High Contrast" onclick="toggleFilter('contrast')">◐</button>
+                                    </div>
+                                    <label class="toolbar-inline-checkbox toolbar-inline-checkbox-compact" title="Move neighbors with drag">
+                                        <input type="checkbox" id="smoothEditToggle"> Smooth
+                                    </label>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -1288,7 +1537,7 @@
                             <div class="form-group mt-2 max-w-420">
                                 <label>Header / key (optional)</label>
                                 <div class="flex-wrap-center mt-1">
-                                    <button type="button" class="btn btn-sm bg-blue-600 hover:bg-blue-500 text-white" onclick="autoExtractHeader()">Auto-Extract Header Info</button>
+                                    <button type="button" class="btn btn-sm bg-blue-600 hover:bg-blue-500 text-white" id="autoExtractHeaderBtn" onclick="autoExtractHeader()">Auto-Extract Header Info</button>
                                     <button type="button" class="btn btn-sm" onclick="beginHeaderSelection()">Manual Selection</button>
                                     <button type="button" class="btn btn-sm" onclick="clearHeaderSelection()">Clear</button>
                                 </div>
@@ -1352,7 +1601,7 @@
                             <div class="form-group mt-2 max-w-420">
                                 <label>Select log panel</label>
                                 <div class="flex-wrap-center mt-1">
-                                    <button type="button" class="btn btn-sm" onclick="beginPanelSelection()">Select panel</button>
+                                    <button type="button" class="btn btn-sm" id="selectPanelBtn" onclick="beginPanelSelection()">Select panel</button>
                                     <button type="button" class="btn btn-sm" onclick="clearPanelSelection()">Reset</button>
                                 </div>
                                 <div class="hint-text" id="selectionSummary">No panel selected. Using full image.</div>
@@ -1382,7 +1631,7 @@
                                 </div>
                             </div>
                             <div class="form-group mt-1 max-w-420">
-                                <button type="button" class="btn btn-sm" onclick="cropToWorkingPanel()">✂️ Crop to working panel</button>
+                                <button type="button" class="btn btn-sm" id="cropWorkingPanelBtn" onclick="cropToWorkingPanel()">✂️ Crop to working panel</button>
                                 <div class="hint-text" class="mt-1">
                                     After selecting a panel and setting depth, crop so only that depth window is used as the working TIFF.
                                 </div>
@@ -1393,7 +1642,7 @@
                     <!-- Tab 2: Step 4 curves -->
                     <div id="calibPanel-curves" class="tab-panel tab-hidden">
                         <div class="curve-pane">
-                            <div class="step">
+                            <div class="step" id="curveConfigStep">
                                 <h2>Step 4: Curve Configuration</h2>
                                 <div class="form-group">
                                     <div class="curve-actions">
@@ -1440,7 +1689,7 @@
                     <!-- Tab 3: Step 5 manual edits + download -->
                     <div id="calibPanel-edits" class="tab-panel tab-hidden">
                         <div class="curve-pane">
-                            <div class="step">
+                            <div class="step" id="manualEditStep">
                                 <h2>Step 5: Manual Curve Edits &amp; Export</h2>
                                 <div class="form-group mt-1 max-w-420">
                                     <label>Manual curve edits</label>
@@ -1627,15 +1876,22 @@
             return key ? key.toUpperCase() : '';
         }
 
-        function getActiveCurveTraceKey() {
-            const key = editCurveDataKey || editCurveId;
-            if (!key) return null;
-            const trimmed = String(key).trim();
-            return trimmed ? trimmed : null;
+        function getActiveCurveTraceKey(curveId = null) {
+            const candidates = [curveId, editCurveId, editCurveDataKey];
+            for (const candidate of candidates) {
+                const trimmed = String(candidate || '').trim();
+                if (!trimmed) continue;
+                const resolved = resolveTraceKeyForCurveId(trimmed);
+                if (resolved) return resolved;
+                if (lastCurveTraces && Array.isArray(lastCurveTraces[trimmed])) {
+                    return trimmed;
+                }
+            }
+            return null;
         }
 
-        function getActiveCurveTracePoints() {
-            const traceKey = getActiveCurveTraceKey();
+        function getActiveCurveTracePoints(curveId = null) {
+            const traceKey = getActiveCurveTraceKey(curveId);
             if (!traceKey || !lastCurveTraces || typeof lastCurveTraces !== 'object') {
                 return { traceKey: null, points: null };
             }
@@ -1654,10 +1910,63 @@
         }
 
         function getCurrentPinKey() {
-            const traceKey = getActiveCurveTraceKey();
-            const fallback = editCurveDataKey || editCurveId;
+            const traceKey = getActiveCurveTraceKey(editCurveId);
+            const fallback = editCurveId || editCurveDataKey;
             const key = traceKey || fallback;
             return key ? key : null;
+        }
+
+        function findTrackByCurveId(curveId) {
+            const tracks = getTrackCalibrationsSnapshot();
+            if (!Array.isArray(tracks) || !curveId) return null;
+            const target = normalizeCurveKey(curveId);
+            for (const track of tracks) {
+                if (!track) continue;
+                const ids = [track.id, track.name, track.displayName];
+                if (ids.some(value => normalizeCurveKey(value) === target)) {
+                    return track;
+                }
+            }
+            return null;
+        }
+
+        function getTrackUnderImageX(xImg) {
+            const tracks = getTrackCalibrationsSnapshot();
+            if (!Array.isArray(tracks) || !Number.isFinite(xImg)) return null;
+            return tracks.find((track) => {
+                if (!track) return false;
+                const left = Number(track.leftX);
+                const right = Number(track.rightX);
+                if (!Number.isFinite(left) || !Number.isFinite(right)) return false;
+                return xImg >= Math.min(left, right) && xImg <= Math.max(left, right);
+            }) || null;
+        }
+
+        function setActiveEditCurve(curveId, options = {}) {
+            const nextId = normalizeCurveKey(curveId);
+            if (!nextId) return false;
+            const found = findDigitizedCurveEntry(nextId);
+            editCurveId = nextId;
+            editCurveDataKey = (found && found.entry) ? found.key : nextId;
+
+            const sel = document.getElementById('editCurveSelect');
+            if (sel) {
+                const desired = Array.from(sel.options || []).find(opt => normalizeCurveKey(opt.value) === nextId);
+                if (desired) sel.value = desired.value;
+            }
+
+            const status = document.getElementById('editModeStatus');
+            if (status && editMode) {
+                status.textContent = `Editing ${nextId}`;
+            }
+
+            if (typeof syncToolbarCurveLockButton === 'function') {
+                syncToolbarCurveLockButton();
+            }
+            if (typeof renderCurveListView === 'function' && options.refreshList !== false) {
+                renderCurveListView();
+            }
+            return true;
         }
 
         // Toolbar State
@@ -1697,10 +2006,15 @@
         function setTool(tool) {
             activeTool = tool;
             // Update buttons
+            const activeButtonId = ({
+                pointer: 'toolPointer',
+                addPoint: 'toolAddPoint',
+                eraser: 'toolEraser',
+            })[tool] || null;
             ['toolPointer', 'toolAddPoint', 'toolEraser'].forEach(id => {
                 const btn = document.getElementById(id);
                 if (btn) {
-                    if (id === 'tool' + tool.charAt(0).toUpperCase() + tool.slice(1)) {
+                    if (id === activeButtonId) {
                         btn.classList.add('active');
                     } else {
                         btn.classList.remove('active');
@@ -1804,7 +2118,111 @@
             }
         }
 
-        const INTRO_SESSION_KEY = 'turbotifflas_intro_seen_v1';
+        const INTRO_SESSION_KEY = 'turbotifflas_intro_seen_v2';
+        let workspaceTourActive = false;
+        let workspaceTourIndex = -1;
+        let workspaceTourPrevTabId = null;
+        let workspaceTourRestoreHidden = null;
+        let workspaceTourHighlightedEl = null;
+
+        const WORKSPACE_TOUR_STEPS = [
+            {
+                kicker: 'Step 1',
+                title: 'Upload Image',
+                target: '#uploadArea',
+                body: '<p>Upload a TIFF, PNG, or JPG of your well log to begin.</p><p>For the best results, use a clear scan with readable depth markings, track labels, and visible curve lines.</p>',
+            },
+            {
+                kicker: 'Step 2',
+                title: 'Image Preview',
+                beforeShow: () => prepareWorkspaceTourMainTab(),
+                target: () => document.querySelector('.viewer-controls') || document.getElementById('previewStep'),
+                body: '<p>Review the uploaded image before processing.</p><p>Use the preview tools to check that the log is readable, aligned correctly, and showing the section you want to work on.</p>',
+            },
+            {
+                kicker: 'Step 2',
+                title: 'Auto-Extract Header Info',
+                beforeShow: () => prepareWorkspaceTourMainTab(),
+                target: '#autoExtractHeaderBtn',
+                body: '<p>Use Auto-Extract Header Info to pull well details from the log automatically.</p><p>If anything is missing or incorrect, you can enter or correct the header information manually.</p>',
+            },
+            {
+                kicker: 'Step 3',
+                title: 'Depth Setup',
+                beforeShow: () => prepareWorkspaceTourMainTab(),
+                target: '#configStep',
+                body: '<p>Set the top and bottom depth values for the interval you want to digitize, then choose the correct depth unit.</p><p>This tells TifLAS how to convert image position into real log depth.</p>',
+            },
+            {
+                kicker: 'Step 3',
+                title: 'Select Panel',
+                beforeShow: () => prepareWorkspaceTourMainTab(),
+                target: '#selectPanelBtn',
+                body: '<p>Choose the panel or track that contains the curves you want to digitize.</p><p>This helps TifLAS focus only on the relevant portion of the log.</p>',
+            },
+            {
+                kicker: 'Step 3',
+                title: 'Crop to Working Panel',
+                beforeShow: () => prepareWorkspaceTourMainTab(),
+                target: '#cropWorkingPanelBtn',
+                body: '<p>After selecting the panel and depth range, crop to the working panel.</p><p>Cropping reduces noise and improves curve detection by limiting processing to the selected area.</p>',
+            },
+            {
+                kicker: 'Step 4',
+                title: 'Curve Configuration',
+                beforeShow: () => prepareWorkspaceTourCurvesTab(),
+                target: '#curveConfigStep',
+                body: '<p>Set up each curve before digitizing.</p><p>For every curve, define its type, color, name, unit, and scale so TifLAS knows how to interpret it correctly.</p>',
+            },
+            {
+                kicker: 'Step 4',
+                title: 'Type and Color',
+                beforeShow: () => prepareWorkspaceTourCurvesTab(),
+                target: () => document.getElementById('curveBody0') || document.getElementById('curvesContainer'),
+                body: '<p>Choose the correct curve type and match it to the curve color shown on the log.</p><p>This helps separate multiple traces in the same panel.</p>',
+            },
+            {
+                kicker: 'Step 4',
+                title: 'Digitize',
+                beforeShow: () => prepareWorkspaceTourCurvesTab(),
+                target: '#digitizeBtn',
+                body: '<p>Once your curve settings look correct, run digitization to convert the visible log curves into digital LAS data.</p><p>Review the result before moving on.</p>',
+            },
+            {
+                kicker: 'Step 5',
+                title: 'Manual Curve Edits & Export',
+                beforeShow: () => prepareWorkspaceTourEditsTab(),
+                target: '#manualEditStep',
+                body: '<p>Use this step to clean up any curves that were not captured perfectly.</p><p>This is especially useful for noisy scans, overlapping traces, or faint lines.</p>',
+            },
+            {
+                kicker: 'Step 5',
+                title: 'Manual Curve Edits: Choose Curve',
+                beforeShow: () => prepareWorkspaceTourEditsTab(),
+                target: '#editCurveSelect',
+                body: '<p>Select the curve you want to adjust.</p><p>Only the selected curve will be edited.</p>',
+            },
+            {
+                kicker: 'Step 5',
+                title: 'Enable Edit Mode',
+                beforeShow: () => prepareWorkspaceTourEditsTab(),
+                target: '#toggleEditModeBtn',
+                body: '<p>Turn on Edit Mode to manually fix points or sections of the curve.</p><p>Use this to improve accuracy before exporting.</p>',
+            },
+            {
+                kicker: 'Step 6',
+                title: 'Download LAS',
+                beforeShow: () => prepareWorkspaceTourEditsTab(),
+                target: '#downloadLasBtn',
+                body: '<p>Download the finished LAS file when you are satisfied with the result.</p>',
+            },
+            {
+                kicker: 'Step 6',
+                title: 'Use LAS Viewer',
+                target: '.las-viewer-btn',
+                body: '<p>Open it in a LAS viewer to inspect the curves, confirm the scales, and verify that the exported data matches the original log.</p>',
+            },
+        ];
 
         function updateDisplayBaseScale() {
             try {
@@ -2348,11 +2766,244 @@
             saveOverlaySettingsToStorage();
         }
 
+        function ensureWorkspaceTourPreviewState() {
+            if (workspaceTourRestoreHidden) return;
+            workspaceTourRestoreHidden = new Map();
+            workspaceTourPrevTabId = currentTabId;
+            ['workspace', 'previewStep', 'configStep'].forEach((id) => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                workspaceTourRestoreHidden.set(id, el.classList.contains('hidden'));
+                el.classList.remove('hidden');
+            });
+        }
+
+        function restoreWorkspaceTourPreviewState() {
+            if (workspaceTourRestoreHidden instanceof Map) {
+                workspaceTourRestoreHidden.forEach((wasHidden, id) => {
+                    const el = document.getElementById(id);
+                    if (!el) return;
+                    if (wasHidden) {
+                        el.classList.add('hidden');
+                    } else {
+                        el.classList.remove('hidden');
+                    }
+                });
+            }
+            workspaceTourRestoreHidden = null;
+            if (workspaceTourPrevTabId) {
+                setCalibrationTab(workspaceTourPrevTabId);
+            }
+            workspaceTourPrevTabId = null;
+        }
+
+        function ensureWorkspaceTourCurveInputs() {
+            const numCurvesInput = document.getElementById('numCurves');
+            if (numCurvesInput) {
+                const nextVal = Math.max(1, Math.min(6, parseInt(numCurvesInput.value) || 1));
+                numCurvesInput.value = nextVal;
+            }
+            if (!document.getElementById('type0') || !document.getElementById('mode0')) {
+                generateCurveInputs();
+            }
+        }
+
+        function prepareWorkspaceTourMainTab() {
+            ensureWorkspaceTourPreviewState();
+            setCalibrationTab('calibPanel-main');
+        }
+
+        function prepareWorkspaceTourCurvesTab() {
+            ensureWorkspaceTourPreviewState();
+            ensureWorkspaceTourCurveInputs();
+            setCalibrationTab('calibPanel-curves');
+        }
+
+        function prepareWorkspaceTourEditsTab() {
+            ensureWorkspaceTourPreviewState();
+            ensureWorkspaceTourCurveInputs();
+            setCalibrationTab('calibPanel-edits');
+            if (typeof syncStep5Advanced === 'function') syncStep5Advanced();
+        }
+
+        function resolveWorkspaceTourTarget(target) {
+            if (!target) return null;
+            if (typeof target === 'function') {
+                try {
+                    return target() || null;
+                } catch (e) {
+                    return null;
+                }
+            }
+            if (typeof target === 'string') {
+                return document.querySelector(target);
+            }
+            return target && target.nodeType === 1 ? target : null;
+        }
+
+        function clearWorkspaceTourHighlight() {
+            if (workspaceTourHighlightedEl) {
+                workspaceTourHighlightedEl.classList.remove('guided-tour-target');
+                workspaceTourHighlightedEl = null;
+            }
+        }
+
+        function positionWorkspaceTourCard(card, targetEl) {
+            const pad = 12;
+            if (!card) return;
+            if (!targetEl) {
+                const rect = card.getBoundingClientRect();
+                card.style.left = `${Math.max(pad, (window.innerWidth - rect.width) / 2)}px`;
+                card.style.top = `${Math.max(pad, (window.innerHeight - rect.height) / 2)}px`;
+                return;
+            }
+
+            const targetRect = targetEl.getBoundingClientRect();
+            const cardRect = card.getBoundingClientRect();
+            const placements = [
+                {
+                    top: targetRect.bottom + 16,
+                    left: Math.min(window.innerWidth - cardRect.width - pad, Math.max(pad, targetRect.left)),
+                    fits: targetRect.bottom + 16 + cardRect.height <= window.innerHeight - pad,
+                },
+                {
+                    top: targetRect.top - cardRect.height - 16,
+                    left: Math.min(window.innerWidth - cardRect.width - pad, Math.max(pad, targetRect.left)),
+                    fits: targetRect.top - 16 - cardRect.height >= pad,
+                },
+                {
+                    top: Math.min(window.innerHeight - cardRect.height - pad, Math.max(pad, targetRect.top)),
+                    left: targetRect.right + 16,
+                    fits: targetRect.right + 16 + cardRect.width <= window.innerWidth - pad,
+                },
+                {
+                    top: Math.min(window.innerHeight - cardRect.height - pad, Math.max(pad, targetRect.top)),
+                    left: targetRect.left - cardRect.width - 16,
+                    fits: targetRect.left - 16 - cardRect.width >= pad,
+                },
+            ];
+            const chosen = placements.find((entry) => entry.fits) || placements[0];
+            card.style.left = `${Math.max(pad, Math.min(window.innerWidth - cardRect.width - pad, chosen.left))}px`;
+            card.style.top = `${Math.max(pad, Math.min(window.innerHeight - cardRect.height - pad, chosen.top))}px`;
+        }
+
+        function updateWorkspaceTourGeometry() {
+            if (!workspaceTourActive || workspaceTourIndex < 0 || workspaceTourIndex >= WORKSPACE_TOUR_STEPS.length) return;
+            const spotlight = document.getElementById('guidedTourSpotlight');
+            const card = document.getElementById('guidedTourCard');
+            if (!spotlight || !card) return;
+
+            const step = WORKSPACE_TOUR_STEPS[workspaceTourIndex];
+            const activeTarget = resolveWorkspaceTourTarget(step.target);
+            clearWorkspaceTourHighlight();
+            if (activeTarget) {
+                activeTarget.classList.add('guided-tour-target');
+                workspaceTourHighlightedEl = activeTarget;
+            }
+
+            const rect = activeTarget ? activeTarget.getBoundingClientRect() : null;
+            if (rect && rect.width > 0 && rect.height > 0) {
+                spotlight.classList.remove('hidden');
+                spotlight.style.left = `${Math.max(6, rect.left - 8)}px`;
+                spotlight.style.top = `${Math.max(6, rect.top - 8)}px`;
+                spotlight.style.width = `${Math.max(24, rect.width + 16)}px`;
+                spotlight.style.height = `${Math.max(24, rect.height + 16)}px`;
+            } else {
+                spotlight.classList.add('hidden');
+            }
+
+            positionWorkspaceTourCard(card, activeTarget);
+        }
+
+        function renderWorkspaceTourStep() {
+            if (!workspaceTourActive || workspaceTourIndex < 0 || workspaceTourIndex >= WORKSPACE_TOUR_STEPS.length) return;
+            const step = WORKSPACE_TOUR_STEPS[workspaceTourIndex];
+            if (step && typeof step.beforeShow === 'function') {
+                step.beforeShow();
+            }
+
+            const backdrop = document.getElementById('guidedTourBackdrop');
+            const spotlight = document.getElementById('guidedTourSpotlight');
+            const card = document.getElementById('guidedTourCard');
+            const kicker = document.getElementById('guidedTourKicker');
+            const title = document.getElementById('guidedTourTitle');
+            const body = document.getElementById('guidedTourBody');
+            const progress = document.getElementById('guidedTourProgress');
+            const prevBtn = document.getElementById('guidedTourPrevBtn');
+            const nextBtn = document.getElementById('guidedTourNextBtn');
+            if (!backdrop || !spotlight || !card || !kicker || !title || !body || !progress || !prevBtn || !nextBtn) return;
+
+            const targetEl = resolveWorkspaceTourTarget(step.target);
+            if (targetEl && typeof targetEl.scrollIntoView === 'function') {
+                targetEl.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+            }
+
+            window.requestAnimationFrame(() => {
+                const activeTarget = resolveWorkspaceTourTarget(step.target);
+                clearWorkspaceTourHighlight();
+                if (activeTarget) {
+                    activeTarget.classList.add('guided-tour-target');
+                    workspaceTourHighlightedEl = activeTarget;
+                }
+
+                kicker.textContent = step.kicker || 'Guided tour';
+                title.textContent = step.title || 'How to use this tool';
+                body.innerHTML = step.body || '';
+                progress.textContent = `${workspaceTourIndex + 1} / ${WORKSPACE_TOUR_STEPS.length}`;
+                prevBtn.disabled = workspaceTourIndex === 0;
+                nextBtn.textContent = workspaceTourIndex === WORKSPACE_TOUR_STEPS.length - 1 ? 'Finish' : 'Next';
+
+                backdrop.classList.remove('hidden');
+                card.classList.remove('hidden');
+                updateWorkspaceTourGeometry();
+            });
+        }
+
+        function startWorkspaceTour() {
+            workspaceTourActive = true;
+            workspaceTourIndex = 0;
+            renderWorkspaceTourStep();
+        }
+
+        function nextWorkspaceTourStep() {
+            if (!workspaceTourActive) return;
+            if (workspaceTourIndex >= WORKSPACE_TOUR_STEPS.length - 1) {
+                finishWorkspaceTour();
+                return;
+            }
+            workspaceTourIndex += 1;
+            renderWorkspaceTourStep();
+        }
+
+        function previousWorkspaceTourStep() {
+            if (!workspaceTourActive) return;
+            workspaceTourIndex = Math.max(0, workspaceTourIndex - 1);
+            renderWorkspaceTourStep();
+        }
+
+        function finishWorkspaceTour() {
+            stopWorkspaceTour();
+        }
+
+        function skipWorkspaceTour() {
+            stopWorkspaceTour();
+        }
+
+        function stopWorkspaceTour() {
+            const backdrop = document.getElementById('guidedTourBackdrop');
+            const spotlight = document.getElementById('guidedTourSpotlight');
+            const card = document.getElementById('guidedTourCard');
+            if (backdrop) backdrop.classList.add('hidden');
+            if (spotlight) spotlight.classList.add('hidden');
+            if (card) card.classList.add('hidden');
+            clearWorkspaceTourHighlight();
+            restoreWorkspaceTourPreviewState();
+            workspaceTourActive = false;
+            workspaceTourIndex = -1;
+        }
+
         function openIntroModal() {
-            const backdrop = document.getElementById('introModalBackdrop');
-            const modal = document.getElementById('introModal');
-            if (backdrop) backdrop.classList.remove('hidden');
-            if (modal) modal.classList.remove('hidden');
+            startWorkspaceTour();
         }
 
         function openLasViewerWithData(event) {
@@ -2424,6 +3075,10 @@
             if (typeof syncToolbarCurveLockButton === 'function') syncToolbarCurveLockButton();
             const editSel = document.getElementById('editCurveSelect');
             if (editSel) editSel.addEventListener('change', syncStep5Advanced);
+            const tourBackdrop = document.getElementById('guidedTourBackdrop');
+            if (tourBackdrop) {
+                tourBackdrop.addEventListener('click', skipWorkspaceTour);
+            }
         });
 
         function closeIntroModal() {
@@ -2432,6 +3087,26 @@
                 backdrop.classList.add('hidden');
             }
         }
+
+        window.addEventListener('resize', () => {
+            if (workspaceTourActive) updateWorkspaceTourGeometry();
+        });
+        window.addEventListener('scroll', () => {
+            if (workspaceTourActive) updateWorkspaceTourGeometry();
+        }, { passive: true, capture: true });
+        document.addEventListener('keydown', (event) => {
+            if (!workspaceTourActive) return;
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                skipWorkspaceTour();
+            } else if (event.key === 'ArrowRight' || event.key === 'Enter') {
+                event.preventDefault();
+                nextWorkspaceTourStep();
+            } else if (event.key === 'ArrowLeft') {
+                event.preventDefault();
+                previousWorkspaceTourStep();
+            }
+        });
 
         // Depth anchor buttons have been removed; depth configuration is now
         // driven directly by numeric inputs and AI suggestions.
@@ -2920,6 +3595,7 @@
                 const lasMnemonicEl = document.getElementById(`lasMnemonic${i}`);
                 const unitEl = document.getElementById(`unit${i}`);
                 const lasUnitEl = document.getElementById(`lasUnit${i}`);
+                const modeEl = document.getElementById(`mode${i}`);
 
                 let baseId = (lasMnemonicEl && lasMnemonicEl.value
                     ? lasMnemonicEl.value.trim()
@@ -2945,6 +3621,7 @@
                     rightX: rightXAdj,
                     scaleMin,
                     scaleMax,
+                    mode: modeEl && modeEl.value ? String(modeEl.value).toLowerCase() : 'black',
                     displayUnit: unitEl && unitEl.value ? unitEl.value : '',
                     lasUnit: lasUnitEl && lasUnitEl.value ? lasUnitEl.value : ''
                 });
@@ -3613,10 +4290,8 @@
                 // reconstruct them from the LAS text so edit mode can still work.
                 ensureDigitizedFromLas();
 
-                const found = findDigitizedCurveEntry(id);
                 editMode = true;
-                editCurveId = id;
-                editCurveDataKey = (found && found.entry) ? found.key : id;
+                setActiveEditCurve(id, { refreshList: false });
                 // Lock selection/track-drag modes while editing so the green
                 // selection area and track edges do not move.
                 panelSelectMode = false;
@@ -3656,9 +4331,20 @@
             return bestIdx;
         }
 
+        function getDepthIndexAtImageY(yImg) {
+            if (!Number.isFinite(yImg)) return -1;
+            if (!Array.isArray(lastDigitizedDepth) || !lastDigitizedDepth.length) return -1;
+            const depthCfg = lastDepthConfig || getDepthConfigFromInputs();
+            if (!depthCfg) return -1;
+            const depth = pixelToDepthFromConfig(yImg, depthCfg);
+            if (!Number.isFinite(depth)) return -1;
+            return findNearestDepthIndex(depth, lastDigitizedDepth);
+        }
+
         function ensureTracePointsHaveDepthIndex(curveId) {
-            // Resolve to the active trace/key so depth indices populate even when trace keys differ
-            const { traceKey, points } = getActiveCurveTracePoints();
+            // Resolve to the requested curve's actual trace key so edit operations do not
+            // accidentally populate depth indices on whichever curve was active last.
+            const { traceKey, points } = getActiveCurveTracePoints(curveId);
             const key = traceKey || curveId || editCurveId;
             if (!key || !points || !Array.isArray(points) || !points.length) return;
             if (!Array.isArray(lastDigitizedDepth) || !lastDigitizedDepth.length) return;
@@ -3696,6 +4382,70 @@
                 }
             }
             return -1;
+        }
+
+        function findBestPointIndexForDepth(points, depthIndex, preferredY = null, preferredX = null) {
+            if (!Array.isArray(points) || !points.length || !Number.isInteger(depthIndex)) return -1;
+            let bestIdx = -1;
+            let bestScore = Infinity;
+            for (let i = 0; i < points.length; i++) {
+                const pt = points[i];
+                if (!Array.isArray(pt) || pt.length < 3 || pt[2] !== depthIndex) continue;
+                let score = 0;
+                if (Number.isFinite(preferredY)) score += Math.abs(pt[1] - preferredY) * 4;
+                if (Number.isFinite(preferredX)) score += Math.abs(pt[0] - preferredX);
+                if (score < bestScore) {
+                    bestScore = score;
+                    bestIdx = i;
+                }
+            }
+            return bestIdx;
+        }
+
+        function findEditablePointIndex(points, xImg, yImg, curveId, options = {}) {
+            if (!Array.isArray(points) || !points.length) {
+                return { pointIndex: -1, depthIndex: -1 };
+            }
+
+            ensureTracePointsHaveDepthIndex(curveId);
+
+            const targetDepthIdx = getDepthIndexAtImageY(yImg);
+            if (targetDepthIdx >= 0) {
+                const exactIdx = findBestPointIndexForDepth(points, targetDepthIdx, yImg, xImg);
+                if (exactIdx >= 0) {
+                    return { pointIndex: exactIdx, depthIndex: targetDepthIdx };
+                }
+            }
+
+            const maxYDist = Number.isFinite(options.maxYDist) ? options.maxYDist : 14;
+            const maxDist = Number.isFinite(options.maxDist) ? options.maxDist : 24;
+            const maxDist2 = maxDist * maxDist;
+            let bestIdx = -1;
+            let bestScore = Infinity;
+
+            for (let i = 0; i < points.length; i++) {
+                const pt = points[i];
+                if (!Array.isArray(pt) || pt.length < 2) continue;
+                const dx = Number.isFinite(xImg) ? (pt[0] - xImg) : 0;
+                const dy = Number.isFinite(yImg) ? (pt[1] - yImg) : 0;
+                const d2 = dx * dx + dy * dy;
+                if (Number.isFinite(yImg) && Math.abs(dy) > maxYDist && d2 > maxDist2) continue;
+                const score = dy * dy * 4 + dx * dx;
+                if (score < bestScore) {
+                    bestScore = score;
+                    bestIdx = i;
+                }
+            }
+
+            if (bestIdx < 0) {
+                return { pointIndex: -1, depthIndex: targetDepthIdx };
+            }
+
+            const bestPt = points[bestIdx];
+            return {
+                pointIndex: bestIdx,
+                depthIndex: (Array.isArray(bestPt) && Number.isInteger(bestPt[2])) ? bestPt[2] : targetDepthIdx,
+            };
         }
 
         function resolvePinKey(curveId) {
@@ -3762,7 +4512,8 @@
         function togglePinAtImageCoords(xImg, yImg) {
             if (!editMode || !editCurveId) return;
             const curveId = editCurveId;
-            const pts = lastCurveTraces && lastCurveTraces[curveId];
+            const activeTrace = getActiveCurveTracePoints(curveId);
+            const pts = activeTrace.points;
             if (!Array.isArray(pts) || !pts.length) return;
 
             ensureTracePointsHaveDepthIndex(curveId);
@@ -3821,6 +4572,9 @@
 
             const curveKey = editCurveDataKey || editCurveId;
             if (!curveKey || !lastDigitizedCurves[curveKey]) return;
+            const targetTrack = findTrackByCurveId(editCurveId);
+            if (!targetTrack) return;
+            if (xImg < Math.min(targetTrack.leftX, targetTrack.rightX) || xImg > Math.max(targetTrack.leftX, targetTrack.rightX)) return;
 
             const depthCfg = lastDepthConfig || getDepthConfigFromInputs();
             const depth = pixelToDepthFromConfig(yImg, depthCfg);
@@ -3832,9 +4586,6 @@
                 return;
             }
 
-            const targetTrack = getTrackCalibrationsSnapshot()?.find(t => t.id === editCurveId);
-            if (!targetTrack) return;
-
             const clampedX = Math.max(targetTrack.leftX, Math.min(targetTrack.rightX, xImg));
             const newValue = pixelToTrackValue(clampedX, targetTrack);
             if (!Number.isFinite(newValue)) return;
@@ -3845,55 +4596,43 @@
             // Save old value for undo
             const oldValue = entry.values[idx];
             let oldTraceX = null;
-            const pts = lastCurveTraces && lastCurveTraces[editCurveId];
+            let oldTraceY = yImg;
+            let pointIndex = null;
+            const activeTrace = getActiveCurveTracePoints(editCurveId);
+            const traceKey = activeTrace.traceKey || getActiveCurveTraceKey(editCurveId) || editCurveId;
+            const pts = activeTrace.points;
             if (Array.isArray(pts) && pts.length) {
                 ensureTracePointsHaveDepthIndex(editCurveId);
-                let bestIdxPt = findPointIndexByDepthIndex(pts, idx);
-                let bestDy = Infinity;
-                if (bestIdxPt < 0) {
-                    bestIdxPt = 0;
-                    bestDy = Math.abs(pts[0][1] - yImg);
-                    for (let i = 1; i < pts.length; i++) {
-                        const dy = Math.abs(pts[i][1] - yImg);
-                        if (dy < bestDy) { bestDy = dy; bestIdxPt = i; }
-                    }
-                } else {
-                    bestDy = Math.abs(pts[bestIdxPt][1] - yImg);
+                const picked = findEditablePointIndex(pts, clampedX, yImg, editCurveId, { maxYDist: 14, maxDist: 24 });
+                const bestIdxPt = picked.pointIndex;
+                const bestDy = (bestIdxPt >= 0 && Array.isArray(pts[bestIdxPt])) ? Math.abs(pts[bestIdxPt][1] - yImg) : Infinity;
+                if (bestIdxPt >= 0 && bestDy <= 10) {
+                    oldTraceX = pts[bestIdxPt][0];
+                    oldTraceY = pts[bestIdxPt][1];
+                    pointIndex = bestIdxPt;
                 }
-                if (bestIdxPt >= 0 && bestDy <= 10) oldTraceX = pts[bestIdxPt][0];
             }
-            editUndoStack.push({ curveKey, curveId: editCurveId, idx, oldValue, oldTraceX, yImg, depthIndex: idx });
+            editUndoStack.push({ curveKey, curveId: editCurveId, traceKey, idx, oldValue, oldTraceX, oldTraceY, yImg, depthIndex: idx, pointIndex });
 
             entry.values[idx] = newValue;
 
             if (!lastCurveTraces) {
                 lastCurveTraces = {};
             }
-            let pts2 = lastCurveTraces[editCurveId];
+            let pts2 = Array.isArray(activeTrace.points) ? activeTrace.points : [];
             if (!Array.isArray(pts2)) {
                 pts2 = [];
             }
 
             if (pts2.length) {
                 ensureTracePointsHaveDepthIndex(editCurveId);
-                let bestIdxPt = findPointIndexByDepthIndex(pts2, idx);
-                let bestDy = Infinity;
-                if (bestIdxPt < 0) {
-                    bestIdxPt = 0;
-                    bestDy = Math.abs(pts2[0][1] - yImg);
-                    for (let i = 1; i < pts2.length; i++) {
-                        const dy = Math.abs(pts2[i][1] - yImg);
-                        if (dy < bestDy) {
-                            bestDy = dy;
-                            bestIdxPt = i;
-                        }
-                    }
-                } else {
-                    bestDy = Math.abs(pts2[bestIdxPt][1] - yImg);
-                }
+                const picked = findEditablePointIndex(pts2, clampedX, yImg, editCurveId, { maxYDist: 14, maxDist: 24 });
+                const bestIdxPt = picked.pointIndex;
+                const bestDy = (bestIdxPt >= 0 && Array.isArray(pts2[bestIdxPt])) ? Math.abs(pts2[bestIdxPt][1] - yImg) : Infinity;
 
                 if (bestIdxPt >= 0 && bestDy <= 10) {
                     pts2[bestIdxPt][0] = clampedX;
+                    pts2[bestIdxPt][1] = yImg;
                     pts2[bestIdxPt][2] = idx;
                 } else {
                     pts2.push([clampedX, yImg, idx]);
@@ -3902,7 +4641,7 @@
                 pts2.push([clampedX, yImg, idx]);
             }
 
-            lastCurveTraces[editCurveId] = pts2;
+            lastCurveTraces[traceKey] = pts2;
             renderCurveTraceOverlays(lastCurveTraces);
         }
 
@@ -3912,6 +4651,9 @@
 
             const curveKey = editCurveDataKey || editCurveId;
             if (!curveKey || !lastDigitizedCurves[curveKey]) return;
+            const targetTrack = findTrackByCurveId(editCurveId);
+            if (!targetTrack) return;
+            if (xImg < Math.min(targetTrack.leftX, targetTrack.rightX) || xImg > Math.max(targetTrack.leftX, targetTrack.rightX)) return;
 
             const depthCfg = lastDepthConfig || getDepthConfigFromInputs();
             const depth = pixelToDepthFromConfig(yImg, depthCfg);
@@ -3930,11 +4672,6 @@
                 return;
             }
 
-            const tracks = getTrackCalibrationsSnapshot();
-            if (!tracks || !tracks.length) return;
-            const targetTrack = tracks.find(t => t.id === editCurveId);
-            if (!targetTrack) return;
-
             // Clamp to track bounds so values stay within scale
             const clampedX = Math.max(targetTrack.leftX, Math.min(targetTrack.rightX, xImg));
             const newValue = pixelToTrackValue(clampedX, targetTrack);
@@ -3945,43 +4682,49 @@
 
             const oldValue = entry.values[idx];
 
-            // For a pure "add point" operation, mark oldTraceX as null so undo removes
-            editUndoStack.push({
-                curveKey,
-                curveId: editCurveId,
-                idx,
-                oldValue,
-                oldTraceX: null,
-                yImg: yImgUse,
-                depthIndex: idx,
-            });
-
-            entry.values[idx] = newValue;
-
             if (!lastCurveTraces) {
                 lastCurveTraces = {};
             }
 
             // Robustly find existing points using shared helper (handles case-sensitivity/keys)
-            const activeTrace = getActiveCurveTracePoints();
+            const activeTrace = getActiveCurveTracePoints(editCurveId);
             let pts = activeTrace.points;
             
             // Determine where to save.
-            let targetKey = activeTrace.traceKey || getActiveCurveTraceKey() || editCurveId;
+            let targetKey = activeTrace.traceKey || getActiveCurveTraceKey(editCurveId) || editCurveId;
+
+            if (Array.isArray(pts) && pts.length) {
+                ensureTracePointsHaveDepthIndex(editCurveId);
+            }
+
+            let existingIdx = Array.isArray(pts)
+                ? findBestPointIndexForDepth(pts, idx, yImgUse, clampedX)
+                : -1;
+            if (existingIdx < 0 && Array.isArray(pts)) {
+                const picked = findEditablePointIndex(pts, clampedX, yImgUse, editCurveId, { maxYDist: 6, maxDist: 18 });
+                existingIdx = picked.pointIndex;
+            }
+            const oldTraceX = (existingIdx >= 0 && Array.isArray(pts?.[existingIdx])) ? pts[existingIdx][0] : null;
+            const oldTraceY = (existingIdx >= 0 && Array.isArray(pts?.[existingIdx])) ? pts[existingIdx][1] : yImgUse;
+
+            // For a pure "add point" operation, mark oldTraceX as null so undo removes
+            editUndoStack.push({
+                curveKey,
+                curveId: editCurveId,
+                traceKey: targetKey,
+                idx,
+                oldValue,
+                oldTraceX,
+                oldTraceY,
+                yImg: yImgUse,
+                depthIndex: idx,
+                pointIndex: existingIdx >= 0 ? existingIdx : null,
+            });
+
+            entry.values[idx] = newValue;
 
             if (!Array.isArray(pts)) {
                 pts = [];
-            }
-
-            // Use Y-based lookup instead of depthIndex to avoid collapsing dense points
-            let existingIdx = -1;
-            const yEpsilon = 1.0; 
-            for (let i = 0; i < pts.length; i++) {
-                const pt = pts[i];
-                if (Array.isArray(pt) && pt.length >= 2 && Math.abs(pt[1] - yImgUse) < yEpsilon) {
-                    existingIdx = i;
-                    break;
-                }
             }
 
             if (existingIdx >= 0) {
@@ -4011,29 +4754,19 @@
             if (!lastDigitizedDepth || !lastDigitizedCurves || !curveKey || !lastDigitizedCurves[curveKey]) {
                 return;
             }
+            const targetTrack = findTrackByCurveId(editCurveId);
+            if (!targetTrack) return;
+            if (xImg < Math.min(targetTrack.leftX, targetTrack.rightX) || xImg > Math.max(targetTrack.leftX, targetTrack.rightX)) return;
 
-            const pts = lastCurveTraces && lastCurveTraces[editCurveId];
+            const activeTrace = getActiveCurveTracePoints(editCurveId);
+            const traceKey = activeTrace.traceKey || getActiveCurveTraceKey(editCurveId) || editCurveId;
+            const pts = activeTrace.points;
             const entry = lastDigitizedCurves[curveKey];
             if (!Array.isArray(pts) || !Array.isArray(entry.values) || !pts.length) return;
 
-            let nearestIndex = -1;
-            let nearestDist2 = Infinity;
-            const maxDist = 20;
-            const maxDist2 = maxDist * maxDist;
-
-            for (let i = 0; i < pts.length; i++) {
-                const pt = pts[i];
-                if (!Array.isArray(pt) || pt.length < 2) continue;
-                const dx = pt[0] - xImg;
-                const dy = pt[1] - yImg;
-                const d2 = dx * dx + dy * dy;
-                if (d2 < nearestDist2) {
-                    nearestDist2 = d2;
-                    nearestIndex = i;
-                }
-            }
-
-            if (nearestIndex < 0 || nearestDist2 > maxDist2) {
+            const picked = findEditablePointIndex(pts, xImg, yImg, editCurveId, { maxYDist: 14, maxDist: 24 });
+            const nearestIndex = picked.pointIndex;
+            if (nearestIndex < 0) {
                 return;
             }
 
@@ -4062,6 +4795,7 @@
             editUndoStack.push({
                 curveKey: curveKey,
                 curveId: editCurveId,
+                traceKey: traceKey,
                 idx: depthIdx,
                 oldValue: oldValue,
                 oldTraceX: oldTraceX,
@@ -4075,7 +4809,7 @@
 
             // Remove the point from the trace array
             pts.splice(nearestIndex, 1);
-            lastCurveTraces[editCurveId] = pts;
+            lastCurveTraces[traceKey] = pts;
 
             renderCurveTraceOverlays(lastCurveTraces);
         }
@@ -4089,6 +4823,7 @@
 
             if (last.type === 'drag_group_v2') {
                 const { curveKey, curveId, points, values } = last;
+                const traceKey = last.traceKey || curveId;
 
                 if (lastDigitizedCurves && lastDigitizedCurves[curveKey] && Array.isArray(lastDigitizedCurves[curveKey].values)) {
                     const arr = lastDigitizedCurves[curveKey].values;
@@ -4101,8 +4836,8 @@
                     }
                 }
 
-                if (lastCurveTraces && lastCurveTraces[curveId] && Array.isArray(points)) {
-                    const pts = lastCurveTraces[curveId];
+                if (lastCurveTraces && lastCurveTraces[traceKey] && Array.isArray(points)) {
+                    const pts = lastCurveTraces[traceKey];
                     ensureTracePointsHaveDepthIndex(curveId);
                     points.forEach(p => {
                         if (!p || !Number.isInteger(p.oldDepthIndex)) return;
@@ -4132,6 +4867,7 @@
             // Handle Drag Group Undo (multi-point rubber-band edit)
             if (last.type === 'drag_group') {
                 const { curveKey, curveId, neighbors } = last;
+                const traceKey = last.traceKey || curveId;
 
                 if (lastDigitizedCurves && lastDigitizedCurves[curveKey] && Array.isArray(lastDigitizedCurves[curveKey].values)) {
                     const values = lastDigitizedCurves[curveKey].values;
@@ -4142,8 +4878,8 @@
                     });
                 }
 
-                if (lastCurveTraces && lastCurveTraces[curveId]) {
-                    const pts = lastCurveTraces[curveId];
+                if (lastCurveTraces && lastCurveTraces[traceKey]) {
+                    const pts = lastCurveTraces[traceKey];
                     if (Array.isArray(pts)) {
                         neighbors.forEach(n => {
                             const oldX = n.oldTraceX;
@@ -4179,6 +4915,7 @@
             // Handle Bulk Undo (Eraser)
             if (last.type === 'bulk_delete') {
                 const { curveId, items } = last;
+                const traceKey = last.traceKey || curveId;
                 const curveKey = last.curveKey || editCurveDataKey || curveId;
                 
                 let restoredCount = 0;
@@ -4191,8 +4928,8 @@
                 }
                 
                 // Restore trace points
-                if (lastCurveTraces && lastCurveTraces[curveId]) {
-                    let pts = lastCurveTraces[curveId];
+                if (lastCurveTraces && lastCurveTraces[traceKey]) {
+                    let pts = lastCurveTraces[traceKey];
                     if (Array.isArray(pts)) {
                         ensureTracePointsHaveDepthIndex(curveId);
                         items.forEach(item => {
@@ -4238,7 +4975,7 @@
                             cleanPts.push(pt);
                         }
                         pts = cleanPts;
-                        lastCurveTraces[curveId] = pts;
+                        lastCurveTraces[traceKey] = pts;
                     }
                     renderCurveTraceOverlays(lastCurveTraces);
                 }
@@ -4247,7 +4984,8 @@
             }
 
             // Handle Single Point Undo
-            const { curveKey, curveId, idx, oldValue, oldTraceX, yImg, pointIndex } = last;
+            const { curveKey, curveId, idx, oldValue, oldTraceX, oldTraceY, yImg, pointIndex } = last;
+            const traceKey = last.traceKey || curveId;
 
             // Restore the LAS value
             if (lastDigitizedCurves && lastDigitizedCurves[curveKey] && Array.isArray(lastDigitizedCurves[curveKey].values)) {
@@ -4255,14 +4993,14 @@
             }
 
             // Restore the trace point X (or remove point if it was newly added)
-            if (lastCurveTraces && lastCurveTraces[curveId]) {
-                const pts = lastCurveTraces[curveId];
+            if (lastCurveTraces && lastCurveTraces[traceKey]) {
+                const pts = lastCurveTraces[traceKey];
                 if (Array.isArray(pts) && pts.length) {
                     ensureTracePointsHaveDepthIndex(curveId);
 
                     let bestIdxPt = (Number.isInteger(pointIndex) && pointIndex >= 0 && pointIndex < pts.length)
                         ? pointIndex
-                        : findPointIndexByDepthIndex(pts, idx);
+                        : findBestPointIndexForDepth(pts, idx, Number.isFinite(oldTraceY) ? oldTraceY : yImg, oldTraceX);
 
                     let bestDy = Infinity;
                     if (bestIdxPt < 0) {
@@ -4278,6 +5016,9 @@
                         if (oldTraceX !== null) {
                             // Restore old X
                             pts[bestIdxPt][0] = oldTraceX;
+                            if (Number.isFinite(oldTraceY)) {
+                                pts[bestIdxPt][1] = oldTraceY;
+                            }
                             pts[bestIdxPt][2] = idx;
                         } else {
                             // Point was newly added, remove it
@@ -4285,7 +5026,7 @@
                         }
                     } else if (oldTraceX !== null) {
                         // Deleted point had no current visual match; re-create it
-                        pts.push([oldTraceX, yImg, idx]);
+                        pts.push([oldTraceX, Number.isFinite(oldTraceY) ? oldTraceY : yImg, idx]);
                         // Resort to keep order
                         pts.sort((a, b) => a[1] - b[1]);
                     }
@@ -4301,8 +5042,15 @@
             if (!lastDigitizedDepth || !lastDigitizedCurves || !curveKey || !lastDigitizedCurves[curveKey]) {
                 return false;
             }
+            const targetTrack = findTrackByCurveId(editCurveId);
+            if (!targetTrack) return false;
+            if (xImg < Math.min(targetTrack.leftX, targetTrack.rightX) || xImg > Math.max(targetTrack.leftX, targetTrack.rightX)) {
+                return false;
+            }
 
-            let pts = lastCurveTraces && lastCurveTraces[editCurveId];
+            const activeTrace = getActiveCurveTracePoints(editCurveId);
+            const traceKey = activeTrace.traceKey || getActiveCurveTraceKey(editCurveId) || editCurveId;
+            let pts = activeTrace.points;
             const entry = lastDigitizedCurves[curveKey];
             if (!Array.isArray(pts) || !Array.isArray(entry.values)) {
                 return false;
@@ -4330,36 +5078,39 @@
                     }
                 }
             }
-            pts = cleanPts;
-            lastCurveTraces[editCurveId] = pts;
-
-            // Find the closest point to where user clicked
-            let nearestIdx = -1;
-            let nearestDist2 = Infinity;
-            const maxDist = 20;
-            const maxDist2 = maxDist * maxDist;
-
-            for (let i = 0; i < pts.length; i++) {
-                const pt = pts[i];
-                const dx = pt[0] - xImg;
-                const dy = pt[1] - yImg;
-                const d2 = dx * dx + dy * dy;
-                if (d2 < nearestDist2) {
-                    nearestDist2 = d2;
-                    nearestIdx = i;
+            const dedupedPts = [];
+            const depthRowToIndex = new Map();
+            for (const curr of cleanPts) {
+                if (!Array.isArray(curr) || curr.length < 2) continue;
+                const dIdx = (curr.length >= 3 && Number.isInteger(curr[2])) ? curr[2] : null;
+                if (dIdx == null) {
+                    dedupedPts.push(curr);
+                    continue;
+                }
+                if (!depthRowToIndex.has(dIdx)) {
+                    depthRowToIndex.set(dIdx, dedupedPts.length);
+                    dedupedPts.push(curr);
+                    continue;
+                }
+                const prevIdx = depthRowToIndex.get(dIdx);
+                const prev = dedupedPts[prevIdx];
+                const prevScore = Math.abs(prev[1] - yImg) * 4 + Math.abs(prev[0] - xImg);
+                const currScore = Math.abs(curr[1] - yImg) * 4 + Math.abs(curr[0] - xImg);
+                if (currScore < prevScore) {
+                    dedupedPts[prevIdx] = curr;
                 }
             }
+            pts = dedupedPts;
+            lastCurveTraces[traceKey] = pts;
+
+            const picked = findEditablePointIndex(pts, xImg, yImg, editCurveId, { maxYDist: 16, maxDist: 24 });
+            const nearestIdx = picked.pointIndex;
 
             // If close to an existing point, start a drag with minimal rubber-band (±1 neighbor)
-            if (nearestIdx >= 0 && nearestDist2 <= maxDist2) {
+            if (nearestIdx >= 0) {
                 const depthCfg = lastDepthConfig || getDepthConfigFromInputs();
 
                 // Cache the target track
-                const tracks = getTrackCalibrationsSnapshot();
-                if (!tracks || !tracks.length) return false;
-                const targetTrack = tracks.find(t => t.id === editCurveId);
-                if (!targetTrack) return false;
-
                 // Build neighbor set with wider window for smooth Gaussian falloff
                 // Wider window (±8) prevents kinks at the boundary of the edit region
                 const neighbors = [];
@@ -4404,6 +5155,7 @@
                 editDragState = {
                     curveId: editCurveId,
                     curveKey: curveKey,
+                    traceKey: traceKey,
                     centerIndex: nearestIdx,
                     pointIndex: nearestIdx,
                     depthIndex: centerDepthIdx,
@@ -4824,9 +5576,7 @@
         async function applySnapToCurve(state) {
             if (!state || !state.curveId) return;
             
-            const tracks = getTrackCalibrationsSnapshot();
-            if (!tracks || !tracks.length) return;
-            const targetTrack = tracks.find(t => t.id === state.curveId);
+            const targetTrack = findTrackByCurveId(state.curveId);
             if (!targetTrack) return;
             const trackModeForSnap = (function () {
                 try {
@@ -4841,8 +5591,9 @@
             if (!lastDigitizedCurves || !lastDigitizedCurves[curveKey]) return;
             const entry = lastDigitizedCurves[curveKey];
             
-            if (!lastCurveTraces || !lastCurveTraces[state.curveId]) return;
-            const pts = lastCurveTraces[state.curveId];
+            const traceKey = state.traceKey || getActiveCurveTraceKey(state.curveId) || state.curveId;
+            if (!lastCurveTraces || !lastCurveTraces[traceKey]) return;
+            const pts = lastCurveTraces[traceKey];
 
             ensureTracePointsHaveDepthIndex(state.curveId);
 
@@ -5423,6 +6174,14 @@
             // When edit mode is enabled, clicks/drag adjust the selected curve
             // instead of starting new selections.
             if (editMode && editCurveId) {
+                const clickedTrack = getTrackUnderImageX(xImg);
+                if (!clickedTrack) {
+                    event.preventDefault();
+                    return;
+                }
+                if (normalizeCurveKey(clickedTrack.id) !== normalizeCurveKey(editCurveId)) {
+                    setActiveEditCurve(clickedTrack.id, { refreshList: true });
+                }
                 if (event.button === 2) {
                     return;
                 }
@@ -5647,7 +6406,9 @@
                     const y2 = Math.max(eraserStart.y, yImg);
                     
                     // Delete points in box
-                    const pts = lastCurveTraces[editCurveId];
+                    const activeTrace = getActiveCurveTracePoints(editCurveId);
+                    const traceKey = activeTrace.traceKey || getActiveCurveTraceKey(editCurveId) || editCurveId;
+                    const pts = activeTrace.points;
                     const curveKey = editCurveDataKey || editCurveId;
                     const entry = curveKey && lastDigitizedCurves ? lastDigitizedCurves[curveKey] : null; // LAS data
                     
@@ -5709,12 +6470,13 @@
                         
                         if (deletedItems.length > 0) {
                             // Apply changes to trace array
-                            lastCurveTraces[editCurveId] = newPts;
+                            lastCurveTraces[traceKey] = newPts;
                             
                             // Push bulk undo
                             editUndoStack.push({
                                 type: 'bulk_delete',
                                 curveId: editCurveId,
+                                traceKey: traceKey,
                                 curveKey: curveKey,
                                 items: deletedItems
                             });
@@ -5738,11 +6500,11 @@
                     const state = editDragState;
                     const curveKey = state ? (state.curveKey || state.curveId) : null;
                     const curveId = state ? state.curveId : null;
-                    const pts = (curveId && lastCurveTraces) ? lastCurveTraces[curveId] : null;
+                    const traceKey = state ? (state.traceKey || getActiveCurveTraceKey(curveId) || curveId) : null;
+                    const pts = (traceKey && lastCurveTraces) ? lastCurveTraces[traceKey] : null;
                     const entry = (curveKey && lastDigitizedCurves) ? lastDigitizedCurves[curveKey] : null;
                     const depthCfg = lastDepthConfig || getDepthConfigFromInputs();
-                    const tracks = getTrackCalibrationsSnapshot();
-                    const targetTrack = tracks ? tracks.find(t => t.id === curveId) : null;
+                    const targetTrack = findTrackByCurveId(curveId);
 
                     if (state && curveKey && curveId && Array.isArray(pts) && entry && Array.isArray(entry.values) && depthCfg && targetTrack && Array.isArray(lastDigitizedDepth)) {
                         ensureTracePointsHaveDepthIndex(curveId);
@@ -5836,6 +6598,7 @@
                             type: 'drag_group_v2',
                             curveKey,
                             curveId,
+                            traceKey,
                             points: pointsUndo,
                             values: valuesUndo,
                         });
@@ -5848,12 +6611,12 @@
                 if (smoothToggle && smoothToggle.checked) {
                     try {
                         const state = editDragState;
-                        if (state && Array.isArray(lastCurveTraces?.[state.curveId])) {
-                            const pts = lastCurveTraces[state.curveId];
+                        const traceKey = state ? (state.traceKey || getActiveCurveTraceKey(state.curveId) || state.curveId) : null;
+                        if (state && traceKey && Array.isArray(lastCurveTraces?.[traceKey])) {
+                            const pts = lastCurveTraces[traceKey];
                             const curveKey = state.curveKey || state.curveId;
                             const entry = curveKey && lastDigitizedCurves ? lastDigitizedCurves[curveKey] : null;
-                            const tracks = getTrackCalibrationsSnapshot();
-                            const targetTrack = tracks ? tracks.find(t => t.id === state.curveId) : null;
+                            const targetTrack = findTrackByCurveId(state.curveId);
                             if (entry && targetTrack) {
                                 _applyPostDragSmooth(state.centerIndex ?? state.pointIndex ?? 0, pts, entry, targetTrack);
                             }
@@ -5876,7 +6639,8 @@
                     try {
                         const curveId = savedState.curveId;
                         const curveKey = savedState.curveKey || savedState.curveId;
-                        const pts = (curveId && lastCurveTraces) ? lastCurveTraces[curveId] : null;
+                        const traceKey = savedState.traceKey || getActiveCurveTraceKey(curveId) || curveId;
+                        const pts = (traceKey && lastCurveTraces) ? lastCurveTraces[traceKey] : null;
                         const depthCfg = lastDepthConfig || getDepthConfigFromInputs();
                         if (curveId && curveKey && Array.isArray(pts) && depthCfg && Array.isArray(lastDigitizedDepth)) {
                             ensureTracePointsHaveDepthIndex(curveId);
@@ -6175,6 +6939,294 @@
             }
         }
 
+        function isGenericHeaderTrackName(name) {
+            const text = String(name || '').trim();
+            if (!text) return true;
+            return /^track\s*\d+$/i.test(text);
+        }
+
+        const HEADER_METADATA_KEY_GROUPS = [
+            ['well'],
+            ['comp', 'company'],
+            ['api'],
+            ['date'],
+            ['fld', 'field'],
+            ['loc', 'location'],
+            ['county'],
+            ['state'],
+            ['prov', 'province'],
+            ['srvc', 'service', 'service_company'],
+            ['uwi'],
+        ];
+
+        function getCanonicalHeaderMetadata(metadata) {
+            if (!metadata || typeof metadata !== 'object') return {};
+            const canonical = {};
+            for (const group of HEADER_METADATA_KEY_GROUPS) {
+                const targetKey = group[0];
+                for (const key of group) {
+                    const value = String(metadata[key] || '').trim();
+                    if (value) {
+                        canonical[targetKey] = value;
+                        break;
+                    }
+                }
+            }
+            return canonical;
+        }
+
+        function mergeHeaderMetadataValues(...metadataItems) {
+            const merged = {};
+            metadataItems.forEach((item) => {
+                const canonical = getCanonicalHeaderMetadata(item);
+                Object.entries(canonical).forEach(([key, value]) => {
+                    if (!merged[key] && value) merged[key] = value;
+                });
+            });
+            return Object.keys(merged).length ? merged : null;
+        }
+
+        function getHeaderMetadataFieldCount(metadata) {
+            return Object.keys(getCanonicalHeaderMetadata(metadata)).length;
+        }
+
+        function applyHeaderMetadataToInputs(metadata) {
+            const canonical = getCanonicalHeaderMetadata(metadata);
+            const fieldMap = {
+                well: 'headerWell',
+                comp: 'headerComp',
+                api: 'headerApi',
+                date: 'headerDate',
+                fld: 'headerFld',
+                loc: 'headerLoc',
+                county: 'headerCnty',
+                state: 'headerState',
+                prov: 'headerProv',
+                srvc: 'headerSrvc',
+            };
+            Object.entries(fieldMap).forEach(([key, elementId]) => {
+                const el = document.getElementById(elementId);
+                if (el && canonical[key]) {
+                    el.value = canonical[key];
+                }
+            });
+        }
+
+        function analyzeHeaderTracks(tracks) {
+            const list = Array.isArray(tracks) ? tracks.filter(Boolean) : [];
+            const hasNumericHeaderValue = (value) => {
+                if (value === null || value === undefined) return false;
+                if (typeof value === 'string' && !value.trim()) return false;
+                const num = Number(value);
+                return Number.isFinite(num);
+            };
+            const genericNameCount = list.filter((track) => isGenericHeaderTrackName(track?.name)).length;
+            const allNamesGeneric = list.length > 0 && genericNameCount === list.length;
+            const meaningfulTracks = list.filter((track) => {
+                const name = String(track?.name || '').trim();
+                const hasMeaningfulName = !!name && !isGenericHeaderTrackName(name);
+                const hasScale = hasNumericHeaderValue(track?.scale_min) || hasNumericHeaderValue(track?.scale_max);
+                const hasUnit = !!String(track?.unit || '').trim();
+                const hasColor = !!String(track?.color_hint || '').trim();
+                const hasHotSide = !!String(track?.hot_side || '').trim();
+                if (allNamesGeneric) {
+                    return false;
+                }
+                return hasMeaningfulName || hasScale || hasUnit || hasColor || hasHotSide;
+            });
+            const namedCount = list.filter((track) => !isGenericHeaderTrackName(track?.name)).length;
+            const scaleCount = list.filter((track) => hasNumericHeaderValue(track?.scale_min) || hasNumericHeaderValue(track?.scale_max)).length;
+            const unitCount = list.filter((track) => !!String(track?.unit || '').trim()).length;
+            const qualityScore =
+                meaningfulTracks.length * 100 +
+                namedCount * 25 +
+                scaleCount * 12 +
+                unitCount * 8;
+            return {
+                totalCount: list.length,
+                meaningfulCount: meaningfulTracks.length,
+                namedCount,
+                scaleCount,
+                unitCount,
+                meaningfulTracks,
+                qualityScore,
+                genericOnly: list.length > 0 && meaningfulTracks.length === 0,
+            };
+        }
+
+        function normalizeHeaderCaptureResult(data) {
+            if (!data || typeof data !== 'object') return null;
+            const metadata = getCanonicalHeaderMetadata(data.header_metadata);
+            const trackInfo = analyzeHeaderTracks(data.tracks || []);
+            return {
+                tracks: Array.isArray(data.tracks) ? data.tracks : [],
+                headerMetadata: Object.keys(metadata).length ? metadata : null,
+                metadataScore: Object.keys(metadata).length,
+                trackInfo,
+                fallbackMode: data?.raw_layout?.fallback || null,
+                rawData: data,
+            };
+        }
+
+        function resolveHeaderCaptureResults(results) {
+            const valid = (Array.isArray(results) ? results : []).filter(Boolean);
+            if (!valid.length) return null;
+
+            const metadataCandidates = valid
+                .filter((result) => result.metadataScore > 0)
+                .sort((a, b) => {
+                    if (b.metadataScore !== a.metadataScore) return b.metadataScore - a.metadataScore;
+                    return (a.fallbackMode ? 1 : 0) - (b.fallbackMode ? 1 : 0);
+                });
+
+            const mergedMetadata = mergeHeaderMetadataValues(...metadataCandidates.map((result) => result.headerMetadata));
+
+            const trackCandidates = valid
+                .filter((result) => result.trackInfo.meaningfulCount > 0)
+                .sort((a, b) => {
+                    if (b.trackInfo.qualityScore !== a.trackInfo.qualityScore) return b.trackInfo.qualityScore - a.trackInfo.qualityScore;
+                    return (a.fallbackMode ? 1 : 0) - (b.fallbackMode ? 1 : 0);
+                });
+
+            const bestTrackResult = trackCandidates[0] || null;
+            const anyTracksDetected = valid.some((result) => result.trackInfo.totalCount > 0);
+            const genericTrackCount = valid.reduce((count, result) => count + (result.trackInfo.genericOnly ? result.trackInfo.totalCount : 0), 0);
+
+            return {
+                metadata: mergedMetadata,
+                metadataScore: getHeaderMetadataFieldCount(mergedMetadata),
+                tracks: bestTrackResult ? bestTrackResult.tracks : [],
+                trackInfo: bestTrackResult ? bestTrackResult.trackInfo : analyzeHeaderTracks([]),
+                anyTracksDetected,
+                genericTrackCount,
+                usedTrackFallback: !!(bestTrackResult && bestTrackResult.fallbackMode),
+            };
+        }
+
+        function applyResolvedHeaderCapture(result) {
+            if (!result) return false;
+
+            const metadata = result.metadata || null;
+            const tracks = Array.isArray(result.tracks) ? result.tracks : [];
+            const meaningfulTrackCount = result.trackInfo?.meaningfulCount || 0;
+
+            headerMetadata = metadata;
+            if (metadata) {
+                applyHeaderMetadataToInputs(metadata);
+            }
+
+            if (meaningfulTrackCount > 0) {
+                headerTracks = tracks;
+                applyHeaderTracksToCurveInputs(tracks);
+            } else {
+                headerTracks = null;
+            }
+
+            const summaryEl = document.getElementById('headerSelectionSummary');
+            if (summaryEl) {
+                const metaBits = [];
+                if (metadata?.well) metaBits.push(`WELL=${metadata.well}`);
+                if (metadata?.comp) metaBits.push(`COMP=${metadata.comp}`);
+                if (metadata?.fld) metaBits.push(`FLD=${metadata.fld}`);
+                if (metadata?.state) metaBits.push(`STATE=${metadata.state}`);
+                const metaText = metaBits.length ? ` Meta: ${metaBits.join(' | ')}` : '';
+
+                if (meaningfulTrackCount > 0) {
+                    const names = tracks.map((track) => track?.name || '?').join(', ');
+                    const appliedCount = Math.min(6, tracks.length);
+                    summaryEl.textContent = `Header captured: ${tracks.length} track(s) — ${names}. Applied the first ${appliedCount} track(s) to Step 4.${metaText}`;
+                } else if (metadata) {
+                    if (result.genericTrackCount > 0) {
+                        summaryEl.textContent = `Header fields captured.${metaText} Skipped ${result.genericTrackCount} unlabeled track(s), so Step 4 was not auto-filled.`;
+                    } else {
+                        summaryEl.textContent = `Header fields captured.${metaText} No labeled tracks were found to pre-fill Step 4.`;
+                    }
+                } else if (result.anyTracksDetected) {
+                    summaryEl.textContent = `Detected unlabeled track boxes, but skipped Step 4 prefill because the header labels/scales were not readable.`;
+                } else {
+                    summaryEl.textContent = 'Header capture found no usable fields or labeled tracks. Try a clearer selection.';
+                }
+            }
+
+            if (meaningfulTrackCount > 0 && metadata) {
+                showStatus(`✓ Header captured: ${tracks.length} track(s) and header fields detected.`, 'success');
+            } else if (meaningfulTrackCount > 0) {
+                showStatus(`✓ Header captured: ${tracks.length} track(s) detected.`, 'success');
+            } else if (metadata) {
+                showStatus('✓ Header fields captured. No readable labeled tracks were found for Step 4.', 'info');
+            } else if (result.anyTracksDetected) {
+                showStatus('Detected track boxes, but the header labels were not readable enough to pre-fill Step 4.', 'warning');
+            } else {
+                showStatus('No usable header fields or labeled tracks were detected. Try a larger or clearer header selection.', 'warning');
+            }
+
+            headerRegion = null;
+            clearHeaderRegionOverlay();
+            return true;
+        }
+
+        async function requestHeaderCaptureFromRegion(region) {
+            if (!uploadedImage || !imageWidth || !imageHeight || !region) {
+                return { success: false, error: 'No header region selected.' };
+            }
+
+            const left = Number(region.left_px);
+            const right = Number(region.right_px);
+            const top = Number(region.top_px);
+            const bottom = Number(region.bottom_px);
+
+            if (!Number.isFinite(left) || !Number.isFinite(right) || !Number.isFinite(top) || !Number.isFinite(bottom) ||
+                right <= left || bottom <= top) {
+                return { success: false, error: 'Invalid header region coordinates.' };
+            }
+
+            const resp = await fetch('/api/auto_layout', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    image: uploadedImage,
+                    region: {
+                        left_px: left,
+                        right_px: right,
+                        top_px: top,
+                        bottom_px: bottom
+                    },
+                    treat_region_as_header: true
+                })
+            });
+
+            const data = await resp.json();
+            if (!data.success) {
+                return { success: false, error: data.error || 'Unknown error', data };
+            }
+
+            const normalized = normalizeHeaderCaptureResult(data);
+            return {
+                success: true,
+                ...normalized,
+            };
+        }
+
+        function applyHeaderTracksToCurveInputs(tracks) {
+            if (!Array.isArray(tracks) || !tracks.length) return;
+            const numCurvesInput = document.getElementById('numCurves');
+            if (numCurvesInput) {
+                numCurvesInput.value = Math.min(6, Math.max(1, tracks.length));
+            }
+
+            const tracksForInputs = tracks.slice(0, 6).map((t) => {
+                const left = Math.round(Number(t && t.left_px));
+                const right = Math.round(Number(t && t.right_px));
+                return [left, right];
+            }).filter((pair) => Number.isFinite(pair[0]) && Number.isFinite(pair[1]) && pair[1] > pair[0]);
+
+            generateCurveInputs(tracksForInputs.length ? tracksForInputs : null);
+            refreshTrackOverlaysFromCurves();
+            updateCurveScaleHints();
+            renderCurveListView();
+            if (typeof syncStep5Advanced === 'function') syncStep5Advanced();
+        }
+
         function applySuggestedType(curveIndex, suggestedType, isAutoFix = false) {
             const typeEl = document.getElementById(`type${curveIndex}`);
             if (!typeEl) return;
@@ -6353,19 +7405,50 @@
             renderHeaderRegionOverlay();
             const summaryEl = document.getElementById('headerSelectionSummary');
             if (summaryEl) summaryEl.textContent = 'Auto-extracting header (scanning top + bottom)...';
+            showStatus('⏳ Analyzing header/key region with AI...', 'info');
 
-            await aiCaptureHeaderFromRegion();
+            try {
+                const captureResults = [];
+                const topResult = await requestHeaderCaptureFromRegion(headerRegion);
+                if (topResult.success) {
+                    captureResults.push(topResult);
+                }
 
-            // --- Also scan bottom 50% for footer-style headers (e.g. ATR logs) ---
-            const bottomStart = Math.floor(imageHeight * 0.50);
-            if (bottomStart < imageHeight - 10) {
-                headerRegion = {
-                    left_px: 0,
-                    right_px: imageWidth,
-                    top_px: bottomStart,
-                    bottom_px: imageHeight
-                };
-                await aiCaptureHeaderFromRegion();
+                // --- Also scan bottom 50% for footer-style headers (e.g. ATR logs) ---
+                const bottomStart = Math.floor(imageHeight * 0.50);
+                if (bottomStart < imageHeight - 10) {
+                    headerRegion = {
+                        left_px: 0,
+                        right_px: imageWidth,
+                        top_px: bottomStart,
+                        bottom_px: imageHeight
+                    };
+                    const bottomResult = await requestHeaderCaptureFromRegion(headerRegion);
+                    if (bottomResult.success) {
+                        captureResults.push(bottomResult);
+                    }
+                }
+
+                const resolvedResult = resolveHeaderCaptureResults(captureResults);
+                if (!resolvedResult) {
+                    showStatus('Header analysis failed: no usable fields or labeled tracks were found.', 'warning');
+                    if (summaryEl) {
+                        summaryEl.textContent = 'Header capture failed. Try again with a clearer selection.';
+                    }
+                    headerRegion = null;
+                    clearHeaderRegionOverlay();
+                    return;
+                }
+
+                applyResolvedHeaderCapture(resolvedResult);
+            } catch (e) {
+                console.error('Auto header capture error:', e);
+                showStatus('Header capture failed due to network error.', 'error');
+                if (summaryEl) {
+                    summaryEl.textContent = 'Header capture failed. Try again.';
+                }
+                headerRegion = null;
+                clearHeaderRegionOverlay();
             }
         }
 
@@ -6375,112 +7458,18 @@
                 return;
             }
 
-            const left = Number(headerRegion.left_px);
-            const right = Number(headerRegion.right_px);
-            const top = Number(headerRegion.top_px);
-            const bottom = Number(headerRegion.bottom_px);
-
-            if (!Number.isFinite(left) || !Number.isFinite(right) || !Number.isFinite(top) || !Number.isFinite(bottom) ||
-                right <= left || bottom <= top) {
-                showStatus('Invalid header region coordinates.', 'error');
-                return;
-            }
-
             showStatus('⏳ Analyzing header/key region with AI...', 'info');
-
             try {
-                const resp = await fetch('/api/auto_layout', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        image: uploadedImage,
-                        region: {
-                            left_px: left,
-                            right_px: right,
-                            top_px: top,
-                            bottom_px: bottom
-                        },
-                        treat_region_as_header: true
-                    })
-                });
-
-                const data = await resp.json();
-                if (!data.success) {
-                    showStatus(`Header analysis failed: ${data.error || 'Unknown error'}`, 'error');
+                const result = await requestHeaderCaptureFromRegion(headerRegion);
+                if (!result.success) {
+                    showStatus(`Header analysis failed: ${result.error || 'Unknown error'}`, 'error');
                     const summaryEl = document.getElementById('headerSelectionSummary');
                     if (summaryEl) {
                         summaryEl.textContent = 'Header capture failed. Try again with a clearer selection.';
                     }
                     return;
                 }
-
-                // Even if there are no tracks, we might still have header metadata.
-                // We should process it before returning due to lack of tracks.
-                headerMetadata = (data && data.header_metadata) ? data.header_metadata : null;
-
-                if (headerMetadata) {
-                    if (headerMetadata.well) document.getElementById('headerWell').value = headerMetadata.well;
-                    if (headerMetadata.comp) document.getElementById('headerComp').value = headerMetadata.comp;
-                    if (headerMetadata.company) document.getElementById('headerComp').value = headerMetadata.company;
-                    if (headerMetadata.api) document.getElementById('headerApi').value = headerMetadata.api;
-                    if (headerMetadata.date) document.getElementById('headerDate').value = headerMetadata.date;
-                    if (headerMetadata.fld) document.getElementById('headerFld').value = headerMetadata.fld;
-                    if (headerMetadata.field) document.getElementById('headerFld').value = headerMetadata.field;
-                    if (headerMetadata.loc) document.getElementById('headerLoc').value = headerMetadata.loc;
-                    if (headerMetadata.location) document.getElementById('headerLoc').value = headerMetadata.location;
-                    if (headerMetadata.county) document.getElementById('headerCnty').value = headerMetadata.county;
-                    if (headerMetadata.state) document.getElementById('headerState').value = headerMetadata.state;
-                    if (headerMetadata.prov) document.getElementById('headerProv').value = headerMetadata.prov;
-                    if (headerMetadata.province) document.getElementById('headerProv').value = headerMetadata.province;
-                    if (headerMetadata.srvc) document.getElementById('headerSrvc').value = headerMetadata.srvc;
-                    if (headerMetadata.service) document.getElementById('headerSrvc').value = headerMetadata.service;
-                }
-
-                const tracks = data.tracks || [];
-                if (!tracks.length) {
-                    if (headerMetadata) {
-                        showStatus('Found header info but no curve tracks. Try a larger manual selection if needed.', 'info');
-                        const summaryEl = document.getElementById('headerSelectionSummary');
-                        if (summaryEl) {
-                            summaryEl.textContent = 'Populated header fields, but no tracks detected.';
-                        }
-                    } else {
-                        showStatus('No tracks or info detected in header region. Try selecting a larger area.', 'warning');
-                        const summaryEl = document.getElementById('headerSelectionSummary');
-                        if (summaryEl) {
-                            summaryEl.textContent = 'No tracks found in header. Try again.';
-                        }
-                        headerRegion = null;
-                        clearHeaderRegionOverlay();
-                    }
-                    return;
-                }
-
-                // Store the detected header tracks
-                headerTracks = tracks;
-
-                // Update summary
-                const summaryEl = document.getElementById('headerSelectionSummary');
-                if (summaryEl) {
-                    const names = tracks.map(t => t.name || '?').join(', ');
-                    const metaBits = [];
-                    try {
-                        if (headerMetadata && typeof headerMetadata === 'object') {
-                            if (headerMetadata.well) metaBits.push(`WELL=${headerMetadata.well}`);
-                            if (headerMetadata.comp) metaBits.push(`COMP=${headerMetadata.comp}`);
-                            if (headerMetadata.fld) metaBits.push(`FLD=${headerMetadata.fld}`);
-                            if (headerMetadata.state) metaBits.push(`STATE=${headerMetadata.state}`);
-                        }
-                    } catch (e) {
-                        // ignore
-                    }
-                    const metaText = metaBits.length ? ` Meta: ${metaBits.join(' | ')}` : '';
-                    summaryEl.textContent = `Header captured: ${tracks.length} track(s) — ${names}. These will pre-fill Step 4 curves.${metaText}`;
-                }
-
-                showStatus(`✓ Header captured: ${tracks.length} track(s) detected.`, 'success');
-                headerRegion = null;
-                clearHeaderRegionOverlay();
+                applyResolvedHeaderCapture(resolveHeaderCaptureResults([result]));
             } catch (e) {
                 console.error('Header capture error:', e);
                 showStatus('Header capture failed due to network error.', 'error');
@@ -7325,6 +8314,10 @@
                 // Get OCR-detected display name independently (from label_text or label_mnemonic)
                 const ocrDisplayName = hint && (hint.label_text || hint.label_mnemonic) ? 
                     (hint.label_text || hint.label_mnemonic) : null;
+                const headerDisplayName = (headerTrack && headerTrack.name && !isGenericHeaderTrackName(headerTrack.name))
+                    ? String(headerTrack.name).trim()
+                    : null;
+                const visibleDisplayName = ocrDisplayName || headerDisplayName || displayNames[i] || ('CURVE' + (i + 1));
 
                 // Build defaults for LAS mnemonic/unit: start from type defaults,
                 // then let OCR/header overrides apply.
@@ -7341,6 +8334,9 @@
                         unit: headerTrack.unit || defaults.unit || ''
                     };
                 }
+                const visibleUnit = (headerTrack && headerTrack.unit)
+                    ? String(headerTrack.unit)
+                    : (defaults.unit || displayUnits[i] || '');
 
                 // Decide initial scale values (left/right) for this curve.
                 // Prefer explicit header track scale_min/scale_max when present,
@@ -7395,7 +8391,7 @@
 
                 const modeColorMap = { black:'#334155', auto:'#94a3b8', red:'#ef4444', blue:'#3b82f6', green:'#22c55e', cyan:'#06b6d4', magenta:'#d946ef', yellow:'#eab308', orange:'#f97316', purple:'#a855f7' };
                 const dotColor = modeColorMap[recommendedMode] || '#94a3b8';
-                const curveLabel = ocrDisplayName || displayNames[i] || ('Curve ' + (i + 1));
+                const curveLabel = visibleDisplayName;
 
                 const curveDiv = document.createElement('div');
                 curveDiv.className = 'curve-config';
@@ -7438,11 +8434,11 @@
                             </div>
                             <div class="field">
                                 <label for="name${i}">Name</label>
-                                <input type="text" id="name${i}" placeholder="Label" value="${ocrDisplayName || displayNames[i] || 'CURVE' + (i + 1)}">
+                                <input type="text" id="name${i}" placeholder="Label" value="${visibleDisplayName}">
                             </div>
                             <div class="field">
                                 <label for="unit${i}">Unit</label>
-                                <input type="text" id="unit${i}" placeholder="Unit" value="${displayUnits[i] || ''}">
+                                <input type="text" id="unit${i}" placeholder="Unit" value="${visibleUnit}">
                             </div>
                             <div class="field">
                                 <label for="leftPx${i}">Left px</label>
@@ -8598,6 +9594,17 @@
                 ensureOverlaySettingsForCurve(name);
                 const curveSettings = getOverlaySettingsForCurve(name);
                 const isLocked = !!(curveSettings && curveSettings.locked);
+                const normalizeTraceKey = (value) => String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '');
+                const traceKeyNorm = normalizeTraceKey(name);
+                const trackMeta = (tracks && Array.isArray(tracks))
+                    ? (tracks.find(t => t && t.id === name) ||
+                       tracks.find(t => t && String(t.id || '').toUpperCase() === String(name || '').toUpperCase()) ||
+                       tracks.find(t => t && normalizeTraceKey(t.id) === traceKeyNorm) ||
+                       tracks.find(t => t && normalizeTraceKey(t.name) === traceKeyNorm) ||
+                       tracks.find(t => t && normalizeTraceKey(t.displayName) === traceKeyNorm))
+                    : null;
+                const trackMode = trackMeta && trackMeta.mode ? String(trackMeta.mode).toLowerCase() : '';
+                const isBlackLikeMode = !trackMode || trackMode === 'black' || trackMode === 'auto';
 
                 // If "All (unlocked)" is selected, strictly enforce the global slider values for rendering
                 // regardless of individual lock state. This matches user expectation that the
@@ -8624,9 +9631,8 @@
                 const highContrastOverlay = curveStyle === 'high';
 
                 // Per-curve visibility toggle (defaults to visible)
-                if (tracks && Array.isArray(tracks)) {
-                    const track = tracks.find(t => t && t.id === name);
-                    const idx = track && Number.isInteger(track.index) ? track.index : null;
+                if (trackMeta) {
+                    const idx = Number.isInteger(trackMeta.index) ? trackMeta.index : null;
                     if (idx != null) {
                         const showEl = document.getElementById(`showTrace${idx}`);
                         if (showEl && showEl.checked === false) {
@@ -8637,9 +9643,8 @@
 
                 let lineCoreColor = '#ff00ff';
                 let pointFillColor = '#00ffff';
-                if (tracks && Array.isArray(tracks)) {
-                    const track = tracks.find(t => t && t.id === name);
-                    const idx = track && Number.isInteger(track.index) ? track.index : null;
+                if (trackMeta) {
+                    const idx = Number.isInteger(trackMeta.index) ? trackMeta.index : null;
                     if (idx != null) {
                         const lineEl = document.getElementById(`lineColor${idx}`);
                         const ptEl = document.getElementById(`pointColor${idx}`);
@@ -8683,6 +9688,9 @@
                     return xDom >= (viewLeft - visibleMarginPx) && xDom <= (viewRight + visibleMarginPx);
                 });
                 if (sortedPoints.length < 2) continue;
+                // Black traces need to show the actual traced crests, not a
+                // browser-smoothed approximation of them.
+                const renderPoints = sortedPoints;
 
                 // Draw chain
                 if (showLine) {
@@ -8690,8 +9698,18 @@
                     // Stick thickness comes from the Line height slider (fallback to Line).
                     const mainThickness = Math.max(0.1, effectiveLineWidth);
                     const stickThickness = Math.max(0.1, effectiveLineHeight);
-                    const stickLen = Math.max(2.0, effectiveLineLength);
+                    const stickLen = isBlackLikeMode
+                        ? Math.max(1.5, Math.min(3.0, effectiveLineLength * 0.25))
+                        : Math.max(2.0, effectiveLineLength);
                     const halfStick = stickLen * 0.5;
+                    const renderStickSegments = false;
+                    const allowShelfBridge = !isBlackLikeMode;
+                    const shouldBreakVisualBridge = (p0, p1, pts, leftIdx, rightIdx) => {
+                        if (!isImplausibleJump(p0, p1)) return false;
+                        if (!allowShelfBridge) return true;
+                        return !isShelfTransition(pts, leftIdx, rightIdx) &&
+                            !isSteppedPlateauTransition(pts, leftIdx, rightIdx);
+                    };
 
                     // First, draw a thin connecting polyline to guarantee continuity.
                     if (sortedPoints.length >= 2) {
@@ -8699,17 +9717,20 @@
                         ctx.setLineDash([]);
                         ctx.lineJoin = 'round';
                         ctx.lineCap = 'round';
-                        const connectorW = Math.max(0.6, mainThickness);
+                        const connectorW = isBlackLikeMode
+                            ? Math.max(0.7, mainThickness * 0.9)
+                            : Math.max(0.6, mainThickness);
                         ctx.lineWidth = connectorW;
+                        ctx.globalAlpha = isBlackLikeMode ? 0.92 : 1.0;
                         ctx.strokeStyle = lineCoreColor;
                         ctx.beginPath();
                         
                         let isNewSegment = true;
                         const maxGapYDom = 15.0 * scaleY; // ~15 image pixels
                         
-                        for (let i = 0; i < sortedPoints.length; i++) {
-                            const xDom = (sortedPoints[i][0] * scaleX);
-                            const yDom = (sortedPoints[i][1] * scaleY);
+                        for (let i = 0; i < renderPoints.length; i++) {
+                            const xDom = (renderPoints[i][0] * scaleX);
+                            const yDom = (renderPoints[i][1] * scaleY);
                             
                             if (isNewSegment) {
                                 ctx.moveTo(xDom, yDom);
@@ -8720,8 +9741,12 @@
                             
                             // Check gap to next point; if too large, break the line
                             if (i < sortedPoints.length - 1) {
+                                const pNext = sortedPoints[i + 1];
                                 const nextYDom = (sortedPoints[i+1][1] * scaleY);
-                                if (Math.abs(nextYDom - yDom) > maxGapYDom) {
+                                if (
+                                    Math.abs(nextYDom - yDom) > maxGapYDom ||
+                                    shouldBreakVisualBridge(sortedPoints[i], pNext, sortedPoints, i, i + 1)
+                                ) {
                                     isNewSegment = true;
                                 }
                             }
@@ -8732,7 +9757,7 @@
 
                     // Render as horizontal sticks at each sample so all micro-segments stay parallel to the bottom.
                     // If "Main line only" is enabled, we skip sticks (but still allow points).
-                    if (mainLineOnly) {
+                    if (mainLineOnly || isBlackLikeMode || !renderStickSegments) {
                         // fall through so points can still render
                     } else {
 
@@ -8775,9 +9800,7 @@
                         // Break if jump is implausible or if vertical gap is too large (true missing data)
                         if (
                             Math.abs(dy) > maxGapYImg || 
-                            (isImplausibleJump(p0, p1) &&
-                            !isShelfTransition(sortedPoints, i, i + 1) &&
-                            !isSteppedPlateauTransition(sortedPoints, i, i + 1))
+                            shouldBreakVisualBridge(p0, p1, sortedPoints, i, i + 1)
                         ) continue;
                         const domDist = Math.hypot(domDx, domDy);
                         if (domDist <= desiredDomStep) continue;
@@ -8880,12 +9903,16 @@
                 // Draw dots with outline for visibility
                 // Use slider value for point size
                 if (showPoints && !fastForThisCurve) {
-                    const step = fastMode ? Math.max(3, Math.ceil(sortedPoints.length / 300)) : 3;
-                    const r = Math.max(0.1, (curveSettings && Number.isFinite(curveSettings.pointSize)) ? curveSettings.pointSize : (overlayPointSize || 1.2));
-                    for (let i = 0; i < sortedPoints.length; i += step) {
-                        const xImg = sortedPoints[i][0];
-                        const yImg = sortedPoints[i][1];
-                        const dIdx = (Array.isArray(sortedPoints[i]) && Number.isInteger(sortedPoints[i][2])) ? sortedPoints[i][2] : null;
+                    const baseStep = fastMode ? Math.max(3, Math.ceil(renderPoints.length / 300)) : 3;
+                    const step = isBlackLikeMode ? Math.max(baseStep, 5) : baseStep;
+                    const pointScale = isBlackLikeMode ? 0.72 : 1.0;
+                    const r = Math.max(0.1, ((curveSettings && Number.isFinite(curveSettings.pointSize)) ? curveSettings.pointSize : (overlayPointSize || 1.2)) * pointScale);
+                    const pointHaloAlpha = isBlackLikeMode ? 0.18 : 0.35;
+                    const pointCoreAlpha = isBlackLikeMode ? 0.72 : 0.9;
+                    for (let i = 0; i < renderPoints.length; i += step) {
+                        const xImg = renderPoints[i][0];
+                        const yImg = renderPoints[i][1];
+                        const dIdx = (Array.isArray(renderPoints[i]) && Number.isInteger(renderPoints[i][2])) ? renderPoints[i][2] : null;
                         const isPinned = (dIdx != null) ? isDepthIndexPinned(name, dIdx) : false;
                         let xDom = (xImg * scaleX);
                         let yDom = (yImg * scaleY);
@@ -8950,12 +9977,12 @@
                         } else {
                             // Subtle but clear: small light halo + solid dot
                             ctx.save();
-                            ctx.globalAlpha = 0.35;
+                            ctx.globalAlpha = pointHaloAlpha;
                             ctx.beginPath();
                             ctx.arc(xDom, yDom, r + (isPinned ? 0.7 : 0.35), 0, Math.PI * 2);
                             ctx.fillStyle = '#ffffff';
                             ctx.fill();
-                            ctx.globalAlpha = 0.9;
+                            ctx.globalAlpha = pointCoreAlpha;
                             ctx.beginPath();
                             ctx.arc(xDom, yDom, r, 0, Math.PI * 2);
                             ctx.fillStyle = isPinned ? '#ff0000' : pointFillColor;
@@ -10295,11 +11322,3 @@
     </script>
 </body>
 </html>
-
-
-
-
-
-
-
-
