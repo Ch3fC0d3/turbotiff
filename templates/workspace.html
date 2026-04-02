@@ -1876,6 +1876,65 @@
             return key ? key.toUpperCase() : '';
         }
 
+        function normalizeTraceAliasKey(value) {
+            return String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '');
+        }
+
+        function pushUniqueCurveAlias(target, value) {
+            const raw = String(value || '').trim();
+            if (!raw) return;
+            const norm = normalizeTraceAliasKey(raw);
+            if (!norm) return;
+            if (!target.some(existing => normalizeTraceAliasKey(existing) === norm)) {
+                target.push(raw);
+            }
+        }
+
+        function collectCurveAliases(curveId) {
+            const aliases = [];
+            const normalized = normalizeCurveKey(curveId);
+            pushUniqueCurveAlias(aliases, curveId);
+            if (!normalized) return aliases;
+
+            const track = findTrackByCurveId(normalized);
+            if (track) {
+                pushUniqueCurveAlias(aliases, track.id);
+                pushUniqueCurveAlias(aliases, track.name);
+                pushUniqueCurveAlias(aliases, track.displayName);
+                if (curveIndexToTraceKey && Number.isInteger(track.index)) {
+                    pushUniqueCurveAlias(aliases, curveIndexToTraceKey[track.index]);
+                }
+            }
+
+            const found = findDigitizedCurveEntry(normalized);
+            if (found) {
+                pushUniqueCurveAlias(aliases, found.key);
+            }
+
+            const configCurves = (typeof lastDigitizeRequestConfig !== 'undefined' &&
+                lastDigitizeRequestConfig &&
+                Array.isArray(lastDigitizeRequestConfig.curves))
+                ? lastDigitizeRequestConfig.curves
+                : null;
+            if (configCurves) {
+                let curveCfg = null;
+                if (track && Number.isInteger(track.index) && track.index >= 0 && track.index < configCurves.length) {
+                    curveCfg = configCurves[track.index];
+                }
+                if (!curveCfg) {
+                    curveCfg = findCurveConfigById(configCurves, normalized);
+                }
+                if (curveCfg) {
+                    pushUniqueCurveAlias(aliases, curveCfg.las_mnemonic);
+                    pushUniqueCurveAlias(aliases, curveCfg.name);
+                    pushUniqueCurveAlias(aliases, curveCfg.display_name);
+                    pushUniqueCurveAlias(aliases, curveCfg.type);
+                }
+            }
+
+            return aliases;
+        }
+
         function getActiveCurveTraceKey(curveId = null) {
             const candidates = [curveId, editCurveId, editCurveDataKey];
             for (const candidate of candidates) {
@@ -1933,6 +1992,16 @@
         function getTrackUnderImageX(xImg) {
             const tracks = getTrackCalibrationsSnapshot();
             if (!Array.isArray(tracks) || !Number.isFinite(xImg)) return null;
+            if (editMode && editCurveId) {
+                const selectedTrack = findTrackByCurveId(editCurveId);
+                if (!selectedTrack) return null;
+                const left = Number(selectedTrack.leftX);
+                const right = Number(selectedTrack.rightX);
+                if (!Number.isFinite(left) || !Number.isFinite(right)) return null;
+                return (xImg >= Math.min(left, right) && xImg <= Math.max(left, right))
+                    ? selectedTrack
+                    : null;
+            }
             return tracks.find((track) => {
                 if (!track) return false;
                 const left = Number(track.leftX);
@@ -1965,6 +2034,16 @@
             }
             if (typeof renderCurveListView === 'function' && options.refreshList !== false) {
                 renderCurveListView();
+            }
+            try {
+                if (editMode && lastDigitizedCurves && lastDigitizedDepth) {
+                    rebuildCurveTraceFromDigitized(nextId);
+                    if (lastCurveTraces) {
+                        renderCurveTraceOverlays(lastCurveTraces);
+                    }
+                }
+            } catch (err) {
+                console.warn('Failed to rebuild selected edit curve trace', err);
             }
             return true;
         }
@@ -3534,6 +3613,137 @@
             return leftX + frac * (rightX - leftX);
         }
 
+        function getPixelYForDepthIndex(depthIndex, depthCfg = null) {
+            if (!Number.isInteger(depthIndex) || depthIndex < 0) return null;
+            if (!Array.isArray(lastDigitizedDepth) || depthIndex >= lastDigitizedDepth.length) return null;
+            const cfg = depthCfg || lastDepthConfig || getDepthConfigFromInputs();
+            if (!cfg) return null;
+            return depthToPixelFromConfig(lastDigitizedDepth[depthIndex], cfg);
+        }
+
+        function isMissingDigitizedValue(value, nullSentinel = lastNullValue) {
+            if (value === null || value === undefined) return true;
+            if (!Number.isFinite(value)) return true;
+            return Number.isFinite(nullSentinel) && value === nullSentinel;
+        }
+
+        function fillDeletedDepthSpan(values, startIdx, endIdx, nullSentinel = lastNullValue) {
+            if (!Array.isArray(values) || !values.length) return false;
+            let start = Number.isInteger(startIdx) ? startIdx : -1;
+            let end = Number.isInteger(endIdx) ? endIdx : -1;
+            if (start < 0 || end < 0) return false;
+            if (end < start) {
+                const tmp = start;
+                start = end;
+                end = tmp;
+            }
+            start = Math.max(0, start);
+            end = Math.min(values.length - 1, end);
+
+            let left = start - 1;
+            while (left >= 0 && isMissingDigitizedValue(values[left], nullSentinel)) left -= 1;
+
+            let right = end + 1;
+            while (right < values.length && isMissingDigitizedValue(values[right], nullSentinel)) right += 1;
+
+            const hasLeft = left >= 0 && !isMissingDigitizedValue(values[left], nullSentinel);
+            const hasRight = right < values.length && !isMissingDigitizedValue(values[right], nullSentinel);
+            if (!hasLeft && !hasRight) return false;
+
+            for (let idx = start; idx <= end; idx++) {
+                if (hasLeft && hasRight) {
+                    const t = (idx - left) / Math.max(1, right - left);
+                    values[idx] = values[left] + t * (values[right] - values[left]);
+                } else if (hasLeft) {
+                    values[idx] = values[left];
+                } else if (hasRight) {
+                    values[idx] = values[right];
+                }
+            }
+            return true;
+        }
+
+        function buildDisplayTracePointsFromDigitized(curveId, options = {}) {
+            const normalizedId = normalizeCurveKey(curveId || editCurveId || editCurveDataKey);
+            if (!normalizedId) return { traceKey: null, points: null };
+            if (!Array.isArray(lastDigitizedDepth) || !lastDigitizedDepth.length) {
+                return { traceKey: null, points: null };
+            }
+
+            const depthCfg = lastDepthConfig || getDepthConfigFromInputs();
+            const track = findTrackByCurveId(normalizedId);
+            const found = findDigitizedCurveEntry(normalizedId);
+            if (!depthCfg || !track || !found || !found.entry || !Array.isArray(found.entry.values)) {
+                return { traceKey: null, points: null };
+            }
+
+            const traceKey = resolveTraceKeyForCurveId(normalizedId) || found.key || normalizedId;
+            if (!lastCurveTraces || typeof lastCurveTraces !== 'object') {
+                lastCurveTraces = {};
+            }
+
+            const leftBound = Math.min(track.leftX, track.rightX);
+            const rightBound = Math.max(track.leftX, track.rightX);
+            const points = [];
+            const values = found.entry.values;
+            const count = Math.min(values.length, lastDigitizedDepth.length);
+            const displayXs = new Array(count).fill(null);
+
+            for (let depthIndex = 0; depthIndex < count; depthIndex++) {
+                const value = values[depthIndex];
+                if (isMissingDigitizedValue(value)) continue;
+
+                const xImg = trackValueToPixelX(value, track);
+                if (!Number.isFinite(xImg)) continue;
+                displayXs[depthIndex] = clamp(xImg, leftBound, rightBound);
+            }
+
+            let firstValid = -1;
+            let prevValid = -1;
+            for (let depthIndex = 0; depthIndex < count; depthIndex++) {
+                const xImg = displayXs[depthIndex];
+                if (!Number.isFinite(xImg)) continue;
+                if (firstValid < 0) {
+                    firstValid = depthIndex;
+                    for (let fillIdx = 0; fillIdx < depthIndex; fillIdx++) {
+                        displayXs[fillIdx] = xImg;
+                    }
+                } else if (prevValid >= 0 && depthIndex - prevValid > 1) {
+                    const startX = Number(displayXs[prevValid]);
+                    const endX = xImg;
+                    const span = depthIndex - prevValid;
+                    for (let fillIdx = prevValid + 1; fillIdx < depthIndex; fillIdx++) {
+                        const t = (fillIdx - prevValid) / Math.max(1, span);
+                        displayXs[fillIdx] = startX + (endX - startX) * t;
+                    }
+                }
+                prevValid = depthIndex;
+            }
+
+            if (firstValid >= 0 && prevValid >= 0) {
+                const tailX = Number(displayXs[prevValid]);
+                for (let fillIdx = prevValid + 1; fillIdx < count; fillIdx++) {
+                    displayXs[fillIdx] = tailX;
+                }
+            }
+
+            for (let depthIndex = 0; depthIndex < count; depthIndex++) {
+                const xImg = displayXs[depthIndex];
+                const yImg = getPixelYForDepthIndex(depthIndex, depthCfg);
+                if (!Number.isFinite(xImg) || !Number.isFinite(yImg)) continue;
+                points.push([clamp(xImg, leftBound, rightBound), yImg, depthIndex]);
+            }
+
+            if (options.persist !== false) {
+                lastCurveTraces[traceKey] = points;
+            }
+            return { traceKey, points };
+        }
+
+        function rebuildCurveTraceFromDigitized(curveId) {
+            return buildDisplayTracePointsFromDigitized(curveId, { persist: true });
+        }
+
         function valueAtDepth1D(depth, depths, values, nullSentinel) {
             if (!Array.isArray(depths) || !Array.isArray(values) ||
                 depths.length !== values.length || depths.length === 0) {
@@ -3848,10 +4058,14 @@
             if (!curveId || !lastCurveTraces || typeof lastCurveTraces !== 'object') {
                 return null;
             }
-            if (Array.isArray(lastCurveTraces[curveId])) return curveId;
-            const upper = String(curveId).trim().toUpperCase();
+            const aliases = collectCurveAliases(curveId);
+            for (const alias of aliases) {
+                if (Array.isArray(lastCurveTraces[alias])) return alias;
+            }
+            const aliasNorms = aliases.map(normalizeTraceAliasKey).filter(Boolean);
             for (const key of Object.keys(lastCurveTraces)) {
-                if (String(key).trim().toUpperCase() === upper && Array.isArray(lastCurveTraces[key])) {
+                if (!Array.isArray(lastCurveTraces[key])) continue;
+                if (aliasNorms.includes(normalizeTraceAliasKey(key))) {
                     return key;
                 }
             }
@@ -4581,6 +4795,7 @@
             if (!Number.isFinite(depth)) return;
             const idx = findNearestDepthIndex(depth, lastDigitizedDepth);
             if (!Number.isInteger(idx) || idx < 0) return;
+            const yImgUse = getPixelYForDepthIndex(idx, depthCfg) ?? yImg;
             if (isDepthIndexPinned(editCurveId, idx)) {
                 showStatus('Point is pinned; unpin before editing.', 'info');
                 return;
@@ -4596,23 +4811,23 @@
             // Save old value for undo
             const oldValue = entry.values[idx];
             let oldTraceX = null;
-            let oldTraceY = yImg;
+            let oldTraceY = yImgUse;
             let pointIndex = null;
             const activeTrace = getActiveCurveTracePoints(editCurveId);
             const traceKey = activeTrace.traceKey || getActiveCurveTraceKey(editCurveId) || editCurveId;
             const pts = activeTrace.points;
             if (Array.isArray(pts) && pts.length) {
                 ensureTracePointsHaveDepthIndex(editCurveId);
-                const picked = findEditablePointIndex(pts, clampedX, yImg, editCurveId, { maxYDist: 14, maxDist: 24 });
+                const picked = findEditablePointIndex(pts, clampedX, yImgUse, editCurveId, { maxYDist: 14, maxDist: 24 });
                 const bestIdxPt = picked.pointIndex;
-                const bestDy = (bestIdxPt >= 0 && Array.isArray(pts[bestIdxPt])) ? Math.abs(pts[bestIdxPt][1] - yImg) : Infinity;
+                const bestDy = (bestIdxPt >= 0 && Array.isArray(pts[bestIdxPt])) ? Math.abs(pts[bestIdxPt][1] - yImgUse) : Infinity;
                 if (bestIdxPt >= 0 && bestDy <= 10) {
                     oldTraceX = pts[bestIdxPt][0];
                     oldTraceY = pts[bestIdxPt][1];
                     pointIndex = bestIdxPt;
                 }
             }
-            editUndoStack.push({ curveKey, curveId: editCurveId, traceKey, idx, oldValue, oldTraceX, oldTraceY, yImg, depthIndex: idx, pointIndex });
+            editUndoStack.push({ curveKey, curveId: editCurveId, traceKey, idx, oldValue, oldTraceX, oldTraceY, yImg: yImgUse, depthIndex: idx, pointIndex });
 
             entry.values[idx] = newValue;
 
@@ -4642,6 +4857,7 @@
             }
 
             lastCurveTraces[traceKey] = pts2;
+            rebuildCurveTraceFromDigitized(editCurveId);
             renderCurveTraceOverlays(lastCurveTraces);
         }
 
@@ -4662,10 +4878,7 @@
             const idx = findNearestDepthIndex(depth, lastDigitizedDepth);
             if (idx < 0) return;
 
-            // Use raw Y position to allow sub-grid placement (visual smoothness).
-            // Strict snapping to depth grid causes "stops adding" on coarse grids
-            // because multiple clicks map to same Y and get deduped.
-            const yImgUse = yImg;
+            const yImgUse = getPixelYForDepthIndex(idx, depthCfg) ?? yImg;
 
             if (isDepthIndexPinned(editCurveId, idx)) {
                 showStatus('Point is pinned; unpin before adding/editing at this depth.', 'info');
@@ -4744,6 +4957,7 @@
             }
 
             lastCurveTraces[targetKey] = pts;
+            rebuildCurveTraceFromDigitized(editCurveId);
 
             renderCurveTraceOverlays(lastCurveTraces);
         }
@@ -4804,12 +5018,13 @@
                 pointIndex: nearestIndex,
             });
 
-            // Set LAS value to null so LAS rebuild uses the null sentinel
             entry.values[depthIdx] = null;
+            fillDeletedDepthSpan(entry.values, depthIdx, depthIdx, lastNullValue);
 
             // Remove the point from the trace array
             pts.splice(nearestIndex, 1);
             lastCurveTraces[traceKey] = pts;
+            rebuildCurveTraceFromDigitized(editCurveId);
 
             renderCurveTraceOverlays(lastCurveTraces);
         }
@@ -4857,6 +5072,7 @@
                         }
                     });
                     pts.sort((a, b) => a[1] - b[1]);
+                    rebuildCurveTraceFromDigitized(curveId);
                     renderCurveTraceOverlays(lastCurveTraces);
                 }
 
@@ -4905,6 +5121,7 @@
                         });
                         pts.sort((a, b) => a[1] - b[1]);
                     }
+                    rebuildCurveTraceFromDigitized(curveId);
                     renderCurveTraceOverlays(lastCurveTraces);
                 }
 
@@ -4977,6 +5194,7 @@
                         pts = cleanPts;
                         lastCurveTraces[traceKey] = pts;
                     }
+                    rebuildCurveTraceFromDigitized(curveId);
                     renderCurveTraceOverlays(lastCurveTraces);
                 }
                 showStatus(`Undo: restored ${restoredCount} points.`, 'info');
@@ -5031,6 +5249,7 @@
                         pts.sort((a, b) => a[1] - b[1]);
                     }
                 }
+                rebuildCurveTraceFromDigitized(curveId);
                 renderCurveTraceOverlays(lastCurveTraces);
             }
             showStatus(`Undo: restored depth index ${idx} to ${oldValue !== null && oldValue !== undefined ? oldValue.toFixed(2) : 'null'}`, 'info');
@@ -5042,6 +5261,7 @@
             if (!lastDigitizedDepth || !lastDigitizedCurves || !curveKey || !lastDigitizedCurves[curveKey]) {
                 return false;
             }
+            rebuildCurveTraceFromDigitized(editCurveId);
             const targetTrack = findTrackByCurveId(editCurveId);
             if (!targetTrack) return false;
             if (xImg < Math.min(targetTrack.leftX, targetTrack.rightX) || xImg > Math.max(targetTrack.leftX, targetTrack.rightX)) {
@@ -5295,7 +5515,7 @@
             }
 
             const deltaX = xImg - centerN.originalX;
-            const deltaY = yImg - centerN.originalY;
+            const deltaY = 0;
 
             // Check smoothing toggle
             const smoothMode = document.getElementById('smoothEditToggle')?.checked;
@@ -5329,7 +5549,7 @@
                 if (weight < 0.01) return;
 
                 let newX = n.originalX + deltaX * weight;
-                let newY = n.originalY + deltaY * weight * yWeight;
+                let newY = n.originalY;
 
                 if (imgW > 1) {
                     newX = Math.max(0, Math.min(imgW - 1, newX));
@@ -6127,9 +6347,7 @@
             });
         }
         if (viewerScrollEl) viewerScrollEl.addEventListener('scroll', () => {
-            scheduleCurveOverlayRedraw(() => (editMode && editCurveId)
-                ? { focusCurveId: editCurveId, fastMode: true }
-                : undefined);
+            scheduleCurveOverlayRedraw();
         }, { passive: true });
         // Keep overlays aligned if the window or page moves (scroll/resize)
         window.addEventListener('resize', () => scheduleCurveOverlayRedraw());
@@ -6180,7 +6398,9 @@
                     return;
                 }
                 if (normalizeCurveKey(clickedTrack.id) !== normalizeCurveKey(editCurveId)) {
-                    setActiveEditCurve(clickedTrack.id, { refreshList: true });
+                    showStatus(`Edit mode is locked to ${editCurveId}. Change the curve in the dropdown first.`, 'info');
+                    event.preventDefault();
+                    return;
                 }
                 if (event.button === 2) {
                     return;
@@ -6469,6 +6689,28 @@
                         });
                         
                         if (deletedItems.length > 0) {
+                            const deletedDepths = deletedItems
+                                .map(item => item && Number.isInteger(item.idx) ? item.idx : -1)
+                                .filter(idx => idx >= 0)
+                                .sort((a, b) => a - b);
+
+                            if (deletedDepths.length) {
+                                let spanStart = deletedDepths[0];
+                                let spanEnd = deletedDepths[0];
+                                for (let i = 1; i <= deletedDepths.length; i++) {
+                                    const nextIdx = i < deletedDepths.length ? deletedDepths[i] : null;
+                                    if (nextIdx != null && nextIdx <= spanEnd + 1) {
+                                        spanEnd = nextIdx;
+                                        continue;
+                                    }
+                                    fillDeletedDepthSpan(entry.values, spanStart, spanEnd, lastNullValue);
+                                    if (nextIdx != null) {
+                                        spanStart = nextIdx;
+                                        spanEnd = nextIdx;
+                                    }
+                                }
+                            }
+
                             // Apply changes to trace array
                             lastCurveTraces[traceKey] = newPts;
                             
@@ -6480,7 +6722,8 @@
                                 curveKey: curveKey,
                                 items: deletedItems
                             });
-                            
+
+                            rebuildCurveTraceFromDigitized(editCurveId);
                             renderCurveTraceOverlays(lastCurveTraces);
                             showStatus(`Erased ${deletedItems.length} points.`, 'info');
                         }
@@ -6503,14 +6746,7 @@
                     const traceKey = state ? (state.traceKey || getActiveCurveTraceKey(curveId) || curveId) : null;
                     const pts = (traceKey && lastCurveTraces) ? lastCurveTraces[traceKey] : null;
                     const entry = (curveKey && lastDigitizedCurves) ? lastDigitizedCurves[curveKey] : null;
-                    const depthCfg = lastDepthConfig || getDepthConfigFromInputs();
-                    const targetTrack = findTrackByCurveId(curveId);
-
-                    if (state && curveKey && curveId && Array.isArray(pts) && entry && Array.isArray(entry.values) && depthCfg && targetTrack && Array.isArray(lastDigitizedDepth)) {
-                        ensureTracePointsHaveDepthIndex(curveId);
-
-                        const centerIdx = (Number.isInteger(state.centerIndex) ? state.centerIndex : state.pointIndex);
-
+                    if (state && curveKey && curveId && Array.isArray(pts) && entry && Array.isArray(entry.values)) {
                         const pointsUndo = [];
                         const valuesUndoMap = new Map();
 
@@ -6528,71 +6764,6 @@
                             }
                         });
 
-                        const toDelete = [];
-
-                        neighbors.forEach(n => {
-                            if (!n || !Number.isInteger(n.pointIndex)) return;
-                            const pIdx = n.pointIndex;
-                            if (pIdx < 0 || pIdx >= pts.length) return;
-
-                            const xNow = pts[pIdx][0];
-                            const yNow = pts[pIdx][1];
-                            const oldDepthIdx = (Array.isArray(pts[pIdx]) && Number.isInteger(pts[pIdx][2])) ? pts[pIdx][2] : n.depthIndex;
-
-                            if (isDepthIndexPinned(curveId, oldDepthIdx)) {
-                                return;
-                            }
-
-                            const newDepthIdx = (function () {
-                                const depth = pixelToDepthFromConfig(yNow, depthCfg);
-                                if (!Number.isFinite(depth)) return -1;
-                                return findNearestDepthIndex(depth, lastDigitizedDepth);
-                            })();
-                            if (newDepthIdx < 0 || newDepthIdx >= entry.values.length) return;
-
-                            if (isDepthIndexPinned(curveId, newDepthIdx)) {
-                                return;
-                            }
-
-                            if (!valuesUndoMap.has(newDepthIdx)) {
-                                valuesUndoMap.set(newDepthIdx, entry.values[newDepthIdx]);
-                            }
-
-                            const existingIdx = findPointIndexByDepthIndex(pts, newDepthIdx);
-                            if (existingIdx >= 0 && existingIdx !== pIdx) {
-                                if (Number.isInteger(centerIdx) && pIdx === centerIdx) {
-                                    pts[pIdx][2] = newDepthIdx;
-                                    toDelete.push(existingIdx);
-                                } else {
-                                    pts[existingIdx][0] = xNow;
-                                    pts[existingIdx][1] = yNow;
-                                    pts[existingIdx][2] = newDepthIdx;
-                                    toDelete.push(pIdx);
-                                }
-                            } else {
-                                pts[pIdx][2] = newDepthIdx;
-                            }
-
-                            const newVal = pixelToTrackValue(xNow, targetTrack);
-                            if (Number.isFinite(newVal)) {
-                                entry.values[newDepthIdx] = newVal;
-                            }
-
-                            if (Number.isInteger(oldDepthIdx) && oldDepthIdx !== newDepthIdx && oldDepthIdx >= 0 && oldDepthIdx < entry.values.length) {
-                                if (!valuesUndoMap.has(oldDepthIdx)) {
-                                    valuesUndoMap.set(oldDepthIdx, entry.values[oldDepthIdx]);
-                                }
-                                entry.values[oldDepthIdx] = null;
-                            }
-                        });
-
-                        if (toDelete.length) {
-                            toDelete.sort((a, b) => b - a);
-                            toDelete.forEach(i => {
-                                if (i >= 0 && i < pts.length) pts.splice(i, 1);
-                            });
-                        }
-
                         const valuesUndo = Array.from(valuesUndoMap.entries()).map(([idx, oldValue]) => ({ idx, oldValue }));
                         editUndoStack.push({
                             type: 'drag_group_v2',
@@ -6602,9 +6773,11 @@
                             points: pointsUndo,
                             values: valuesUndo,
                         });
+
+                        rebuildCurveTraceFromDigitized(curveId);
                     }
                 } catch (e) {
-                    console.warn('Vertical remap finalize failed', e);
+                    console.warn('Drag finalize failed', e);
                 }
 
                 const smoothToggle = document.getElementById('smoothEditToggle');
@@ -6663,6 +6836,10 @@
                     editDragState = null;
                     try {
                         await applySnapToCurve(savedState);
+                        rebuildCurveTraceFromDigitized(savedState.curveId);
+                        if (lastCurveTraces) {
+                            renderCurveTraceOverlays(lastCurveTraces);
+                        }
                     } catch (err) {
                         console.warn('Snap to curve error:', err);
                     }
@@ -9370,6 +9547,8 @@
 
             const focusCurveId = opts && opts.focusCurveId ? String(opts.focusCurveId) : null;
             const fastMode = !!(opts && opts.fastMode);
+            const editTraceKey = (editMode && editCurveId) ? getActiveCurveTraceKey(editCurveId) : null;
+            const editTraceNorm = editMode && editCurveId ? normalizeCurveKey(editCurveId) : '';
             
             // Check visibility flags robustly
             let showLine = true;
@@ -9415,6 +9594,17 @@
             if (!imageWidth || !imageHeight) {
                 imageWidth = w;
                 imageHeight = h;
+            }
+
+            let tracesToRender = curveTraces;
+            if (editMode && editCurveId) {
+                const activeTrace = getActiveCurveTracePoints(editCurveId);
+                const activeTraceKey = activeTrace.traceKey || getActiveCurveTraceKey(editCurveId) || normalizeCurveKey(editCurveId);
+                if (activeTraceKey && Array.isArray(activeTrace.points)) {
+                    tracesToRender = { [activeTraceKey]: activeTrace.points };
+                } else {
+                    tracesToRender = {};
+                }
             }
 
             // Clip canvas to the visible viewport of the scroll container for crisp rendering
@@ -9583,12 +9773,24 @@
                 ? getTrackCalibrationsSnapshot()
                 : null;
 
-            const curveNames = Object.keys(curveTraces);
+            const curveNames = Object.keys(tracesToRender);
             const globalTarget = getOverlayTargetCurveId();
             const isAllUnlocked = globalTarget === '__all_unlocked__';
 
             for (const name of curveNames) {
-                const points = curveTraces[name] || [];
+                if (editMode && editCurveId) {
+                    const nameNorm = normalizeCurveKey(name);
+                    if (editTraceKey) {
+                        if (name !== editTraceKey) continue;
+                    } else if (nameNorm !== editTraceNorm) {
+                        continue;
+                    }
+                }
+                let points = tracesToRender[name] || [];
+                const rebuiltDisplayTrace = buildDisplayTracePointsFromDigitized(name, { persist: false });
+                if (rebuiltDisplayTrace && Array.isArray(rebuiltDisplayTrace.points) && rebuiltDisplayTrace.points.length) {
+                    points = rebuiltDisplayTrace.points;
+                }
                 if (!points.length) continue;
 
                 ensureOverlaySettingsForCurve(name);
@@ -9655,8 +9857,17 @@
 
                 // In fast drag mode, keep the active curve detailed and draw other curves
                 // in a very lightweight way so they don't "disappear".
-                const isFocus = focusCurveId && name === focusCurveId;
-                const fastForThisCurve = fastMode && !isFocus;
+                const focusNorm = focusCurveId ? normalizeTraceKey(focusCurveId) : '';
+                const isFocus = !!focusNorm && [
+                    name,
+                    trackMeta && trackMeta.id,
+                    trackMeta && trackMeta.name,
+                    trackMeta && trackMeta.displayName,
+                ].some(value => normalizeTraceKey(value) === focusNorm);
+                const fastForThisCurve = fastMode && !editMode && !isFocus;
+                if (fastMode && focusCurveId && !editMode && !isFocus) {
+                    continue;
+                }
 
                 // Sort points by Y (depth) so chain follows the curve properly
                 let sortedPoints = points
@@ -9687,6 +9898,73 @@
                     const xDom = x * scaleX;
                     return xDom >= (viewLeft - visibleMarginPx) && xDom <= (viewRight + visibleMarginPx);
                 });
+                const collapseTraceSamplesByDepth = (pts, curveName) => {
+                    if (!Array.isArray(pts) || pts.length <= 1) return Array.isArray(pts) ? pts : [];
+                    const collapsed = [];
+                    let group = [];
+                    let activeKey = null;
+                    const median = (values) => {
+                        if (!Array.isArray(values) || !values.length) return null;
+                        const sorted = values.slice().sort((a, b) => a - b);
+                        const mid = Math.floor(sorted.length / 2);
+                        return (sorted.length % 2)
+                            ? sorted[mid]
+                            : 0.5 * (sorted[mid - 1] + sorted[mid]);
+                    };
+                    const flush = () => {
+                        if (!group.length) return;
+                        if (group.length === 1) {
+                            collapsed.push(group[0]);
+                            group = [];
+                            return;
+                        }
+                        const valid = group.filter(pt => Array.isArray(pt) && pt.length >= 2 &&
+                            Number.isFinite(pt[0]) && Number.isFinite(pt[1]));
+                        if (!valid.length) {
+                            group = [];
+                            return;
+                        }
+                        const depthCandidates = valid
+                            .map(pt => Number.isInteger(pt[2]) ? pt[2] : null)
+                            .filter(Number.isInteger);
+                        const pinnedDepthIdx = depthCandidates.find(dIdx => isDepthIndexPinned(curveName, dIdx));
+                        const depthIdx = Number.isInteger(pinnedDepthIdx)
+                            ? pinnedDepthIdx
+                            : (depthCandidates.length ? depthCandidates[Math.floor(depthCandidates.length / 2)] : null);
+                        const xs = valid.map(pt => Number(pt[0])).filter(Number.isFinite);
+                        const ys = valid.map(pt => Number(pt[1])).filter(Number.isFinite);
+                        const medianX = median(xs);
+                        let yCanonical = Number.isInteger(depthIdx) ? getPixelYForDepthIndex(depthIdx) : null;
+                        if (!Number.isFinite(yCanonical)) yCanonical = median(ys);
+                        if (!Number.isFinite(medianX) || !Number.isFinite(yCanonical)) {
+                            collapsed.push(valid[0]);
+                            group = [];
+                            return;
+                        }
+                        collapsed.push(Number.isInteger(depthIdx)
+                            ? [medianX, yCanonical, depthIdx]
+                            : [medianX, yCanonical]);
+                        group = [];
+                    };
+                    for (const pt of pts) {
+                        if (!Array.isArray(pt) || pt.length < 2) continue;
+                        const yDom = Number(pt[1]) * scaleY;
+                        const key = Number.isFinite(yDom)
+                            ? `row:${Math.round(yDom)}`
+                            : `row:${Math.round(Number(pt[1]) || 0)}`;
+                        if (activeKey === null || key === activeKey) {
+                            group.push(pt);
+                            activeKey = key;
+                        } else {
+                            flush();
+                            group.push(pt);
+                            activeKey = key;
+                        }
+                    }
+                    flush();
+                    return collapsed;
+                };
+                sortedPoints = collapseTraceSamplesByDepth(sortedPoints, name);
                 if (sortedPoints.length < 2) continue;
                 // Black traces need to show the actual traced crests, not a
                 // browser-smoothed approximation of them.
@@ -9703,15 +9981,9 @@
                         : Math.max(2.0, effectiveLineLength);
                     const halfStick = stickLen * 0.5;
                     const renderStickSegments = false;
-                    const allowShelfBridge = !isBlackLikeMode;
-                    const shouldBreakVisualBridge = (p0, p1, pts, leftIdx, rightIdx) => {
-                        if (!isImplausibleJump(p0, p1)) return false;
-                        if (!allowShelfBridge) return true;
-                        return !isShelfTransition(pts, leftIdx, rightIdx) &&
-                            !isSteppedPlateauTransition(pts, leftIdx, rightIdx);
-                    };
-
-                    // First, draw a thin connecting polyline to guarantee continuity.
+                    // First, draw a thin connecting polyline that always stays
+                    // continuous. The user requirement here is explicit: the
+                    // displayed curve should never show spaces.
                     if (sortedPoints.length >= 2) {
                         ctx.save();
                         ctx.setLineDash([]);
@@ -9724,32 +9996,16 @@
                         ctx.globalAlpha = isBlackLikeMode ? 0.92 : 1.0;
                         ctx.strokeStyle = lineCoreColor;
                         ctx.beginPath();
-                        
-                        let isNewSegment = true;
-                        const maxGapYDom = 15.0 * scaleY; // ~15 image pixels
-                        
-                        for (let i = 0; i < renderPoints.length; i++) {
-                            const xDom = (renderPoints[i][0] * scaleX);
-                            const yDom = (renderPoints[i][1] * scaleY);
-                            
-                            if (isNewSegment) {
-                                ctx.moveTo(xDom, yDom);
-                                isNewSegment = false;
-                            } else {
-                                ctx.lineTo(xDom, yDom);
-                            }
-                            
-                            // Check gap to next point; if too large, break the line
-                            if (i < sortedPoints.length - 1) {
-                                const pNext = sortedPoints[i + 1];
-                                const nextYDom = (sortedPoints[i+1][1] * scaleY);
-                                if (
-                                    Math.abs(nextYDom - yDom) > maxGapYDom ||
-                                    shouldBreakVisualBridge(sortedPoints[i], pNext, sortedPoints, i, i + 1)
-                                ) {
-                                    isNewSegment = true;
-                                }
-                            }
+
+                        const firstX = (renderPoints[0][0] * scaleX);
+                        const firstY = (renderPoints[0][1] * scaleY);
+                        ctx.moveTo(firstX, firstY);
+
+                        for (let i = 1; i < renderPoints.length; i++) {
+                            const currPoint = renderPoints[i];
+                            const xDom = (currPoint[0] * scaleX);
+                            const yDom = (currPoint[1] * scaleY);
+                            ctx.lineTo(xDom, yDom);
                         }
                         ctx.stroke();
                         ctx.restore();

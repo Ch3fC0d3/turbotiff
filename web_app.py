@@ -4889,7 +4889,10 @@ def refine_black_trace_to_dark_run_center(
     base_max_shift = max(1.0, float(max_shift))
     blend = float(np.clip(blend, 0.0, 1.0))
     curve_type_upper = str(curve_type or "").upper()
-    use_hot_bias = hot_side in ("left", "right")
+    # Keep black traces centered on the visible stroke body. The earlier
+    # hot-side bias helped crest picking in some cases, but on real scans it
+    # is the main reason the trace rides the stroke edge and nearby grid rails.
+    use_hot_bias = False
     prev_target = None
 
     for y in range(min(h, xs_ref.size)):
@@ -8870,15 +8873,6 @@ def digitize():
             except Exception:
                 pass
 
-            try:
-                # Once the trace is back on the visible black stroke body,
-                # nudge wide local runs toward the chart-reading side so crest
-                # tips are actually hit instead of averaged through.
-                if curve_type.upper() == "GR":
-                    xs = refine_black_trace_to_hot_side_crests(roi, xs, hot_side=hot_side, curve_type=curve_type)
-            except Exception:
-                pass
-
         # Do not run the old non-GR black smoother here. After the dark-run
         # recenter/hot-side bias pass, even light smoothing pulls RHOB/DT-type
         # traces back toward the inner half of the stroke and weakens the
@@ -8899,12 +8893,26 @@ def digitize():
             s = s.interpolate(method='linear', limit_direction='both', limit=max_gap, limit_area=None)
             # Handle edge cases
             if s.isna().any():
-                s = s.fillna(method='ffill', limit=max_gap).fillna(method='bfill', limit=max_gap)
+                s = s.ffill(limit=max_gap).bfill(limit=max_gap)
             xs = s.to_numpy(dtype=np.float32)
 
         if mode not in colored_modes:
             try:
                 xs = suppress_black_grid_lock_runs(roi, xs, curve_type=curve_type)
+            except Exception:
+                pass
+
+            try:
+                # Finish black mode the same way the successful color path
+                # does: re-center after the grid-lock cleanup, not before it.
+                # This keeps the line on the middle of the visible black ink
+                # instead of on the stroke edge or a nearby rail.
+                xs = refine_to_stroke_centerline(mask, xs, threshold_ratio=0.45, window_size=16)
+            except Exception:
+                pass
+
+            try:
+                xs = recenter_black_trace_post_dp(roi, xs)
             except Exception:
                 pass
 
@@ -9010,22 +9018,24 @@ def digitize():
         vals_out = np.where(np.isnan(vals), null_val, vals).astype(np.float32)
         curve_data[name] = {'unit': unit, 'values': vals_out}
 
-        # Build a sparse set of trace points in original image coordinates for UI overlay
+        # Build a continuous display trace for the UI overlay. The exported LAS
+        # values can still contain nulls, but the visible editing line should
+        # remain continuous rather than showing gaps.
         trace_points = []
         if xs.size > 0:
-            # Only sample from rows where the DP tracer produced a valid X.
-            # This avoids the corner-case where all sampled indices land on
-            # NaNs even though some rows are valid, which would yield an
-            # empty trace and no cyan dots in the UI.
-            valid_rows = np.where(~np.isnan(xs))[0]
+            try:
+                xs_display = pd.Series(xs.astype(np.float32)).interpolate(
+                    method='linear',
+                    limit_direction='both',
+                    limit_area=None,
+                ).to_numpy(dtype=np.float32)
+            except Exception:
+                xs_display = xs
+
+            valid_rows = np.where(~np.isnan(xs_display))[0]
             if valid_rows.size > 0:
-                # Send EVERY single traced point - no sampling at all.
-                # This creates a completely solid line that shows the exact trace.
                 for row_idx in valid_rows:
-                    x_val = xs[row_idx]
-                    # Preserve sub-pixel X precision so the zoomed browser
-                    # overlay stays centered on narrow or thick strokes instead
-                    # of stair-stepping to one side after rounding.
+                    x_val = xs_display[row_idx]
                     x_img = float(left_px) + float(x_val)
                     y_img = float(top + row_idx)
                     trace_points.append([x_img, y_img])
@@ -9506,7 +9516,7 @@ def refine_edit():
                 max_gap = 25
                 s = s.interpolate(method='linear', limit_direction='both', limit=max_gap, limit_area=None)
                 if s.isna().any():
-                    s = s.fillna(method='ffill', limit=max_gap).fillna(method='bfill', limit=max_gap)
+                    s = s.ffill(limit=max_gap).bfill(limit=max_gap)
                 xs_refined = s.to_numpy(dtype=np.float32)
             except Exception:
                 pass
