@@ -6217,7 +6217,10 @@
 
         // Depth anchor & panel/region interaction on image
         const imagePreview = document.getElementById('imagePreview');
-        const imageHitTarget = document.getElementById('overlay') || imagePreview;
+        // The overlay layer intentionally uses pointer-events:none so the
+        // image underneath remains interactive. Bind mouse handlers to the
+        // real image element, not the overlay, or edit tools appear dead.
+        const imageHitTarget = imagePreview || document.getElementById('overlay');
         const mousePixelReadout = document.getElementById('mousePixelReadout');
 
         if (imageHitTarget) imageHitTarget.addEventListener('mousemove', (event) => {
