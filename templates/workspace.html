@@ -1419,26 +1419,18 @@
                                 </div>
 
                                 <div class="control-section">
-                                    <span class="control-title">Length</span>
+                                    <span class="control-title">Point size</span>
                                     <div class="toolbar-slider-row">
-                                        <input type="range" id="lineLengthSlider" min="2" max="80" value="12" step="1" oninput="updateOverlaySize()" />
-                                        <span id="lineLengthLabel" class="hint-text">12</span>
-                                    </div>
-                                </div>
-
-                                <div class="control-section">
-                                    <span class="control-title">Height</span>
-                                    <div class="toolbar-slider-row">
-                                        <input type="range" id="lineHeightSlider" min="0.2" max="12" value="2" step="0.1" oninput="updateOverlaySize()" />
-                                        <span id="lineHeightLabel" class="hint-text">2.0</span>
-                                    </div>
-                                </div>
-
-                                <div class="control-section">
-                                    <span class="control-title">Points</span>
-                                    <div class="toolbar-slider-row">
-                                        <input type="range" id="pointSizeSlider" min="0.1" max="4" value="0.8" step="0.05" oninput="updateOverlaySize()" />
+                                        <input type="range" id="pointSizeSlider" min="0.2" max="4.5" value="0.8" step="0.05" oninput="updateOverlaySize()" />
                                         <span id="pointSizeLabel" class="hint-text">0.8</span>
+                                    </div>
+                                </div>
+
+                                <div class="control-section">
+                                    <span class="control-title">Point qty</span>
+                                    <div class="toolbar-slider-row">
+                                        <input type="range" id="pointCountSlider" min="10" max="2400" value="160" step="10" oninput="updateOverlaySize()" />
+                                        <span id="pointCountLabel" class="hint-text">160</span>
                                     </div>
                                 </div>
 
@@ -2409,10 +2401,18 @@
             setZoom(1.0);
         }
 
+        const DEFAULT_OVERLAY_LINE_LENGTH = 12;
+        const DEFAULT_OVERLAY_LINE_HEIGHT = 2;
+        const DEFAULT_OVERLAY_POINT_RADIUS = 0.8;
+        const DEFAULT_OVERLAY_POINT_COUNT = 160;
+        const MIN_OVERLAY_POINT_COUNT = 10;
+        const MAX_OVERLAY_POINT_COUNT = 2400;
+
         let overlayLineWidth = 2;
-        let overlayLineLength = 12;
-        let overlayLineHeight = 2;
-        let overlayPointSize = 0.8;
+        let overlayLineLength = DEFAULT_OVERLAY_LINE_LENGTH;
+        let overlayLineHeight = DEFAULT_OVERLAY_LINE_HEIGHT;
+        let overlayPointSize = DEFAULT_OVERLAY_POINT_RADIUS;
+        let overlayPointCount = DEFAULT_OVERLAY_POINT_COUNT;
         let overlaySettingsByCurveId = {};
 
         const OVERLAY_SETTINGS_STORAGE_KEY = 'turbotifflas.overlaySettingsByCurveId.v1';
@@ -2471,9 +2471,8 @@
                 if (!window || !window.localStorage) return;
                 const payload = {
                     lineWidth: Number.isFinite(overlayLineWidth) ? overlayLineWidth : null,
-                    lineLength: Number.isFinite(overlayLineLength) ? overlayLineLength : null,
-                    lineHeight: Number.isFinite(overlayLineHeight) ? overlayLineHeight : null,
                     pointSize: Number.isFinite(overlayPointSize) ? overlayPointSize : null,
+                    pointCount: Number.isFinite(overlayPointCount) ? overlayPointCount : null,
                     style: getOverlayStyleFromUi(),
                 };
                 window.localStorage.setItem(OVERLAY_UI_STORAGE_KEY, JSON.stringify(payload));
@@ -2491,34 +2490,29 @@
                 if (!parsed || typeof parsed !== 'object') return;
 
                 const lineSlider = document.getElementById('lineWidthSlider');
-                const lineLengthSlider = document.getElementById('lineLengthSlider');
-                const lineHeightSlider = document.getElementById('lineHeightSlider');
-                const pointSlider = document.getElementById('pointSizeSlider');
+                const pointSizeSlider = document.getElementById('pointSizeSlider');
+                const pointSlider = document.getElementById('pointCountSlider');
 
                 const lineLabel = document.getElementById('lineWidthLabel');
-                const lineLengthLabel = document.getElementById('lineLengthLabel');
-                const lineHeightLabel = document.getElementById('lineHeightLabel');
-                const pointLabel = document.getElementById('pointSizeLabel');
+                const pointSizeLabel = document.getElementById('pointSizeLabel');
+                const pointLabel = document.getElementById('pointCountLabel');
 
                 if (lineSlider && Number.isFinite(parsed.lineWidth)) {
                     lineSlider.value = String(parsed.lineWidth);
                     overlayLineWidth = Number(parsed.lineWidth);
                     if (lineLabel) lineLabel.textContent = overlayLineWidth.toFixed(2);
                 }
-                if (lineLengthSlider && Number.isFinite(parsed.lineLength)) {
-                    lineLengthSlider.value = String(parsed.lineLength);
-                    overlayLineLength = Number(parsed.lineLength);
-                    if (lineLengthLabel) lineLengthLabel.textContent = overlayLineLength.toFixed(0);
+                overlayLineLength = DEFAULT_OVERLAY_LINE_LENGTH;
+                overlayLineHeight = DEFAULT_OVERLAY_LINE_HEIGHT;
+                if (pointSizeSlider && Number.isFinite(parsed.pointSize)) {
+                    overlayPointSize = Math.max(0.2, Math.min(4.5, Number(parsed.pointSize)));
+                    pointSizeSlider.value = String(overlayPointSize);
+                    if (pointSizeLabel) pointSizeLabel.textContent = overlayPointSize.toFixed(2);
                 }
-                if (lineHeightSlider && Number.isFinite(parsed.lineHeight)) {
-                    lineHeightSlider.value = String(parsed.lineHeight);
-                    overlayLineHeight = Number(parsed.lineHeight);
-                    if (lineHeightLabel) lineHeightLabel.textContent = overlayLineHeight.toFixed(1);
-                }
-                if (pointSlider && Number.isFinite(parsed.pointSize)) {
-                    pointSlider.value = String(parsed.pointSize);
-                    overlayPointSize = Number(parsed.pointSize);
-                    if (pointLabel) pointLabel.textContent = overlayPointSize.toFixed(2);
+                if (pointSlider && Number.isFinite(parsed.pointCount)) {
+                    overlayPointCount = getClampedOverlayPointCount(parsed.pointCount);
+                    pointSlider.value = String(overlayPointCount);
+                    if (pointLabel) pointLabel.textContent = overlayPointCount.toFixed(0);
                 }
 
                 if (parsed.style) {
@@ -2564,16 +2558,25 @@
             if (!curveId) return null;
             const key = String(curveId);
             if (overlaySettingsByCurveId && overlaySettingsByCurveId[key]) {
-                return overlaySettingsByCurveId[key];
+                const existing = overlaySettingsByCurveId[key];
+                if (!Number.isFinite(existing.lineWidth)) existing.lineWidth = Number.isFinite(overlayLineWidth) ? overlayLineWidth : 2;
+                existing.lineLength = DEFAULT_OVERLAY_LINE_LENGTH;
+                existing.lineHeight = DEFAULT_OVERLAY_LINE_HEIGHT;
+                if (!Number.isFinite(existing.pointSize)) existing.pointSize = Number.isFinite(overlayPointSize) ? overlayPointSize : DEFAULT_OVERLAY_POINT_RADIUS;
+                if (!Number.isFinite(existing.pointCount)) existing.pointCount = Number.isFinite(overlayPointCount) ? overlayPointCount : DEFAULT_OVERLAY_POINT_COUNT;
+                if (!existing.style) existing.style = getOverlayStyleFromUi();
+                if (typeof existing.locked !== 'boolean') existing.locked = false;
+                return existing;
             }
             if (!overlaySettingsByCurveId || typeof overlaySettingsByCurveId !== 'object') {
                 overlaySettingsByCurveId = {};
             }
             overlaySettingsByCurveId[key] = {
                 lineWidth: Number.isFinite(overlayLineWidth) ? overlayLineWidth : 2,
-                lineLength: Number.isFinite(overlayLineLength) ? overlayLineLength : 12,
-                lineHeight: Number.isFinite(overlayLineHeight) ? overlayLineHeight : 2,
-                pointSize: Number.isFinite(overlayPointSize) ? overlayPointSize : 0.8,
+                lineLength: DEFAULT_OVERLAY_LINE_LENGTH,
+                lineHeight: DEFAULT_OVERLAY_LINE_HEIGHT,
+                pointSize: Number.isFinite(overlayPointSize) ? overlayPointSize : DEFAULT_OVERLAY_POINT_RADIUS,
+                pointCount: Number.isFinite(overlayPointCount) ? overlayPointCount : DEFAULT_OVERLAY_POINT_COUNT,
                 style: getOverlayStyleFromUi(),
                 locked: false,
             };
@@ -2585,9 +2588,10 @@
             if (s) return s;
             return {
                 lineWidth: Number.isFinite(overlayLineWidth) ? overlayLineWidth : 2,
-                lineLength: Number.isFinite(overlayLineLength) ? overlayLineLength : 12,
-                lineHeight: Number.isFinite(overlayLineHeight) ? overlayLineHeight : 2,
-                pointSize: Number.isFinite(overlayPointSize) ? overlayPointSize : 0.8,
+                lineLength: DEFAULT_OVERLAY_LINE_LENGTH,
+                lineHeight: DEFAULT_OVERLAY_LINE_HEIGHT,
+                pointSize: Number.isFinite(overlayPointSize) ? overlayPointSize : DEFAULT_OVERLAY_POINT_RADIUS,
+                pointCount: Number.isFinite(overlayPointCount) ? overlayPointCount : DEFAULT_OVERLAY_POINT_COUNT,
                 style: getOverlayStyleFromUi(),
                 locked: false,
             };
@@ -2630,17 +2634,15 @@
 
         function setOverlayControlsDisabled(disabled) {
             const lineSlider = document.getElementById('lineWidthSlider');
-            const lineLengthSlider = document.getElementById('lineLengthSlider');
-            const lineHeightSlider = document.getElementById('lineHeightSlider');
-            const pointSlider = document.getElementById('pointSizeSlider');
+            const pointSizeSlider = document.getElementById('pointSizeSlider');
+            const pointSlider = document.getElementById('pointCountSlider');
             const chkHigh = document.getElementById('highContrastOverlay');
             const chkCrisp = document.getElementById('crispOverlay');
             const chkCompact = document.getElementById('compactOverlay');
 
             const d = !!disabled;
             if (lineSlider) lineSlider.disabled = d;
-            if (lineLengthSlider) lineLengthSlider.disabled = d;
-            if (lineHeightSlider) lineHeightSlider.disabled = d;
+            if (pointSizeSlider) pointSizeSlider.disabled = d;
             if (pointSlider) pointSlider.disabled = d;
             if (chkHigh) chkHigh.disabled = d;
             if (chkCrisp) chkCrisp.disabled = d;
@@ -2672,33 +2674,28 @@
             setOverlayControlsDisabled(!!settings.locked);
 
             const lineSlider = document.getElementById('lineWidthSlider');
-            const lineLengthSlider = document.getElementById('lineLengthSlider');
-            const lineHeightSlider = document.getElementById('lineHeightSlider');
-            const pointSlider = document.getElementById('pointSizeSlider');
+            const pointSizeSlider = document.getElementById('pointSizeSlider');
+            const pointSlider = document.getElementById('pointCountSlider');
             const lineLabel = document.getElementById('lineWidthLabel');
-            const lineLengthLabel = document.getElementById('lineLengthLabel');
-            const lineHeightLabel = document.getElementById('lineHeightLabel');
-            const pointLabel = document.getElementById('pointSizeLabel');
+            const pointSizeLabel = document.getElementById('pointSizeLabel');
+            const pointLabel = document.getElementById('pointCountLabel');
 
             if (lineSlider && Number.isFinite(settings.lineWidth)) {
                 lineSlider.value = String(settings.lineWidth);
                 overlayLineWidth = Number(settings.lineWidth);
                 if (lineLabel) lineLabel.textContent = overlayLineWidth.toFixed(2);
             }
-            if (lineLengthSlider && Number.isFinite(settings.lineLength)) {
-                lineLengthSlider.value = String(settings.lineLength);
-                overlayLineLength = Number(settings.lineLength);
-                if (lineLengthLabel) lineLengthLabel.textContent = overlayLineLength.toFixed(0);
+            overlayLineLength = DEFAULT_OVERLAY_LINE_LENGTH;
+            overlayLineHeight = DEFAULT_OVERLAY_LINE_HEIGHT;
+            if (pointSizeSlider && Number.isFinite(settings.pointSize)) {
+                overlayPointSize = Math.max(0.2, Math.min(4.5, Number(settings.pointSize)));
+                pointSizeSlider.value = String(overlayPointSize);
+                if (pointSizeLabel) pointSizeLabel.textContent = overlayPointSize.toFixed(2);
             }
-            if (lineHeightSlider && Number.isFinite(settings.lineHeight)) {
-                lineHeightSlider.value = String(settings.lineHeight);
-                overlayLineHeight = Number(settings.lineHeight);
-                if (lineHeightLabel) lineHeightLabel.textContent = overlayLineHeight.toFixed(1);
-            }
-            if (pointSlider && Number.isFinite(settings.pointSize)) {
-                pointSlider.value = String(settings.pointSize);
-                overlayPointSize = Number(settings.pointSize);
-                if (pointLabel) pointLabel.textContent = overlayPointSize.toFixed(2);
+            if (pointSlider && Number.isFinite(settings.pointCount)) {
+                overlayPointCount = getClampedOverlayPointCount(settings.pointCount);
+                pointSlider.value = String(overlayPointCount);
+                if (pointLabel) pointLabel.textContent = overlayPointCount.toFixed(0);
             }
 
             setOverlayStyleUi(settings.style);
@@ -2724,36 +2721,31 @@
 
         function updateOverlaySize() {
             const lineSlider = document.getElementById('lineWidthSlider');
-            const lineLengthSlider = document.getElementById('lineLengthSlider');
-            const lineHeightSlider = document.getElementById('lineHeightSlider');
-            const pointSlider = document.getElementById('pointSizeSlider');
+            const pointSizeSlider = document.getElementById('pointSizeSlider');
+            const pointSlider = document.getElementById('pointCountSlider');
             const lineLabel = document.getElementById('lineWidthLabel');
-            const lineLengthLabel = document.getElementById('lineLengthLabel');
-            const lineHeightLabel = document.getElementById('lineHeightLabel');
-            const pointLabel = document.getElementById('pointSizeLabel');
+            const pointSizeLabel = document.getElementById('pointSizeLabel');
+            const pointLabel = document.getElementById('pointCountLabel');
 
             const next = {
                 lineWidth: lineSlider ? parseFloat(lineSlider.value) : overlayLineWidth,
-                lineLength: lineLengthSlider ? parseFloat(lineLengthSlider.value) : overlayLineLength,
-                lineHeight: lineHeightSlider ? parseFloat(lineHeightSlider.value) : overlayLineHeight,
-                pointSize: pointSlider ? parseFloat(pointSlider.value) : overlayPointSize,
+                pointSize: pointSizeSlider ? parseFloat(pointSizeSlider.value) : overlayPointSize,
+                pointCount: pointSlider ? parseFloat(pointSlider.value) : overlayPointCount,
             };
 
             if (Number.isFinite(next.lineWidth)) {
                 overlayLineWidth = next.lineWidth;
                 if (lineLabel) lineLabel.textContent = overlayLineWidth.toFixed(2);
             }
-            if (Number.isFinite(next.lineLength)) {
-                overlayLineLength = next.lineLength;
-                if (lineLengthLabel) lineLengthLabel.textContent = overlayLineLength.toFixed(0);
-            }
-            if (Number.isFinite(next.lineHeight)) {
-                overlayLineHeight = next.lineHeight;
-                if (lineHeightLabel) lineHeightLabel.textContent = overlayLineHeight.toFixed(1);
-            }
+            overlayLineLength = DEFAULT_OVERLAY_LINE_LENGTH;
+            overlayLineHeight = DEFAULT_OVERLAY_LINE_HEIGHT;
             if (Number.isFinite(next.pointSize)) {
-                overlayPointSize = next.pointSize;
-                if (pointLabel) pointLabel.textContent = overlayPointSize.toFixed(2);
+                overlayPointSize = Math.max(0.2, Math.min(4.5, next.pointSize));
+                if (pointSizeLabel) pointSizeLabel.textContent = overlayPointSize.toFixed(2);
+            }
+            if (Number.isFinite(next.pointCount)) {
+                overlayPointCount = getClampedOverlayPointCount(next.pointCount);
+                if (pointLabel) pointLabel.textContent = overlayPointCount.toFixed(0);
             }
 
             saveOverlayUiStateToStorage();
@@ -2766,9 +2758,10 @@
                 const s = getOverlaySettingsForCurve(curveId);
                 if (!force && s.locked) return false;
                 if (Number.isFinite(next.lineWidth)) s.lineWidth = next.lineWidth;
-                if (Number.isFinite(next.lineLength)) s.lineLength = next.lineLength;
-                if (Number.isFinite(next.lineHeight)) s.lineHeight = next.lineHeight;
-                if (Number.isFinite(next.pointSize)) s.pointSize = next.pointSize;
+                s.lineLength = DEFAULT_OVERLAY_LINE_LENGTH;
+                s.lineHeight = DEFAULT_OVERLAY_LINE_HEIGHT;
+                if (Number.isFinite(next.pointSize)) s.pointSize = overlayPointSize;
+                if (Number.isFinite(next.pointCount)) s.pointCount = overlayPointCount;
                 return true;
             };
 
@@ -2807,9 +2800,8 @@
                 console.log('[updateOverlaySize] Target is All. Updating curves:', Array.from(allIds));
                 console.log('[updateOverlaySize] Global settings:', { 
                     lineWidth: overlayLineWidth, 
-                    lineLength: overlayLineLength, 
-                    lineHeight: overlayLineHeight, 
-                    pointSize: overlayPointSize 
+                    pointSize: overlayPointSize,
+                    pointCount: overlayPointCount 
                 });
 
                 let updatedCount = 0;
@@ -3962,6 +3954,15 @@
                 const defaults = curveTypeDefaults[type] || {};
                 const lasMnemonic = lasMnemonicInput || (defaults.mnemonic || (displayName ? displayName.toUpperCase() : `CURVE${i + 1}`));
                 const lasUnit = lasUnitInput || (defaults.unit || displayUnit);
+                const leftValInput = document.getElementById(`leftVal${i}`);
+                const rightValInput = document.getElementById(`rightVal${i}`);
+                const rawLeftValue = parseFloat(leftValInput?.value || '0');
+                const rawRightValue = parseFloat(rightValInput?.value || '0');
+                const normalizedScale = normalizeScalePairForType(type, rawLeftValue, rawRightValue);
+                if (normalizedScale.corrected) {
+                    if (leftValInput) leftValInput.value = normalizedScale.left;
+                    if (rightValInput) rightValInput.value = normalizedScale.right;
+                }
 
                 let mnemonicKey = String(lasMnemonic || '').toUpperCase().trim();
                 if (!mnemonicKey) mnemonicKey = `CURVE${i + 1}`;
@@ -3983,8 +3984,8 @@
                     las_unit: lasUnit,
                     left_px: parseInt(document.getElementById(`leftPx${i}`)?.value || '0', 10),
                     right_px: parseInt(document.getElementById(`rightPx${i}`)?.value || '0', 10),
-                    left_value: parseFloat(document.getElementById(`leftVal${i}`)?.value || '0'),
-                    right_value: parseFloat(document.getElementById(`rightVal${i}`)?.value || '0'),
+                    left_value: normalizedScale.left,
+                    right_value: normalizedScale.right,
                     mode: document.getElementById(`mode${i}`)?.value || 'black',
                 });
             }
@@ -6108,14 +6109,79 @@
         }
 
         const curveTypeDefaults = {
-            GR:   { mnemonic: 'GR',   unit: 'API' },
-            RHOB: { mnemonic: 'RHOB', unit: 'G/CC' },
-            NPHI: { mnemonic: 'NPHI', unit: 'V/V' },
-            DT:   { mnemonic: 'DTC',  unit: 'US/F' },
-            DTC:  { mnemonic: 'DTC',  unit: 'US/F' },
-            CALI: { mnemonic: 'CALI', unit: 'IN' },
-            SP:   { mnemonic: 'SP',   unit: 'MV' }
+            GR:   { mnemonic: 'GR',   unit: 'API',  leftValue: 0.0,   rightValue: 150.0 },
+            RHOB: { mnemonic: 'RHOB', unit: 'G/CC', leftValue: 1.95,  rightValue: 2.95 },
+            NPHI: { mnemonic: 'NPHI', unit: 'V/V',  leftValue: 0.45,  rightValue: -0.15 },
+            DT:   { mnemonic: 'DTC',  unit: 'US/F', leftValue: 30.0,  rightValue: 110.0 },
+            DTC:  { mnemonic: 'DTC',  unit: 'US/F', leftValue: 30.0,  rightValue: 110.0 },
+            CALI: { mnemonic: 'CALI', unit: 'IN',   leftValue: 6.0,   rightValue: 16.0 },
+            SP:   { mnemonic: 'SP',   unit: 'MV',   leftValue: -100.0, rightValue: 100.0 }
         };
+
+        function getCurveScaleDefaults(typeVal) {
+            const defaults = curveTypeDefaults[String(typeVal || '').toUpperCase()] || null;
+            if (!defaults) return null;
+            if (!Number.isFinite(Number(defaults.leftValue)) || !Number.isFinite(Number(defaults.rightValue))) {
+                return null;
+            }
+            return {
+                left: Number(defaults.leftValue),
+                right: Number(defaults.rightValue),
+            };
+        }
+
+        function canonicalScaleTypeForPair(leftVal, rightVal) {
+            if (!Number.isFinite(leftVal) || !Number.isFinite(rightVal)) return null;
+            const tolerance = 0.06;
+            const preferredTypes = ['GR', 'RHOB', 'NPHI', 'DT', 'CALI', 'SP'];
+            for (const type of preferredTypes) {
+                const defaults = getCurveScaleDefaults(type);
+                if (!defaults) continue;
+                if (Math.abs(leftVal - defaults.left) <= tolerance && Math.abs(rightVal - defaults.right) <= tolerance) {
+                    return type;
+                }
+            }
+            return null;
+        }
+
+        function normalizeScalePairForType(typeVal, leftVal, rightVal) {
+            const targetType = String(typeVal || '').toUpperCase();
+            const defaults = getCurveScaleDefaults(targetType);
+            if (!defaults) {
+                return {
+                    left: leftVal,
+                    right: rightVal,
+                    corrected: false,
+                    matchedOtherType: null,
+                };
+            }
+
+            if (!Number.isFinite(leftVal) || !Number.isFinite(rightVal)) {
+                return {
+                    left: defaults.left,
+                    right: defaults.right,
+                    corrected: true,
+                    matchedOtherType: null,
+                };
+            }
+
+            const currentCanonicalType = canonicalScaleTypeForPair(leftVal, rightVal);
+            if (currentCanonicalType && currentCanonicalType !== targetType) {
+                return {
+                    left: defaults.left,
+                    right: defaults.right,
+                    corrected: true,
+                    matchedOtherType: currentCanonicalType,
+                };
+            }
+
+            return {
+                left: leftVal,
+                right: rightVal,
+                corrected: false,
+                matchedOtherType: null,
+            };
+        }
 
         (function initIntroModalOnce() {
             try {
@@ -7100,14 +7166,17 @@
             }
         }
 
-        function syncCurveTypeToLabels(curveIndex) {
+        function syncCurveTypeToLabels(curveIndex, options = {}) {
             const typeEl = document.getElementById(`type${curveIndex}`);
             const lasMnemonicEl = document.getElementById(`lasMnemonic${curveIndex}`);
             const lasUnitEl = document.getElementById(`lasUnit${curveIndex}`);
+            const leftValEl = document.getElementById(`leftVal${curveIndex}`);
+            const rightValEl = document.getElementById(`rightVal${curveIndex}`);
             if (!typeEl || !lasMnemonicEl || !lasUnitEl) return;
 
             const typeVal = typeEl.value;
             const defaults = curveTypeDefaults[typeVal] || {};
+            const syncScaleMode = options && options.syncScale ? String(options.syncScale).toLowerCase() : 'never';
             
             // Only sync LAS mnemonic and unit - NOT display name
             // Display name should be determined independently by AI/OCR
@@ -7116,6 +7185,16 @@
             }
             if (defaults.unit) {
                 lasUnitEl.value = defaults.unit;
+            }
+
+            if ((syncScaleMode === 'auto' || syncScaleMode === 'force') && leftValEl && rightValEl) {
+                const currentLeft = parseFloat(leftValEl.value);
+                const currentRight = parseFloat(rightValEl.value);
+                const normalized = normalizeScalePairForType(typeVal, currentLeft, currentRight);
+                if (syncScaleMode === 'force' || normalized.corrected) {
+                    leftValEl.value = normalized.left;
+                    rightValEl.value = normalized.right;
+                }
             }
         }
 
@@ -8520,7 +8599,8 @@
 
                 // Decide initial scale values (left/right) for this curve.
                 // Prefer explicit header track scale_min/scale_max when present,
-                // otherwise fall back to the standard GR/RHOB/NPHI defaults.
+                // otherwise fall back to the canonical defaults for the chosen
+                // curve type instead of the old per-slot defaults.
                 let leftScaleDefault;
                 let rightScaleDefault;
                 if (headerTrack && Number.isFinite(headerTrack.scale_min) && Number.isFinite(headerTrack.scale_max)) {
@@ -8537,15 +8617,13 @@
                     }
                 }
                 if (leftScaleDefault === undefined || rightScaleDefault === undefined) {
-                    if (i === 0) {
-                        leftScaleDefault = 0;
-                        rightScaleDefault = 150;
-                    } else if (i === 1) {
-                        leftScaleDefault = 1.95;
-                        rightScaleDefault = 2.95;
+                    const scaleDefaults = getCurveScaleDefaults(defaultType);
+                    if (scaleDefaults) {
+                        leftScaleDefault = scaleDefaults.left;
+                        rightScaleDefault = scaleDefaults.right;
                     } else {
-                        leftScaleDefault = 0.45;
-                        rightScaleDefault = -0.15;
+                        leftScaleDefault = 0;
+                        rightScaleDefault = 100;
                     }
                 }
 
@@ -8778,7 +8856,7 @@
                 // #1: Auto-sync type changes to LAS mnemonic/unit
                 if (typeEl) {
                     typeEl.addEventListener('change', () => {
-                        syncCurveTypeToLabels(i);
+                        syncCurveTypeToLabels(i, { syncScale: 'auto' });
                         updateCurveScaleHints();
                         renderCurveListView();
                     });
@@ -9543,6 +9621,98 @@
             }
         }
 
+        function getClampedOverlayPointCount(value) {
+            const numeric = Number(value);
+            if (!Number.isFinite(numeric)) return DEFAULT_OVERLAY_POINT_COUNT;
+            return Math.max(MIN_OVERLAY_POINT_COUNT, Math.min(MAX_OVERLAY_POINT_COUNT, Math.round(numeric)));
+        }
+
+        function buildEvenlySpacedOverlayMarkers(points, targetCount, scaleX, scaleY, curveName) {
+            const source = Array.isArray(points)
+                ? points.filter((pt) => Array.isArray(pt) && pt.length >= 2 && Number.isFinite(pt[0]) && Number.isFinite(pt[1]))
+                : [];
+            if (!source.length) return [];
+            if (source.length === 1) return [source[0]];
+
+            const desiredCount = getClampedOverlayPointCount(targetCount);
+            const cumulative = [0];
+            let totalLength = 0;
+            for (let i = 1; i < source.length; i++) {
+                const prev = source[i - 1];
+                const curr = source[i];
+                const segLength = Math.hypot(
+                    (Number(curr[0]) - Number(prev[0])) * scaleX,
+                    (Number(curr[1]) - Number(prev[1])) * scaleY
+                );
+                totalLength += Number.isFinite(segLength) ? segLength : 0;
+                cumulative.push(totalLength);
+            }
+
+            if (!Number.isFinite(totalLength) || totalLength <= 0.001) {
+                return [source[0], source[source.length - 1]];
+            }
+
+            const sampled = [];
+            let segIdx = 1;
+            const spacing = desiredCount > 1 ? (totalLength / Math.max(1, desiredCount - 1)) : totalLength;
+            for (let markerIdx = 0; markerIdx < desiredCount; markerIdx++) {
+                const targetDist = (markerIdx === desiredCount - 1) ? totalLength : (spacing * markerIdx);
+                while (segIdx < cumulative.length && cumulative[segIdx] < targetDist) {
+                    segIdx += 1;
+                }
+                if (segIdx >= source.length) {
+                    const last = source[source.length - 1];
+                    sampled.push(Array.isArray(last) ? last.slice(0, 3) : last);
+                    continue;
+                }
+
+                const prev = source[Math.max(0, segIdx - 1)];
+                const curr = source[segIdx];
+                const dist0 = cumulative[Math.max(0, segIdx - 1)];
+                const dist1 = cumulative[segIdx];
+                const segSpan = Math.max(0.000001, dist1 - dist0);
+                const t = Math.max(0, Math.min(1, (targetDist - dist0) / segSpan));
+
+                const x = Number(prev[0]) + ((Number(curr[0]) - Number(prev[0])) * t);
+                const y = Number(prev[1]) + ((Number(curr[1]) - Number(prev[1])) * t);
+
+                let depthIdx = null;
+                if (Number.isInteger(prev[2]) && Number.isInteger(curr[2])) {
+                    depthIdx = Math.round(Number(prev[2]) + ((Number(curr[2]) - Number(prev[2])) * t));
+                } else if (Number.isInteger(prev[2])) {
+                    depthIdx = prev[2];
+                } else if (Number.isInteger(curr[2])) {
+                    depthIdx = curr[2];
+                }
+
+                sampled.push(Number.isInteger(depthIdx) ? [x, y, depthIdx] : [x, y]);
+            }
+
+            if (curveName) {
+                for (const pt of source) {
+                    const depthIdx = Number.isInteger(pt[2]) ? pt[2] : null;
+                    if (depthIdx != null && isDepthIndexPinned(curveName, depthIdx)) {
+                        sampled.push(pt.slice(0, 3));
+                    }
+                }
+            }
+
+            sampled.sort((a, b) => Number(a[1]) - Number(b[1]));
+            const deduped = [];
+            for (const pt of sampled) {
+                const last = deduped.length ? deduped[deduped.length - 1] : null;
+                if (!last) {
+                    deduped.push(pt);
+                    continue;
+                }
+                const sameDepthIdx = Number.isInteger(last[2]) && Number.isInteger(pt[2]) && last[2] === pt[2];
+                const nearSameSpot = Math.abs(Number(last[0]) - Number(pt[0])) <= 0.25 && Math.abs(Number(last[1]) - Number(pt[1])) <= 0.25;
+                if (sameDepthIdx || nearSameSpot) continue;
+                deduped.push(pt);
+            }
+            return deduped;
+        }
+
         function renderCurveTraceOverlays(curveTraces, opts) {
             const overlay = document.getElementById('overlay');
             const img = document.getElementById('imagePreview');
@@ -9816,15 +9986,15 @@
                 // global slider controls everything visible.
                 
                 let effectiveLineWidth = (curveSettings && Number.isFinite(curveSettings.lineWidth)) ? curveSettings.lineWidth : (overlayLineWidth || 2);
-                let effectiveLineLength = (curveSettings && Number.isFinite(curveSettings.lineLength)) ? curveSettings.lineLength : (overlayLineLength || 12);
-                let effectiveLineHeight = (curveSettings && Number.isFinite(curveSettings.lineHeight)) ? curveSettings.lineHeight : (overlayLineHeight || 2);
-                let effectivePointSize = (curveSettings && Number.isFinite(curveSettings.pointSize)) ? curveSettings.pointSize : (overlayPointSize || 0.8);
+                let effectiveLineLength = DEFAULT_OVERLAY_LINE_LENGTH;
+                let effectiveLineHeight = DEFAULT_OVERLAY_LINE_HEIGHT;
+                let effectivePointSize = (curveSettings && Number.isFinite(curveSettings.pointSize)) ? curveSettings.pointSize : (overlayPointSize || DEFAULT_OVERLAY_POINT_RADIUS);
+                let effectivePointCount = (curveSettings && Number.isFinite(curveSettings.pointCount)) ? curveSettings.pointCount : (overlayPointCount || DEFAULT_OVERLAY_POINT_COUNT);
 
                 if (isAllUnlocked) {
                     if (Number.isFinite(overlayLineWidth)) effectiveLineWidth = overlayLineWidth;
-                    if (Number.isFinite(overlayLineLength)) effectiveLineLength = overlayLineLength;
-                    if (Number.isFinite(overlayLineHeight)) effectiveLineHeight = overlayLineHeight;
                     if (Number.isFinite(overlayPointSize)) effectivePointSize = overlayPointSize;
+                    if (Number.isFinite(overlayPointCount)) effectivePointCount = overlayPointCount;
                 }
 
                 // Debug log to verify thickness application
@@ -10159,19 +10329,18 @@
                     }
                 }
 
-                // Draw dots with outline for visibility
-                // Use slider value for point size
+                // Draw equally spaced dots along the visible curve.
                 if (showPoints && !fastForThisCurve) {
-                    const baseStep = fastMode ? Math.max(3, Math.ceil(renderPoints.length / 300)) : 3;
-                    const step = isBlackLikeMode ? Math.max(baseStep, 5) : baseStep;
+                    const markerPoints = buildEvenlySpacedOverlayMarkers(renderPoints, effectivePointCount, scaleX, scaleY, name);
+                    if (!markerPoints.length) continue;
                     const pointScale = isBlackLikeMode ? 0.72 : 1.0;
-                    const r = Math.max(0.1, ((curveSettings && Number.isFinite(curveSettings.pointSize)) ? curveSettings.pointSize : (overlayPointSize || 1.2)) * pointScale);
+                    const r = Math.max(0.1, effectivePointSize * pointScale);
                     const pointHaloAlpha = isBlackLikeMode ? 0.18 : 0.35;
                     const pointCoreAlpha = isBlackLikeMode ? 0.72 : 0.9;
-                    for (let i = 0; i < renderPoints.length; i += step) {
-                        const xImg = renderPoints[i][0];
-                        const yImg = renderPoints[i][1];
-                        const dIdx = (Array.isArray(renderPoints[i]) && Number.isInteger(renderPoints[i][2])) ? renderPoints[i][2] : null;
+                    for (let i = 0; i < markerPoints.length; i++) {
+                        const xImg = markerPoints[i][0];
+                        const yImg = markerPoints[i][1];
+                        const dIdx = (Array.isArray(markerPoints[i]) && Number.isInteger(markerPoints[i][2])) ? markerPoints[i][2] : null;
                         const isPinned = (dIdx != null) ? isDepthIndexPinned(name, dIdx) : false;
                         let xDom = (xImg * scaleX);
                         let yDom = (yImg * scaleY);
@@ -10269,7 +10438,8 @@
                 
                 // Use global settings for ML curves since they don't have individual config entries
                 const mlMainThickness = (Number.isFinite(overlayLineWidth) ? overlayLineWidth : 2);
-                const mlPointRadius = (Number.isFinite(overlayPointSize) ? overlayPointSize : 0.8);
+                const mlPointRadius = Number.isFinite(overlayPointSize) ? overlayPointSize : DEFAULT_OVERLAY_POINT_RADIUS;
+                const mlPointCount = getClampedOverlayPointCount(overlayPointCount);
 
                 for (const mlCurve of window.mlPredictedCurves) {
                     if (!mlCurve || !mlCurve.points || !mlCurve.points.length) continue;
@@ -10293,12 +10463,16 @@
                     ctx.stroke();
                     ctx.globalAlpha = 1.0;
                     
-                    // Draw points every few pixels for visibility
-                    // Scale step based on point count to avoid clutter
-                    const pointStep = Math.max(1, Math.floor(mlCurve.points.length / 100));
-                    for (let i = 0; i < mlCurve.points.length; i += pointStep) {
-                        const xDom = (mlCurve.points[i].x * scaleX);
-                        const yDom = (mlCurve.points[i].y * scaleY);
+                    const mlMarkerPoints = buildEvenlySpacedOverlayMarkers(
+                        mlCurve.points.map((pt) => [pt.x, pt.y]),
+                        mlPointCount,
+                        scaleX,
+                        scaleY,
+                        null
+                    );
+                    for (let i = 0; i < mlMarkerPoints.length; i++) {
+                        const xDom = (mlMarkerPoints[i][0] * scaleX);
+                        const yDom = (mlMarkerPoints[i][1] * scaleY);
                         ctx.beginPath();
                         ctx.arc(xDom, yDom, mlPointRadius, 0, Math.PI * 2);
                         ctx.fillStyle = mlColor;
