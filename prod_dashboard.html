@@ -1298,6 +1298,13 @@
         let lastCurveTraces = null;      // last curve_traces overlay returned from backend
         let curveIndexToTraceKey = null; // { [curveIndex:number]: string } mapping from UI curve index to curve_traces key
         let editUndoStack = [];          // stack of { curveKey, idx, oldValue, oldTraceX } for Ctrl+Z
+        const MAX_UNDO_STACK = 50;
+        function pushUndo(entry) {
+            editUndoStack.push(entry);
+            if (editUndoStack.length > MAX_UNDO_STACK) {
+                editUndoStack.splice(0, editUndoStack.length - MAX_UNDO_STACK);
+            }
+        }
 
         let pinnedDepthIndices = new Map();
         let lastMouseImgX = null;
@@ -2679,6 +2686,11 @@
                 headerRegionDrag = false;
                 trackOverlayDrag = null;
                 curveEdgePick = null;
+                // Pre-populate depth indices on all curves so pin rendering works
+                // without needing to do it per-frame in renderCurveTraceOverlays.
+                if (lastCurveTraces) {
+                    Object.keys(lastCurveTraces).forEach(k => ensureTracePointsHaveDepthIndex(k));
+                }
                 setEditModeUI();
                 showStatus(`Edit mode on for curve ${id}. Click inside its track to nudge values at the nearest depth.`, 'info');
             } else {
@@ -2708,14 +2720,39 @@
         }
 
         function ensureTracePointsHaveDepthIndex(curveId) {
-            // Resolve to the active trace/key so depth indices populate even when trace keys differ
-            const { traceKey, points } = getActiveCurveTracePoints();
-            const key = traceKey || curveId || editCurveId;
-            if (!key || !points || !Array.isArray(points) || !points.length) return;
             if (!Array.isArray(lastDigitizedDepth) || !lastDigitizedDepth.length) return;
-
             const depthCfg = lastDepthConfig || getDepthConfigFromInputs();
             if (!depthCfg) return;
+
+            // Resolve points for the specific curveId first; fall back to the
+            // active edit curve only when no direct match is found.
+            let points = null;
+            let key = null;
+            if (curveId && lastCurveTraces) {
+                const direct = lastCurveTraces[curveId];
+                if (Array.isArray(direct) && direct.length) {
+                    points = direct;
+                    key = curveId;
+                } else {
+                    const upper = String(curveId).toUpperCase();
+                    for (const k of Object.keys(lastCurveTraces)) {
+                        if (String(k).toUpperCase() === upper && Array.isArray(lastCurveTraces[k]) && lastCurveTraces[k].length) {
+                            points = lastCurveTraces[k];
+                            key = k;
+                            break;
+                        }
+                    }
+                }
+            }
+            // Fall back to active edit curve if the passed id had no trace data
+            if (!points) {
+                const { traceKey, points: activePts } = getActiveCurveTracePoints();
+                if (Array.isArray(activePts) && activePts.length) {
+                    points = activePts;
+                    key = traceKey || curveId || editCurveId;
+                }
+            }
+            if (!key || !points || !Array.isArray(points) || !points.length) return;
 
             for (let i = 0; i < points.length; i++) {
                 const pt = points[i];
@@ -2730,11 +2767,8 @@
                 }
             }
 
-            // Persist normalized key back into lastCurveTraces
-            if (lastCurveTraces && traceKey && lastCurveTraces[traceKey]) {
-                lastCurveTraces[traceKey] = points;
-            } else if (lastCurveTraces && curveId && lastCurveTraces[curveId]) {
-                lastCurveTraces[curveId] = points;
+            if (lastCurveTraces && key) {
+                lastCurveTraces[key] = points;
             }
         }
 
@@ -2913,7 +2947,7 @@
                 }
                 if (bestIdxPt >= 0 && bestDy <= 10) oldTraceX = pts[bestIdxPt][0];
             }
-            editUndoStack.push({ curveKey, curveId: editCurveId, idx, oldValue, oldTraceX, yImg, depthIndex: idx });
+            pushUndo({ curveKey, curveId: editCurveId, idx, oldValue, oldTraceX, yImg, depthIndex: idx });
 
             entry.values[idx] = newValue;
 
@@ -2997,7 +3031,7 @@
             const oldValue = entry.values[idx];
 
             // For a pure "add point" operation, mark oldTraceX as null so undo removes
-            editUndoStack.push({
+            pushUndo({
                 curveKey,
                 curveId: editCurveId,
                 idx,
@@ -3110,7 +3144,7 @@
             const oldValue = entry.values[depthIdx];
             const oldTraceX = pts[nearestIndex][0];
 
-            editUndoStack.push({
+            pushUndo({
                 curveKey: curveKey,
                 curveId: editCurveId,
                 idx: depthIdx,
@@ -3355,8 +3389,14 @@
 
             let pts = lastCurveTraces && lastCurveTraces[editCurveId];
             const entry = lastDigitizedCurves[curveKey];
-            if (!Array.isArray(pts) || !Array.isArray(entry.values)) {
+            if (!Array.isArray(entry.values)) {
                 return false;
+            }
+            // If trace has no points yet, fall through to click-nudge so the
+            // user can still place values even on an empty trace.
+            if (!Array.isArray(pts) || pts.length === 0) {
+                handleCurveEditClick(xImg, yImg);
+                return true;
             }
 
             ensureTracePointsHaveDepthIndex(editCurveId);
@@ -3495,7 +3535,7 @@
                 const py = _dragPendingY;
                 _dragPendingX = null;
                 _dragPendingY = null;
-                if (px == null || py == null) return;
+                if (px == null || py == null || !editDragState) return;
                 if (editDragState) {
                     editDragState.currentX = px;
                     editDragState.currentY = py;
@@ -4185,6 +4225,8 @@
                     });
                 }
             }
+            // Re-render overlay so the snapped position is visible immediately
+            if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
         }
 
         function saveDepthConfigToSession() {
@@ -4765,7 +4807,7 @@
                             lastCurveTraces[editCurveId] = newPts;
                             
                             // Push bulk undo
-                            editUndoStack.push({
+                            pushUndo({
                                 type: 'bulk_delete',
                                 curveId: editCurveId,
                                 curveKey: curveKey,
@@ -4851,14 +4893,15 @@
 
                             const existingIdx = findPointIndexByDepthIndex(pts, newDepthIdx);
                             if (existingIdx >= 0 && existingIdx !== pIdx) {
+                                // Collision: two points mapping to same depth index.
+                                // Always keep the center point; for non-center neighbors just
+                                // update the depth index without deleting anything so the trace
+                                // array never drains empty after repeated drags.
                                 if (Number.isInteger(centerIdx) && pIdx === centerIdx) {
                                     pts[pIdx][2] = newDepthIdx;
                                     toDelete.push(existingIdx);
                                 } else {
-                                    pts[existingIdx][0] = xNow;
-                                    pts[existingIdx][1] = yNow;
-                                    pts[existingIdx][2] = newDepthIdx;
-                                    toDelete.push(pIdx);
+                                    pts[pIdx][2] = newDepthIdx;
                                 }
                             } else {
                                 pts[pIdx][2] = newDepthIdx;
@@ -4885,7 +4928,7 @@
                         }
 
                         const valuesUndo = Array.from(valuesUndoMap.entries()).map(([idx, oldValue]) => ({ idx, oldValue }));
-                        editUndoStack.push({
+                        pushUndo({
                             type: 'drag_group_v2',
                             curveKey,
                             curveId,
@@ -4958,6 +5001,7 @@
                 } else {
                     editDragState = null;
                 }
+                _dragUpdatePending = false;
             }
 
             if (trackOverlayDrag) {
@@ -7740,7 +7784,7 @@
                         const xImg = sortedPoints[i][0];
                         const yImg = sortedPoints[i][1];
                         const dIdx = (Array.isArray(sortedPoints[i]) && Number.isInteger(sortedPoints[i][2])) ? sortedPoints[i][2] : null;
-                        const isPinned = (dIdx != null) ? isDepthIndexPinned(name, dIdx) : false;
+                        const isPinned = (dIdx != null) ? isDepthIndexPinned(normalizeCurveKey(name), dIdx) : false;
                         let xDom = (xImg * scaleX) - viewLeft;
                         let yDom = (yImg * scaleY) - viewTop;
                         if (isPinned) {

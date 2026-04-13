@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 
-TRIAL_DAYS = 30
+TRIAL_DAYS = 7
 
 
 def _utc_now_iso() -> str:

@@ -7710,10 +7710,10 @@ def pricing():
             'name': 'Monthly',
             'price': '$99',
             'period': '/month',
-            'badge': '30-day free trial',
+            'badge': '7-day free trial',
             'description': 'Best for individual users and small teams getting started with in-house conversion.',
             'features': [
-                '30-day free trial',
+                '7-day free trial',
                 'TIFF/PDF/PNG upload workspace',
                 'Curve extraction workflow',
                 'LAS export',
@@ -7732,7 +7732,7 @@ def pricing():
             'description': 'For companies that want the lowest effective annual cost and uninterrupted access.',
             'features': [
                 'Everything in Monthly',
-                '30-day free trial',
+                '7-day free trial',
                 'Lower annual cost',
                 'Priority account support',
                 'Simplified yearly billing',
@@ -7889,7 +7889,7 @@ def signup():
             )
             if _is_stripe_configured():
                 return redirect(url_for('create_checkout_session', plan='monthly', mode='trial'))
-            flash('Account created! Your 30-day free trial is now active.', 'success')
+            flash('Account created! Your 7-day free trial is now active.', 'success')
             return redirect(url_for('dashboard'))
 
     return render_template('signup.html', error=error)
