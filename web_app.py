@@ -7581,24 +7581,24 @@ def digitize():
             # Refine peaks and valleys where curve changes direction sharply
             xs = refine_peaks_and_valleys(mask, xs, search_radius=50, min_prob=0.03)
 
+            # Ensure every significant peak has a traced point
+            xs = ensure_peaks_have_points(mask, xs, min_prob=0.08, min_peak_prominence=0.03, max_shift=40)
+
+            # Final centerline refinement
+            xs = refine_to_stroke_centerline(mask, xs, window_size=6)
+
         # Optional final smoothing for non-GR curves (GR needs to stay jagged)
-            if curve_type.upper() != "GR":
-                 xs = remove_outliers_and_smooth(xs, window=curve_smooth_window, outlier_threshold=outlier_threshold)
+        if curve_type.upper() != "GR":
+            xs = remove_outliers_and_smooth(xs, window=curve_smooth_window, outlier_threshold=outlier_threshold)
 
         width_px = mask.shape[1]
 
-        # UNIVERSAL GAP FILLING:
-        # Aggressive grid removal can leave small gaps where the curve crossed a grid line.
-        # We linearly interpolate these gaps to ensure continuity.
-        if xs.size > 0:
+        # GAP FILLING: Only for colored modes (black mode keeps gaps to avoid artificial diagonals)
+        if xs.size > 0 and mode in colored_modes:
             s = pd.Series(xs)
             h_mask, w_mask = mask.shape
-            if mode in colored_modes:
-                max_gap = max(25, int(h_mask * 0.02))
-            else:
-                max_gap = max(25, int(h_mask * 0.02))  # Strict for dashed black curves
+            max_gap = max(25, int(h_mask * 0.02))
             s = s.interpolate(method='linear', limit_direction='both', limit=max_gap, limit_area=None)
-            # Handle edge cases
             if s.isna().any():
                 s = s.fillna(method='ffill', limit=max_gap).fillna(method='bfill', limit=max_gap)
             xs = s.to_numpy(dtype=np.float32)
