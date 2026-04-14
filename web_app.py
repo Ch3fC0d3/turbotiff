@@ -8323,6 +8323,15 @@ def stripe_webhook():
 def save_log():
     """Save a digitized log to the user's account."""
     user = _current_user(require_access=True)
+    if not user:
+        return jsonify({'success': False, 'error': 'Not authorized'}), 401
+        
+    # Enforce trial limits
+    if user.get('subscription_status') == 'trialing' and not user.get('is_admin'):
+        user_logs = auth_billing.get_user_logs(config.AUTH_DB_PATH, user['id'])
+        if len(user_logs) >= 3:
+            return jsonify({'success': False, 'error': 'Trial limit reached. You can only save up to 3 logs on the free trial. Please upgrade your account to save more logs.'}), 403
+
     data = request.json
     
     try:
@@ -8497,8 +8506,22 @@ def upload_file():
     })
 
 @app.route('/digitize', methods=['POST'])
+@login_required
 def digitize():
     """Process digitization request"""
+    user = _current_user(require_access=True)
+    if not user:
+        return jsonify({'success': False, 'error': 'Not authorized'}), 401
+        
+    # Enforce trial limits on processing as well to prevent abuse
+    if user.get('subscription_status') == 'trialing' and not user.get('is_admin'):
+        user_logs = auth_billing.get_user_logs(config.AUTH_DB_PATH, user['id'])
+        if len(user_logs) >= 3:
+            return jsonify({
+                'success': False, 
+                'error': 'Trial limit reached. You have already processed and saved your 3 free logs. Please upgrade your account to continue digitizing.'
+            }), 403
+
     data = request.json
 
     # Decode image
