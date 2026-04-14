@@ -1771,6 +1771,9 @@
                                             💾 Download
                                         </button>
                                     </div>
+                                    <button class="btn" type="button" onclick="openLasViewerWithData(event)" id="viewLasBtn" disabled style="background: #8b5cf6; border-color: #7c3aed;">
+                                        📈 View LAS
+                                    </button>
                                 </div>
                             </div>
                         </div>
@@ -10890,8 +10893,12 @@
                 stopProcessingTimer();
                 if (btn) btn.disabled = false;
                 const downloadBtn = document.getElementById('downloadLasBtn');
+                const viewBtn = document.getElementById('viewLasBtn');
                 if (downloadBtn && lastLasContent) {
                     downloadBtn.disabled = false;
+                }
+                if (viewBtn && lastLasContent) {
+                    viewBtn.disabled = false;
                 }
             }
         }
