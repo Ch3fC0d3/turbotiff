@@ -8521,21 +8521,17 @@ def save_log():
         depth_end = float(data.get('depth_end', 0))
         depth_unit = data.get('depth_unit', 'FT')
         las_content = data.get('las_content', '')
-        
-        if not las_content:
-            return jsonify({'success': False, 'error': 'Missing LAS content'}), 400
-            
-        auth_billing.save_user_log(
-            config.AUTH_DB_PATH,
-            log_id=log_id,
-            user_id=user['id'],
-            name=name,
-            curve_count=curve_count,
-            depth_start=depth_start,
-            depth_end=depth_end,
-            depth_unit=depth_unit,
-            las_content=las_content
-        )
+        original_image_path = data.get('original_image_path', None)
+
+        with auth_billing.get_db(config.AUTH_DB_PATH) as conn:
+            conn.execute("""
+                INSERT INTO user_logs (id, user_id, name, curve_count, depth_start, depth_end, depth_unit, las_content, original_image_path, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                log_id, user['id'], name, curve_count, depth_start, depth_end, depth_unit, las_content, original_image_path,
+                datetime.now(timezone.utc).isoformat()
+            ))
+
         return jsonify({'success': True, 'log_id': log_id})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500

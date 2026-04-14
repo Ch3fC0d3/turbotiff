@@ -74,24 +74,30 @@ def init_db(db_path: str) -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_users_company_domain ON users(company_domain)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_users_company_normalized ON users(company_name_normalized)")
         
-        # Create user_logs table for saved digitized logs
+        # Table structure for self-serve logs
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS user_logs (
                 id TEXT PRIMARY KEY,
                 user_id INTEGER NOT NULL,
                 name TEXT NOT NULL,
-                curve_count INTEGER NOT NULL DEFAULT 0,
+                las_content TEXT NOT NULL,
+                curve_count INTEGER,
                 depth_start REAL,
                 depth_end REAL,
                 depth_unit TEXT,
-                las_content TEXT NOT NULL,
+                original_image_path TEXT,
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             )
             """
         )
+        
+        # Safe migration if original_image_path is missing
+        try:
+            conn.execute("ALTER TABLE user_logs ADD COLUMN original_image_path TEXT")
+        except sqlite3.OperationalError:
+            pass
         conn.execute("CREATE INDEX IF NOT EXISTS idx_user_logs_user_id ON user_logs(user_id)")
 
         # Create admin_settings table

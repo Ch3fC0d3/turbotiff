@@ -1830,6 +1830,7 @@
         let lastDigitizedCurves = null;  // { curveId: { unit, values[] } }
         let lastLasContent = null;       // LAS text from last digitization
         let lastLasFilename = null;      // LAS filename from last digitization
+        let originalUploadedFile = null; // The File object of the uploaded TIFF/PNG
         let zoomLevel = 1.0;             // zoom factor for the overlay/image
         let lastZoomClampNoticeMs = 0;   // debounce for zoom clamp messaging
         let lastDepthConfig = null;      // depth config used for last digitization
@@ -7048,9 +7049,11 @@
             // Check file size (100MB limit)
             const maxSize = 100 * 1024 * 1024; // 100MB in bytes
             if (file.size > maxSize) {
-                showStatus(`❌ File too large (${(file.size / 1024 / 1024).toFixed(1)}MB). Please use an image smaller than 100MB.`, 'error');
+                showStatus('File is too large. Maximum size is 100MB.', 'error');
                 return;
             }
+
+            originalUploadedFile = file;
 
             primaryRegion = null;
             panelSelectMode = false;
@@ -11015,24 +11018,54 @@
             let finalLasContent = lastLasContent;
             if (Array.isArray(lastDigitizedDepth) && lastDigitizedDepth.length > 0 &&
                 lastDigitizedCurves && typeof lastDigitizedCurves === 'object' &&
-                lastDepthConfig) {
-                const rebuilt = buildLasFromDigitized(lastDigitizedDepth, lastDigitizedCurves, lastDepthConfig, lastNullValue);
-                if (rebuilt && typeof rebuilt === 'string' && rebuilt.trim().length) {
-                    finalLasContent = rebuilt;
+                Object.keys(lastDigitizedCurves).length > 0) {
+                finalLasContent = buildLasString(lastDepthConfig, lastNullValue);
+            }
+            
+            // 1. Upload original image to GCS if we have it
+            let gcsKey = null;
+            if (originalUploadedFile) {
+                try {
+                    const urlRes = await fetch('/api/managed-jobs/upload-url', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            filename: originalUploadedFile.name,
+                            contentType: originalUploadedFile.type
+                        })
+                    });
+                    const urlData = await urlRes.json();
+                    if (urlData.success && urlData.uploadUrl) {
+                        const uploadRes = await fetch(urlData.uploadUrl, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': originalUploadedFile.type },
+                            body: originalUploadedFile
+                        });
+                        if (uploadRes.ok) {
+                            gcsKey = urlData.fileKey;
+                            console.log('✅ Original image uploaded to cloud:', gcsKey);
+                        }
+                    }
+                } catch (e) {
+                    console.warn('Silent failure uploading original image:', e);
                 }
             }
 
+            // 2. Save log to account DB
             try {
                 const response = await fetch('/api/logs', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
                     body: JSON.stringify({
                         name: logName,
                         curve_count: curveCount,
                         depth_start: topDepth,
                         depth_end: bottomDepth,
                         depth_unit: depthUnit,
-                        las_content: finalLasContent
+                        las_content: finalLasContent,
+                        original_image_path: gcsKey
                     })
                 });
 
