@@ -23,7 +23,12 @@ from dotenv import load_dotenv
 load_dotenv()  # Load .env
 load_dotenv('.env.local', override=True)  # Load .env.local (overrides .env)
 
-from flask import Flask, render_template, request, jsonify, send_file, Response, session, redirect, url_for, flash, make_response
+from google.cloud import storage
+
+from flask import (
+    Flask, render_template, request, jsonify, make_response, 
+    send_file, Response, redirect, url_for, session, flash
+)
 import math
 import os
 import random
@@ -7835,6 +7840,53 @@ def pricing():
     )
 
 
+@app.route('/api/managed-jobs/upload-url', methods=['POST'])
+def generate_upload_url():
+    """Generate a presigned URL to securely upload a file directly to Google Cloud Storage."""
+    data = request.json
+    filename = data.get('filename')
+    content_type = data.get('contentType')
+    
+    if not filename or not content_type:
+        return jsonify({'success': False, 'error': 'Missing filename or contentType'}), 400
+
+    # Ensure Vision API/Cloud credentials exist to use GCS
+    if not VISION_API_AVAILABLE:
+        return jsonify({'success': False, 'error': 'Cloud storage is not configured.'}), 500
+
+    try:
+        # Create a storage client using the exact same credentials loaded for Vision OCR
+        global credentials
+        storage_client = storage.Client(credentials=credentials)
+        
+        bucket_name = config.GCS_UPLOADS_BUCKET
+        bucket = storage_client.bucket(bucket_name)
+        
+        # Generate a unique path for the file: uploads/{uuid}/{filename}
+        file_uuid = str(uuid.uuid4())
+        safe_filename = filename.replace(" ", "_")
+        blob_path = f"uploads/{file_uuid}/{safe_filename}"
+        
+        blob = bucket.blob(blob_path)
+        
+        # Generate a presigned URL valid for 30 minutes for a PUT request
+        url = blob.generate_signed_url(
+            version="v4",
+            expiration=timedelta(minutes=30),
+            method="PUT",
+            content_type=content_type,
+        )
+        
+        return jsonify({
+            'success': True, 
+            'uploadUrl': url, 
+            'fileKey': blob_path
+        })
+    except Exception as e:
+        print(f"Failed to generate presigned URL: {e}")
+        return jsonify({'success': False, 'error': 'Failed to generate upload URL.'}), 500
+
+
 @app.route('/api/managed-jobs/checkout', methods=['POST'])
 def create_managed_job_checkout():
     """Create a Stripe Checkout Session in setup mode for a managed job."""
@@ -7888,7 +7940,7 @@ def create_managed_job_checkout():
                 data.get('complexity'), data.get('turnaround'),
                 float(data.get('estimatedUnits') or 0),
                 float(data.get('estimatedTotal') or 0),
-                data.get('notes'),
+                f"{data.get('notes', '')}\n\nFiles: {json.dumps(data.get('files', []))}", # Append filekeys temporarily to notes to save DB migrations
                 datetime.now(timezone.utc).isoformat(),
                 datetime.now(timezone.utc).isoformat()
             ))

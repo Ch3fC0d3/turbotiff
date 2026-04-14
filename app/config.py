@@ -106,5 +106,7 @@ AUTH_DB_PATH = os.environ.get("AUTH_DB_PATH", str(_default_auth_db_path))
 
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
-STRIPE_PRICE_MONTHLY = os.environ.get("STRIPE_PRICE_MONTHLY", "")
-STRIPE_PRICE_ANNUAL = os.environ.get("STRIPE_PRICE_ANNUAL", "")
+STRIPE_PRICE_MONTHLY = os.getenv('STRIPE_PRICE_MONTHLY', 'price_fake_monthly')
+STRIPE_PRICE_ANNUAL = os.getenv('STRIPE_PRICE_ANNUAL', 'price_fake_annual')
+
+GCS_UPLOADS_BUCKET = os.getenv('GCS_UPLOADS_BUCKET', 'tiflas-managed-jobs')

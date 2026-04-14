@@ -122,22 +122,55 @@
 
                 setIsSubmitting(true);
 
-                // Prepare file metadata since actual multipart upload is pending
-                const fileMetadata = formData.files.map(f => ({
-                    name: f.name,
-                    size: f.size,
-                    type: f.type
-                }));
-
-                const payload = {
-                    ...formData,
-                    estimatedUnits: parseFloat(estimate.units),
-                    estimatedTotal: parseFloat(estimate.total),
-                    minimumApplied: estimate.minimumApplied,
-                    files: fileMetadata
-                };
-
                 try {
+                    // Upload files to GCS via presigned URLs
+                    const uploadedFiles = [];
+                    for (const file of formData.files) {
+                        // Get presigned URL
+                        const urlRes = await fetch('/api/managed-jobs/upload-url', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                filename: file.name,
+                                contentType: file.type
+                            })
+                        });
+                        const urlData = await urlRes.json();
+                        
+                        if (!urlData.success) {
+                            throw new Error(urlData.error || `Failed to generate upload URL for ${file.name}`);
+                        }
+
+                        // Upload actual file bytes directly to GCS bucket
+                        const uploadRes = await fetch(urlData.uploadUrl, {
+                            method: 'PUT',
+                            headers: {
+                                'Content-Type': file.type,
+                            },
+                            body: file
+                        });
+
+                        if (!uploadRes.ok) {
+                            throw new Error(`Failed to upload ${file.name}`);
+                        }
+
+                        // Save the reference metadata
+                        uploadedFiles.push({
+                            name: file.name,
+                            size: file.size,
+                            type: file.type,
+                            gcs_key: urlData.fileKey
+                        });
+                    }
+
+                    const payload = {
+                        ...formData,
+                        estimatedUnits: parseFloat(estimate.units),
+                        estimatedTotal: parseFloat(estimate.total),
+                        minimumApplied: estimate.minimumApplied,
+                        files: uploadedFiles
+                    };
+
                     const res = await fetch('/api/managed-jobs/checkout', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -153,7 +186,7 @@
                     }
                 } catch (err) {
                     console.error(err);
-                    setErrorMsg("A network error occurred. Please try again.");
+                    setErrorMsg(err.message || "A network error occurred. Please try again.");
                     setIsSubmitting(false);
                 }
             };
@@ -234,8 +267,7 @@
 
                                 <div>
                                     <label className="block text-sm font-medium text-slate-300">Files to Upload</label>
-                                    <p className="text-xs text-amber-400 mt-1 mb-2">Note: Actual file uploading to S3 is pending implementation. Only file metadata will be sent in this prototype.</p>
-                                    <input type="file" name="files" multiple accept=".tif,.tiff,.pdf,.png,.jpg,.jpeg" onChange={handleChange} className="block w-full text-sm text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-slate-700 file:text-white hover:file:bg-slate-600" />
+                                    <input type="file" name="files" multiple accept=".tif,.tiff,.pdf,.png,.jpg,.jpeg" onChange={handleChange} className="block w-full text-sm text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-slate-700 file:text-white hover:file:bg-slate-600 mt-2" />
                                     
                                     {formData.files.length > 0 && (
                                         <ul className="mt-4 space-y-2">
