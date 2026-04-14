@@ -58,6 +58,13 @@ import requests
 import openai
 from huggingface_hub import InferenceClient
 
+try:
+    from flask_talisman import Talisman
+    TALISMAN_AVAILABLE = True
+except ImportError:
+    TALISMAN_AVAILABLE = False
+    print("[WARN] flask_talisman not installed. Security headers will not be applied.")
+
 TORCH_AVAILABLE = False
 try:
     import torch
@@ -178,10 +185,64 @@ APP_VERSION = os.environ.get("APP_VERSION", "dev")
 APP_BUILD_TIME = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
 
 app = Flask(__name__)
+
+# Basic security config
+is_prod = os.environ.get("FLASK_ENV") == "production" or os.environ.get("RENDER") == "true" or os.environ.get("RAILWAY_ENVIRONMENT") is not None
 app.config['MAX_CONTENT_LENGTH'] = 2 * 1024 * 1024 * 1024  # 2GB max request size
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=30)
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_SECURE'] = is_prod  # Require HTTPS for cookies in production
+app.config['SESSION_COOKIE_HTTPONLY'] = True   # Prevent JS access to session cookie
 app.secret_key = config.SECRET_KEY
+
+# Initialize Talisman for security headers if in production and installed
+if TALISMAN_AVAILABLE and is_prod:
+    csp = {
+        'default-src': [
+            '\'self\'',
+            'https://fonts.googleapis.com',
+            'https://fonts.gstatic.com',
+            'https://cdn.jsdelivr.net',
+            'https://cdnjs.cloudflare.com',
+            'https://js.stripe.com',
+        ],
+        'script-src': [
+            '\'self\'',
+            '\'unsafe-inline\'',  # Needed for some inline scripts in the app
+            '\'unsafe-eval\'',    # Needed for some charting/canvas libraries
+            'https://cdn.jsdelivr.net',
+            'https://cdnjs.cloudflare.com',
+            'https://js.stripe.com',
+        ],
+        'img-src': [
+            '\'self\'',
+            'data:',
+            'blob:',
+            'https://images.unsplash.com',
+            '*',  # Allow external images for now given the dynamic nature
+        ],
+        'style-src': [
+            '\'self\'',
+            '\'unsafe-inline\'',
+            'https://fonts.googleapis.com',
+            'https://cdn.jsdelivr.net',
+            'https://cdnjs.cloudflare.com',
+        ],
+        'frame-src': [
+            '\'self\'',
+            'https://js.stripe.com',
+            'https://hooks.stripe.com',
+        ],
+        'connect-src': [
+            '\'self\'',
+            'https://api.stripe.com',
+        ],
+    }
+    Talisman(app, 
+             content_security_policy=csp, 
+             force_https=True,
+             strict_transport_security=True,
+             session_cookie_secure=True)
 
 REMEMBER_COOKIE_NAME = 'remember_token'
 REMEMBER_COOKIE_DAYS = 30
@@ -299,28 +360,43 @@ def _handle_internal_server_error(exc):
     err_msg = str(original) if original else str(exc)
     
     print(f"500 Error: {err_msg}")
-    print(tb)
+    
+    # Hide details in production
+    if is_prod:
+        return jsonify({
+            'success': False,
+            'error': 'An internal server error occurred.'
+        }), 500
 
+    print(tb)
     return jsonify({
         'success': False,
         'error': f'Internal server error: {err_msg}',
         'traceback': tb.splitlines()[-5:] if tb else []
     }), 500
 
-@app.errorhandler(500)
-def _handle_internal_server_error(exc):
+@app.errorhandler(Exception)
+def _handle_unhandled_exception(exc):
     if request.path == '/digitize':
         import traceback
         original = getattr(exc, 'original_exception', None)
         if original is not None:
-            print(f"/digitize 500 error: {original}")
-            print(traceback.format_exc())
             err_msg = str(original)
         else:
-            print(f"/digitize 500 error: {exc}")
             err_msg = str(exc)
 
         tb = traceback.format_exc()
+        
+        print(f"/digitize 500 error: {err_msg}")
+        
+        # Hide details in production
+        if is_prod:
+            return jsonify({
+                'success': False,
+                'error': 'An internal server error occurred during digitization.'
+            }), 500
+            
+        print(tb)
         tb_lines = tb.splitlines()[-25:]
         tb_short = "\n".join(tb_lines)
 
@@ -6714,10 +6790,13 @@ def auto_layout_tracks():
                 })
         except Exception as exc:
             import traceback
+            tb = traceback.format_exc()[-1500:]
+            if is_prod:
+                tb = None
             return jsonify({
                 'success': False,
                 'error': f'Edge fallback failed: {str(exc)}',
-                'traceback': traceback.format_exc()[-1500:]
+                'traceback': tb
             }), 500
         
         if not tracks_out:
@@ -6773,10 +6852,13 @@ def auto_layout_tracks():
                 })
         except Exception as exc:
             import traceback
+            tb = traceback.format_exc()[-1500:]
+            if is_prod:
+                tb = None
             return jsonify({
                 'success': False,
                 'error': f'AI layout returned no result, and edge fallback failed: {str(exc)}',
-                'traceback': traceback.format_exc()[-1500:]
+                'traceback': tb
             }), 500
 
         if tracks_out:
@@ -9625,10 +9707,14 @@ def refine_edit():
         
     except Exception as e:
         import traceback
+        tb = traceback.format_exc()
+        if is_prod:
+            tb = None
+            print(f"Auto capture error: {e}")
         return jsonify({
             'success': False,
             'error': str(e),
-            'traceback': traceback.format_exc()
+            'traceback': tb
         })
 
 
