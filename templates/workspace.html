@@ -10984,9 +10984,20 @@
                 return;
             }
 
-            // Generate a default name from the filename or timestamp
+            // Sync latest metadata from the inputs
+            const metadata = syncHeaderMetadataFromInputs();
+
+            // Generate a default name from the well name, or filename, or timestamp
             const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
-            const logName = lastLasFilename ? lastLasFilename.replace(/\.las$/i, '') : `Log_${timestamp}`;
+            let logName = '';
+            
+            if (metadata && metadata.well) {
+                logName = metadata.well;
+            } else if (lastLasFilename) {
+                logName = lastLasFilename.replace(/\.las$/i, '');
+            } else {
+                logName = `Log_${timestamp}`;
+            }
 
             const curveCount = document.querySelectorAll('.track-section').length;
             const topDepth = parseFloat(document.getElementById('topDepth')?.value) || 0;
