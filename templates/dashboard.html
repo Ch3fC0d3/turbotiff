@@ -61,15 +61,27 @@
         </div>
 
         {% if global_banner %}
-        <div class="mb-8 rounded-md bg-indigo-900/30 border border-indigo-500/30 p-4">
+        <div class="mb-6 rounded-md bg-blue-900/40 p-4 border border-blue-500/30">
             <div class="flex">
                 <div class="flex-shrink-0">
-                    <i data-lucide="info" class="h-5 w-5 text-indigo-400"></i>
+                    <i data-lucide="info" class="h-5 w-5 text-blue-400"></i>
                 </div>
                 <div class="ml-3 flex-1 md:flex md:justify-between">
-                    <p class="text-sm text-indigo-200">{{ global_banner }}</p>
+                    <p class="text-sm text-blue-200">{{ global_banner }}</p>
                 </div>
             </div>
+        </div>
+        {% endif %}
+
+        {% if user.subscription_status == 'trialing' and not user.is_admin %}
+        <div class="mb-6 rounded-xl border border-amber-500/20 bg-amber-500/10 p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div>
+                <h3 class="text-sm font-semibold text-amber-200">Free Trial Status</h3>
+                <p class="text-sm text-amber-100/80 mt-1">You have saved {{ logs|length }} out of 3 free logs included in your trial.</p>
+            </div>
+            <a href="/account" class="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white text-sm font-bold rounded-lg transition-colors whitespace-nowrap">
+                Upgrade Account
+            </a>
         </div>
         {% endif %}
 

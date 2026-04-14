@@ -7793,7 +7793,7 @@ def pricing():
         'description': 'Use TifLAS in-house to upload logs, extract curves, review results, and export LAS files yourself.',
         'price_lines': [
             '7-day free trial',
-            'Includes up to 3 logs',
+            'Includes up to 3 free logs',
             '$99/month',
             '$999/year',
         ],

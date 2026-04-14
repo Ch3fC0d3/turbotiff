@@ -63,7 +63,7 @@
                             Plans
                         </a>
                         <a href="/managed-conversion" class="border-transparent text-slate-300 hover:border-primary-500 hover:text-white inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
-                            Managed Conversion
+                            Full-Service Conversion
                         </a>
                         <a href="#billing-overview" class="border-transparent text-slate-300 hover:border-primary-500 hover:text-white inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
                             Billing
@@ -105,8 +105,8 @@
                     Choose self-serve or let us handle it for you
                 </h1>
                 <p class="mt-6 max-w-3xl text-xl text-slate-200">
-                    TifLAS helps teams convert legacy well log images into structured LAS data. Start with a free 7-day trial,
-                    subscribe monthly or annually, or send us your logs for managed conversion.
+                    TifLAS helps teams convert legacy well log images into structured LAS data. Start with a free 7-day trial (includes up to 3 free logs),
+                    subscribe monthly or annually, or send us your logs for full-service conversion.
                 </p>
                 <div class="mt-5 rounded-2xl border border-primary-500/25 bg-primary-900/20 p-4 text-sm leading-6 text-slate-200">
                     Automation handles the first pass, but people stay in the loop. Complex curves, messy scans, and final QA
@@ -118,14 +118,14 @@
                         Open Member Account
                     </a>
                     <a href="/managed-conversion" class="inline-flex items-center px-6 py-3 border border-slate-600 text-base font-bold rounded-lg text-slate-100 bg-slate-900/70 hover:bg-slate-800 transition-colors">
-                        View Managed Conversion
+                        View Full-Service Conversion
                     </a>
                     {% else %}
                     <a href="/signup" class="inline-flex items-center px-6 py-3 border border-transparent text-base font-bold rounded-lg text-white bg-[#667eea] hover:bg-[#764ba2] transition-colors shadow-[0_0_20px_rgba(102,126,234,0.3)]">
                         Start Free Trial
                     </a>
                     <a href="/managed-conversion" class="inline-flex items-center px-6 py-3 border border-slate-600 text-base font-bold rounded-lg text-slate-100 bg-slate-900/70 hover:bg-slate-800 transition-colors">
-                        View Managed Conversion
+                        View Full-Service Conversion
                     </a>
                     {% endif %}
                 </div>
@@ -136,49 +136,187 @@
     <section id="plans" class="py-16 bg-slate-900">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="max-w-3xl mb-10">
-                <h2 class="text-base text-primary-400 font-semibold tracking-wide uppercase">Self-Serve Plans</h2>
+                <h2 class="text-base text-primary-400 font-semibold tracking-wide uppercase">Workflow Options</h2>
                 <p class="mt-2 text-3xl leading-8 font-extrabold tracking-tight text-white sm:text-4xl">
-                    Run conversion in-house with a clear subscription path
+                    Choose in-house extraction or let TifLAS handle the processing
                 </p>
                 <p class="mt-4 text-lg text-slate-400">
-                    Both plans include the core TifLAS workspace, exports, saved projects, and billing history. Annual is the lower-cost
-                    option for teams that want uninterrupted access.
+                    One path gives your team the full in-house workspace. The other is done-for-you processing with review,
+                    correction, and final QA built into the service.
                 </p>
             </div>
             <div class="grid gap-6 lg:grid-cols-2">
-                {% for plan in plans %}
-                <div class="rounded-2xl border p-8 pricing-surface {% if plan.highlight %}border-primary-500/30 bg-slate-800 ring-1 ring-primary-500/20{% else %}border-slate-700 bg-slate-800/70{% endif %}">
-                    <div class="flex items-start justify-between gap-4">
-                        <div>
-                            <div class="text-sm uppercase tracking-[0.2em] text-slate-400">TifLAS Pro</div>
-                            <h2 class="mt-2 text-2xl font-bold text-white">{{ plan.name }}</h2>
+                <div class="rounded-2xl border border-primary-500/30 bg-slate-800 ring-1 ring-primary-500/20 p-8 pricing-surface">
+                    <div class="text-sm uppercase tracking-[0.2em] text-primary-300">{{ self_service.eyebrow }}</div>
+                    <h2 class="mt-2 text-3xl font-bold text-white">{{ self_service.title }}</h2>
+                    <p class="mt-4 text-slate-300">{{ self_service.description }}</p>
+
+                    <div class="mt-6 space-y-2">
+                        {% for line in self_service.price_lines %}
+                        <div class="{% if '$' in line %}text-2xl font-extrabold text-white{% else %}text-lg font-semibold text-primary-200{% endif %}">
+                            {{ line }}
                         </div>
-                        <span class="rounded-full border px-3 py-1 text-sm {% if plan.highlight %}border-primary-500/25 bg-primary-900/40 text-primary-200{% else %}border-slate-600 bg-slate-700/70 text-slate-200{% endif %}">
-                            {{ plan.badge }}
-                        </span>
+                        {% endfor %}
                     </div>
-                    <div class="mt-6 flex items-end gap-2">
-                        <span class="text-5xl font-extrabold tracking-tight text-white">{{ plan.price }}</span>
-                        <span class="pb-2 text-slate-400">{{ plan.period }}</span>
-                    </div>
-                    <p class="mt-4 text-slate-300">{{ plan.description }}</p>
+
                     <ul class="mt-6 space-y-3 text-sm text-slate-200">
-                        {% for feature in plan.features %}
+                        {% for feature in self_service.features %}
                         <li class="flex items-start gap-3">
                             <span class="mt-1 h-2 w-2 rounded-full bg-primary-400"></span>
                             <span>{{ feature }}</span>
                         </li>
                         {% endfor %}
                     </ul>
-                    <div class="mt-6 rounded-xl border border-primary-500/15 bg-primary-900/12 p-4 text-sm leading-6 text-slate-300">
-                        Best for teams that want to work in-house while keeping human review available for difficult intervals,
-                        ambiguous traces, and final quality control.
-                    </div>
-                    <a href="{{ '/account' if user else '/signup' }}" class="mt-8 inline-flex w-full items-center justify-center rounded-lg px-5 py-3 text-sm font-bold transition-colors {% if plan.highlight %}border border-transparent bg-[#667eea] text-white hover:bg-[#764ba2] shadow-[0_0_18px_rgba(102,126,234,0.2)]{% else %}border border-slate-600 bg-slate-900 text-slate-100 hover:bg-slate-700{% endif %}">
-                        {{ plan.cta }}
+
+                    <a href="{{ self_service.href }}" class="mt-8 inline-flex w-full items-center justify-center rounded-lg px-5 py-3 text-sm font-bold transition-colors border border-transparent bg-[#667eea] text-white hover:bg-[#764ba2] shadow-[0_0_18px_rgba(102,126,234,0.2)]">
+                        {{ self_service.cta }}
                     </a>
                 </div>
-                {% endfor %}
+
+                <div class="rounded-2xl border border-slate-700 bg-slate-800/70 p-8 pricing-surface">
+                    <div class="text-sm uppercase tracking-[0.2em] text-slate-400">{{ managed_processing.eyebrow }}</div>
+                    <h2 class="mt-2 text-3xl font-bold text-white">{{ managed_processing.title }}</h2>
+                    <p class="mt-4 text-slate-300">{{ managed_processing.description }}</p>
+
+                    <div class="mt-6 space-y-2">
+                        {% for line in managed_processing.price_lines %}
+                        <div class="text-2xl font-extrabold text-white">
+                            {{ line }}
+                        </div>
+                        {% endfor %}
+                    </div>
+
+                    <ul class="mt-6 space-y-3 text-sm text-slate-200">
+                        {% for note in managed_processing.notes %}
+                        <li class="flex items-start gap-3">
+                            <span class="mt-1 h-2 w-2 rounded-full bg-slate-400"></span>
+                            <span>{{ note }}</span>
+                        </li>
+                        {% endfor %}
+                    </ul>
+
+                    <a href="{{ managed_processing.href }}" class="mt-8 inline-flex w-full items-center justify-center rounded-lg px-5 py-3 text-sm font-bold transition-colors border border-slate-600 bg-slate-900 text-slate-100 hover:bg-slate-700">
+                        {{ managed_processing.cta }}
+                    </a>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="managed-calculator" class="bg-slate-900 px-4 py-8 sm:px-6 lg:px-8">
+        <div class="mx-auto max-w-7xl">
+            <div class="rounded-[34px] border border-cyan-500/30 bg-[#022743] px-6 py-8 text-white shadow-[0_0_0_1px_rgba(34,211,238,0.04)] sm:px-10 sm:py-12">
+                <div class="grid gap-8 xl:grid-cols-[1.35fr_0.95fr]">
+                    <div>
+                        <div class="text-[15px] uppercase tracking-[0.28em] text-cyan-200/95">
+                            Full-Service Conversion Calculator
+                        </div>
+
+                        <h2 class="mt-6 text-4xl font-semibold tracking-tight text-white sm:text-5xl">
+                            Estimate your processing cost
+                        </h2>
+
+                        <p class="mt-6 max-w-4xl text-lg leading-8 text-white/95 sm:text-[24px] sm:leading-[1.75]">
+                            Enter the depth interval, the number of curves to extract, and the job complexity.
+                            We’ll estimate the full-service conversion price using
+                            <span class="font-semibold text-white">$0.99 per 100 curve-feet</span> with a
+                            <span class="font-semibold text-white">$29.99 minimum per log</span>.
+                        </p>
+
+                        <div class="mt-10 grid gap-6 md:grid-cols-3">
+                            <label class="rounded-[28px] border border-white/10 bg-[#001330] px-6 py-6">
+                                <div class="text-[14px] uppercase tracking-[0.22em] text-slate-300">
+                                    Depth Interval
+                                </div>
+
+                                <div class="mt-8 flex items-end justify-between gap-3">
+                                    <input
+                                        id="managed-depth-feet"
+                                        type="number"
+                                        min="0"
+                                        step="100"
+                                        value="1200"
+                                        class="w-full bg-transparent text-[44px] font-semibold leading-none text-white outline-none sm:text-[52px]"
+                                    />
+                                    <span class="pb-1 text-[20px] text-slate-300">ft</span>
+                                </div>
+                            </label>
+
+                            <label class="rounded-[28px] border border-white/10 bg-[#001330] px-6 py-6">
+                                <div class="text-[14px] uppercase tracking-[0.22em] text-slate-300">
+                                    Curves Extracted
+                                </div>
+
+                                <div class="mt-8 flex items-end justify-between gap-3">
+                                    <input
+                                        id="managed-curve-count"
+                                        type="number"
+                                        min="1"
+                                        step="1"
+                                        value="3"
+                                        class="w-full bg-transparent text-[44px] font-semibold leading-none text-white outline-none sm:text-[52px]"
+                                    />
+                                    <span class="pb-1 text-[20px] text-slate-300">curves</span>
+                                </div>
+                            </label>
+
+                            <label class="rounded-[28px] border border-white/10 bg-[#001330] px-6 py-6">
+                                <div class="text-[14px] uppercase tracking-[0.22em] text-slate-300">
+                                    Complexity
+                                </div>
+
+                                <select
+                                    id="managed-complexity"
+                                    class="mt-7 w-full rounded-[22px] border border-white/10 bg-[#000d24] px-6 py-5 text-[20px] text-white outline-none"
+                                >
+                                    <option value="clean">Clean</option>
+                                    <option value="standard" selected>Standard review</option>
+                                    <option value="difficult">Difficult</option>
+                                </select>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="rounded-[40px] border border-white/10 bg-[#000d24] px-8 py-8">
+                        <div class="text-[14px] uppercase tracking-[0.28em] text-slate-300">
+                            Estimated Total
+                        </div>
+
+                        <div id="managed-total" class="mt-5 text-[56px] font-semibold leading-none text-white sm:text-[68px]">
+                            $40.99
+                        </div>
+
+                        <div class="mt-8 space-y-4">
+                            <div class="flex items-center justify-between rounded-[22px] border border-white/10 bg-[#031835] px-6 py-5 text-[18px]">
+                                <span class="text-white/95">Billable curve-feet</span>
+                                <span id="managed-billable-curve-feet" class="font-semibold text-white">36</span>
+                            </div>
+
+                            <div class="flex items-center justify-between rounded-[22px] border border-white/10 bg-[#031835] px-6 py-5 text-[18px]">
+                                <span class="text-white/95">100 curve-foot units</span>
+                                <span id="managed-curve-foot-units" class="font-semibold text-white">36.0</span>
+                            </div>
+
+                            <div class="flex items-center justify-between rounded-[22px] border border-white/10 bg-[#031835] px-6 py-5 text-[18px]">
+                                <span class="text-white/95">Complexity multiplier</span>
+                                <span id="managed-complexity-multiplier" class="font-semibold text-white">×1.15</span>
+                            </div>
+                        </div>
+
+                        <div id="managed-formula-note" class="mt-6 rounded-[24px] border border-white/10 bg-[#031835] px-6 py-6 text-[18px] leading-9 text-white/95">
+                            Formula: depth × curves ÷ 100 × $0.99 × complexity · Estimated above minimum.
+                        </div>
+
+                        <p class="mt-7 text-[16px] leading-8 text-slate-300">
+                            Estimate only. Final pricing depends on scan quality, overlapping traces, wraps,
+                            and review needs.
+                        </p>
+
+                        <a href="/managed-conversion" class="mt-7 inline-flex w-full items-center justify-center rounded-[22px] border border-cyan-400/30 bg-cyan-500/10 px-6 py-4 text-base font-bold text-cyan-100 transition-colors hover:bg-cyan-500/20">
+                            Request a Quote
+                        </a>
+                    </div>
+                </div>
             </div>
         </div>
     </section>
@@ -263,7 +401,7 @@
                         </div>
                     </div>
                     <div class="mt-6 rounded-xl border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-100">
-                        Free trial note: unless canceled before the trial ends, the selected subscription renews automatically.
+                        Free trial note: The trial includes up to 3 free log digitizations. Unless canceled before the trial ends, the selected subscription renews automatically.
                     </div>
                 </div>
             </div>
@@ -272,6 +410,62 @@
 
     <script>
         lucide.createIcons();
+
+        (function () {
+            const depthInput = document.getElementById('managed-depth-feet');
+            const curveInput = document.getElementById('managed-curve-count');
+            const complexityInput = document.getElementById('managed-complexity');
+            const totalEl = document.getElementById('managed-total');
+            const billableCurveFeetEl = document.getElementById('managed-billable-curve-feet');
+            const curveFootUnitsEl = document.getElementById('managed-curve-foot-units');
+            const complexityMultiplierEl = document.getElementById('managed-complexity-multiplier');
+            const formulaNoteEl = document.getElementById('managed-formula-note');
+
+            if (!depthInput || !curveInput || !complexityInput || !totalEl || !billableCurveFeetEl || !curveFootUnitsEl || !complexityMultiplierEl || !formulaNoteEl) {
+                return;
+            }
+
+            const complexityMultipliers = {
+                clean: 1,
+                standard: 1.15,
+                difficult: 1.35,
+            };
+
+            const numberFormatter = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
+
+            function clampNumber(value, fallback, minValue) {
+                const parsed = Number(value);
+                if (!Number.isFinite(parsed)) return fallback;
+                return Math.max(minValue, parsed);
+            }
+
+            function updateManagedCalculator() {
+                const depthFeet = clampNumber(depthInput.value, 0, 0);
+                const curveCount = clampNumber(curveInput.value, 1, 1);
+                const complexity = complexityInput.value in complexityMultipliers ? complexityInput.value : 'standard';
+                const multiplier = complexityMultipliers[complexity];
+
+                depthInput.value = String(depthFeet);
+                curveInput.value = String(curveCount);
+                complexityInput.value = complexity;
+
+                const hundredCurveFootUnits = (depthFeet * curveCount) / 100;
+                const rawTotal = hundredCurveFootUnits * 0.99 * multiplier;
+                const total = Math.max(29.99, rawTotal);
+                const minimumApplied = rawTotal < 29.99;
+
+                totalEl.textContent = `$${total.toFixed(2)}`;
+                billableCurveFeetEl.textContent = numberFormatter.format(hundredCurveFootUnits);
+                curveFootUnitsEl.textContent = hundredCurveFootUnits.toFixed(1);
+                complexityMultiplierEl.textContent = `×${multiplier.toFixed(2)}`;
+                formulaNoteEl.textContent = `Formula: depth × curves ÷ 100 × $0.99 × complexity · ${minimumApplied ? 'Minimum charge applied.' : 'Estimated above minimum.'}`;
+            }
+
+            depthInput.addEventListener('input', updateManagedCalculator);
+            curveInput.addEventListener('input', updateManagedCalculator);
+            complexityInput.addEventListener('change', updateManagedCalculator);
+            updateManagedCalculator();
+        })();
     </script>
 </body>
 </html>
