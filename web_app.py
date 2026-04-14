@@ -6992,12 +6992,20 @@ def stripe_webhook():
 def save_log():
     """Save a digitized log to the user's account."""
     user = _current_user(require_access=True)
-    data = request.json
+    data = request.json or {}
     
     try:
         import uuid
-        log_id = str(uuid.uuid4())
-        name = data.get('name', 'Untitled Log')
+        requested_log_id = str((data or {}).get('log_id') or '').strip()
+        if requested_log_id:
+            existing_log = auth_billing.get_user_log(config.AUTH_DB_PATH, requested_log_id, user['id'])
+            if not existing_log:
+                return jsonify({'success': False, 'error': 'Saved log not found'}), 404
+            log_id = requested_log_id
+        else:
+            log_id = str(uuid.uuid4())
+
+        name = str((data or {}).get('name') or 'Untitled Log').strip() or 'Untitled Log'
         curve_count = data.get('curve_count', 0)
         depth_start = float(data.get('depth_start', 0))
         depth_end = float(data.get('depth_end', 0))
@@ -7018,7 +7026,7 @@ def save_log():
             depth_unit=depth_unit,
             las_content=las_content
         )
-        return jsonify({'success': True, 'log_id': log_id})
+        return jsonify({'success': True, 'log_id': log_id, 'name': name})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 

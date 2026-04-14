@@ -1586,6 +1586,9 @@
         let lastDigitizedCurves = null;  // { curveId: { unit, values[] } }
         let lastLasContent = null;       // LAS text from last digitization
         let lastLasFilename = null;      // LAS filename from last digitization
+        let uploadedSourceFilename = null; // original uploaded filename for default saved-log naming
+        let savedLogId = null;           // current saved account log for this workspace session
+        let savedLogName = null;         // display name for the saved account log
         let zoomLevel = 1.0;             // zoom factor for the overlay/image
         let lastZoomClampNoticeMs = 0;   // debounce for zoom clamp messaging
         let lastDepthConfig = null;      // depth config used for last digitization
@@ -6039,6 +6042,7 @@
                 return;
             }
 
+            uploadedSourceFilename = file && file.name ? file.name : null;
             primaryRegion = null;
             panelSelectMode = false;
             panelSelectStart = null;
@@ -6057,6 +6061,11 @@
             trackOverlayDrag = null;
             lastDigitizedDepth = null;
             lastDigitizedCurves = null;
+            lastLasContent = null;
+            lastLasFilename = null;
+            lastDepthConfig = null;
+            savedLogId = null;
+            savedLogName = null;
             if (pinnedDepthIndices) pinnedDepthIndices.clear();
 
             clearPrimaryRegionOverlay();
@@ -6066,6 +6075,9 @@
             clearLabelOverlays();
             clearPhraseHighlight();
             clearDepthOverlays();
+
+            const existingSave = document.getElementById('saveLogBtn');
+            if (existingSave) existingSave.remove();
 
             const curvesContainer = document.getElementById('curvesContainer');
             if (curvesContainer) {
@@ -9397,26 +9409,23 @@
                     headerRegionDrag = false;
 
                     resetAutoBlackCaptureSession();
+                    ensureSaveLogButton();
+                    const autoSaveResult = await persistCurrentLogToAccount({
+                        promptForName: false,
+                        quiet: true,
+                    });
+                    if (autoSaveResult.success) {
+                        message += ' 💾 Saved to account by default.';
+                    } else if (autoSaveResult.error) {
+                        message += ` ⚠️ Auto-save to account failed: ${autoSaveResult.error}`;
+                        if (statusType === 'success') {
+                            statusType = 'info';
+                        }
+                    }
                     showStatus(message, statusType);
                     void autoCaptureBlackSegments('digitize_post', {
                         captureSource: 'auto_black_capture_digitize_post',
                     });
-
-                    const btnSaveLog = document.createElement('button');
-                    btnSaveLog.type = 'button';
-                    btnSaveLog.className = 'btn';
-                    btnSaveLog.innerHTML = '💾 Save Log to Account';
-                    btnSaveLog.onclick = saveLogToAccount;
-                    
-                    const existingSave = document.getElementById('saveLogBtn');
-                    if (existingSave) existingSave.remove();
-                    
-                    btnSaveLog.id = 'saveLogBtn';
-                    btnSaveLog.style.marginLeft = '10px';
-                    btnSaveLog.style.background = '#0ea5e9';
-                    btnSaveLog.style.border = '1px solid #0284c7';
-                    
-                    document.getElementById('downloadLasBtn').parentNode.appendChild(btnSaveLog);
                 } else {
                     const msg = (data && (data.error || data.message)) ? (data.error || data.message) : 'Error during digitization';
                     showStatus('❌ ' + msg, 'error');
@@ -9433,16 +9442,241 @@
             }
         }
 
-        function handleDownload() {
-            const fmt = document.getElementById('downloadFormat').value;
-            if (fmt === 'individual') {
-                downloadLasZip();
-            } else {
-                downloadLastLas();
+        function stripFilenameExtension(name) {
+            if (!name || typeof name !== 'string') return '';
+            return name.replace(/\.[^.]+$/, '').trim();
+        }
+
+        function getDefaultSavedLogName() {
+            if (savedLogName && savedLogName.trim()) {
+                return savedLogName.trim();
+            }
+
+            const lasBase = stripFilenameExtension(lastLasFilename || '');
+            if (lasBase && lasBase.toLowerCase() !== 'digitized_log') {
+                return lasBase;
+            }
+
+            const uploadBase = stripFilenameExtension(uploadedSourceFilename || '');
+            if (uploadBase) {
+                return uploadBase;
+            }
+
+            if (lasBase) {
+                return lasBase;
+            }
+
+            return 'New Well Log';
+        }
+
+        function setSaveLogButtonIdleState(btn = document.getElementById('saveLogBtn')) {
+            if (!btn) return;
+            btn.innerHTML = savedLogId ? '💾 Update Saved Log' : '💾 Save Log to Account';
+            btn.disabled = false;
+        }
+
+        function ensureSaveLogButton() {
+            let btn = document.getElementById('saveLogBtn');
+            if (!btn) {
+                btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'btn';
+                btn.id = 'saveLogBtn';
+                btn.style.marginLeft = '10px';
+                btn.style.background = '#0ea5e9';
+                btn.style.border = '1px solid #0284c7';
+                btn.onclick = () => {
+                    void saveLogToAccount();
+                };
+
+                const downloadBtn = document.getElementById('downloadLasBtn');
+                if (downloadBtn && downloadBtn.parentNode) {
+                    downloadBtn.parentNode.appendChild(btn);
+                }
+            }
+
+            setSaveLogButtonIdleState(btn);
+            return btn;
+        }
+
+        function getCurrentLasContent() {
+            let lasText = null;
+
+            // Prefer a LAS rebuilt from the in-memory digitized arrays so any
+            // manual edits made in the viewer are reflected in saves/downloads.
+            if (Array.isArray(lastDigitizedDepth) && lastDigitizedDepth.length > 0 &&
+                lastDigitizedCurves && typeof lastDigitizedCurves === 'object' &&
+                lastDepthConfig) {
+                const rebuilt = buildLasFromDigitized(lastDigitizedDepth, lastDigitizedCurves, lastDepthConfig, lastNullValue);
+                if (rebuilt && typeof rebuilt === 'string' && rebuilt.trim().length) {
+                    lasText = rebuilt;
+                }
+            }
+
+            if (!lasText && lastLasContent) {
+                lasText = lastLasContent;
+            }
+
+            if (lasText) {
+                lastLasContent = lasText;
+            }
+
+            return lasText;
+        }
+
+        function buildCurrentLogSavePayload(logName, options = {}) {
+            const lasContent = getCurrentLasContent();
+            if (!lasContent) {
+                return null;
+            }
+
+            const curveCount = lastDigitizedCurves && typeof lastDigitizedCurves === 'object'
+                ? Object.keys(lastDigitizedCurves).length
+                : document.querySelectorAll('.track-section').length;
+            const topDepth = parseFloat(document.getElementById('topDepth').value) || 0;
+            const bottomDepth = parseFloat(document.getElementById('bottomDepth').value) || 0;
+            const depthUnit = document.getElementById('depthUnit').value;
+
+            return {
+                log_id: options.includeExistingLogId === false ? undefined : savedLogId,
+                name: logName,
+                curve_count: curveCount,
+                depth_start: topDepth,
+                depth_end: bottomDepth,
+                depth_unit: depthUnit,
+                las_content: lasContent,
+            };
+        }
+
+        async function persistCurrentLogToAccount(options = {}) {
+            const {
+                promptForName = false,
+                quiet = false,
+                forceNewRecord = false,
+            } = options;
+
+            let logName = getDefaultSavedLogName();
+            if (promptForName) {
+                const proposedName = prompt('Enter a name for this log:', logName);
+                if (proposedName === null) {
+                    return { success: false, cancelled: true };
+                }
+                logName = proposedName.trim();
+                if (!logName) {
+                    return { success: false, cancelled: true };
+                }
+            }
+
+            let payload = buildCurrentLogSavePayload(logName, {
+                includeExistingLogId: !forceNewRecord,
+            });
+            if (!payload) {
+                const errorMessage = 'No LAS data to save. Digitize first.';
+                if (!quiet) {
+                    alert(errorMessage);
+                }
+                return { success: false, error: errorMessage };
+            }
+
+            const btn = ensureSaveLogButton();
+            if (btn) {
+                btn.innerHTML = savedLogId && !forceNewRecord ? '⏳ Updating...' : '⏳ Saving...';
+                btn.disabled = true;
+            }
+
+            try {
+                const sendSaveRequest = async (requestPayload) => {
+                    const resp = await fetch('/api/logs', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(requestPayload),
+                    });
+                    const rawText = await resp.text();
+                    let data = {};
+                    try {
+                        data = rawText ? JSON.parse(rawText) : {};
+                    } catch (err) {
+                        data = {};
+                    }
+                    return { resp, rawText, data };
+                };
+
+                let result = await sendSaveRequest(payload);
+                if (result.resp.status === 404 && payload.log_id) {
+                    savedLogId = null;
+                    payload = buildCurrentLogSavePayload(logName, {
+                        includeExistingLogId: false,
+                    });
+                    result = await sendSaveRequest(payload);
+                }
+
+                if (!result.resp.ok || !result.data.success) {
+                    throw new Error(result.data.error || result.rawText || `HTTP ${result.resp.status}`);
+                }
+
+                savedLogId = result.data.log_id || savedLogId;
+                savedLogName = result.data.name || logName;
+                lastLasContent = payload.las_content;
+
+                if (btn) {
+                    btn.innerHTML = '✅ Saved!';
+                    setTimeout(() => setSaveLogButtonIdleState(btn), 2500);
+                }
+
+                if (!quiet) {
+                    showStatus('Log saved successfully to your account.', 'success');
+                }
+
+                return {
+                    success: true,
+                    log_id: savedLogId,
+                    name: savedLogName,
+                };
+            } catch (err) {
+                console.error(err);
+                if (btn) {
+                    btn.innerHTML = '❌ Error';
+                    setTimeout(() => setSaveLogButtonIdleState(btn), 2500);
+                }
+                if (!quiet) {
+                    showStatus(`Error saving log: ${err.message}`, 'error');
+                }
+                return {
+                    success: false,
+                    error: err.message,
+                };
             }
         }
 
-        async function downloadLasZip() {
+        async function handleDownload() {
+            let saveFeedback = { suffix: '', statusType: 'success' };
+            if (lastLasContent || (Array.isArray(lastDigitizedDepth) && lastDigitizedDepth.length > 0)) {
+                const saveResult = await persistCurrentLogToAccount({
+                    promptForName: false,
+                    quiet: true,
+                });
+                if (saveResult.success) {
+                    saveFeedback = {
+                        suffix: ' Saved to account.',
+                        statusType: 'success',
+                    };
+                } else if (saveResult.error) {
+                    saveFeedback = {
+                        suffix: ` Auto-save to account failed: ${saveResult.error}`,
+                        statusType: 'info',
+                    };
+                }
+            }
+
+            const fmt = document.getElementById('downloadFormat').value;
+            if (fmt === 'individual') {
+                await downloadLasZip(saveFeedback);
+            } else {
+                downloadLastLas(saveFeedback);
+            }
+        }
+
+        async function downloadLasZip(saveFeedback = { suffix: '', statusType: 'success' }) {
             if (!Array.isArray(lastDigitizedDepth) || !lastDigitizedCurves) {
                 showStatus('No digitized data available. Please run Digitize first.', 'error');
                 return;
@@ -9501,7 +9735,7 @@
                 document.body.removeChild(a);
                 URL.revokeObjectURL(url);
                 
-                showStatus('✅ ZIP download started.', 'success');
+                showStatus(`✅ ZIP download started.${saveFeedback.suffix || ''}`, saveFeedback.statusType || 'success');
                 void autoCaptureBlackSegments('download_snapshot', {
                     captureSource: 'auto_black_capture_download',
                     downloadFormat: 'zip',
@@ -9515,24 +9749,8 @@
             }
         }
 
-        function downloadLastLas() {
-            let lasText = null;
-
-            // Prefer a LAS rebuilt from the in-memory digitized arrays so any
-            // manual edits made in the viewer are reflected in the download.
-            if (Array.isArray(lastDigitizedDepth) && lastDigitizedDepth.length > 0 &&
-                lastDigitizedCurves && typeof lastDigitizedCurves === 'object' &&
-                lastDepthConfig) {
-                const rebuilt = buildLasFromDigitized(lastDigitizedDepth, lastDigitizedCurves, lastDepthConfig, lastNullValue);
-                if (rebuilt && typeof rebuilt === 'string' && rebuilt.trim().length) {
-                    lasText = rebuilt;
-                }
-            }
-
-            // Fallback: use the LAS content returned by the server.
-            if (!lasText && lastLasContent) {
-                lasText = lastLasContent;
-            }
+        function downloadLastLas(saveFeedback = { suffix: '', statusType: 'success' }) {
+            const lasText = getCurrentLasContent();
 
             if (!lasText) {
                 showStatus('No LAS file to download yet. Run Digitize first.', 'info');
@@ -9549,75 +9767,16 @@
             a.download = lastLasFilename || 'digitized_log.las';
             a.click();
             URL.revokeObjectURL(url);
+            showStatus(`✅ LAS download started.${saveFeedback.suffix || ''}`, saveFeedback.statusType || 'success');
             void autoCaptureBlackSegments('download_snapshot', {
                 captureSource: 'auto_black_capture_download',
                 downloadFormat: 'las',
             });
         }
         
-        function saveLogToAccount() {
-            if (!lastLasContent) {
-                alert('No LAS data to save. Digitize first.');
-                return;
-            }
-            
-            const logName = prompt("Enter a name for this log:", lastLasFilename || "New Well Log");
-            if (!logName) return;
-            
-            const btn = document.getElementById('saveLogBtn');
-            const originalText = btn.innerHTML;
-            btn.innerHTML = '⏳ Saving...';
-            btn.disabled = true;
-            
-            const curveCount = document.querySelectorAll('.track-section').length;
-            const topDepth = parseFloat(document.getElementById('topDepth').value) || 0;
-            const bottomDepth = parseFloat(document.getElementById('bottomDepth').value) || 0;
-            const depthUnit = document.getElementById('depthUnit').value;
-            
-            // Rebuild LAS to include manual edits
-            let finalLasContent = lastLasContent;
-            if (Array.isArray(lastDigitizedDepth) && lastDigitizedDepth.length > 0 &&
-                lastDigitizedCurves && typeof lastDigitizedCurves === 'object' &&
-                lastDepthConfig) {
-                const rebuilt = buildLasFromDigitized(lastDigitizedDepth, lastDigitizedCurves, lastDepthConfig, lastNullValue);
-                if (rebuilt && typeof rebuilt === 'string' && rebuilt.trim().length) {
-                    finalLasContent = rebuilt;
-                }
-            }
-            
-            fetch('/api/logs', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    name: logName,
-                    curve_count: curveCount,
-                    depth_start: topDepth,
-                    depth_end: bottomDepth,
-                    depth_unit: depthUnit,
-                    las_content: finalLasContent
-                })
-            })
-            .then(r => r.json())
-            .then(data => {
-                if (data.success) {
-                    btn.innerHTML = '✅ Saved!';
-                    showStatus(`Log saved successfully: ${logName}`, 'success');
-                    setTimeout(() => {
-                        btn.innerHTML = originalText;
-                        btn.disabled = false;
-                    }, 3000);
-                } else {
-                    throw new Error(data.error || 'Failed to save log');
-                }
-            })
-            .catch(err => {
-                console.error(err);
-                btn.innerHTML = '❌ Error';
-                showStatus(`Error saving log: ${err.message}`, 'error');
-                setTimeout(() => {
-                    btn.innerHTML = originalText;
-                    btn.disabled = false;
-                }, 3000);
+        async function saveLogToAccount() {
+            return persistCurrentLogToAccount({
+                promptForName: true,
             });
         }
 
@@ -10295,7 +10454,6 @@
     </script>
 </body>
 </html>
-
 
 
 
