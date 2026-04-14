@@ -8196,14 +8196,15 @@ def create_checkout_session():
             customer=customer_id,
             line_items=[{'price': price_id, 'quantity': 1}],
             payment_method_collection='always',
+            allow_promotion_codes=True,
             metadata={
                 'user_id': str(user['id']),
                 'plan_code': plan,
                 'mode': mode,
             },
+            subscription_data=subscription_data,
             success_url=f"{config.APP_BASE_URL}/account?checkout=success",
             cancel_url=f"{config.APP_BASE_URL}/account?checkout=cancel",
-            subscription_data=subscription_data,
         )
         return redirect(checkout.url, code=303)
     except stripe.error.StripeError as exc:
