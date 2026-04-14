@@ -11022,12 +11022,6 @@
                 if (data.success) {
                     console.log(`✅ Log auto-saved: ${logName}`);
                     showStatus(`✅ Log auto-saved to account: ${logName}`, 'success');
-                    
-                    // Automatically open LAS Viewer after a short delay to let the user see the success message
-                    setTimeout(() => {
-                        const fakeEvent = { preventDefault: () => {} };
-                        openLasViewerWithData(fakeEvent);
-                    }, 1500);
                 } else {
                     console.warn('Auto-save failed:', data.error || 'Unknown error');
                 }
