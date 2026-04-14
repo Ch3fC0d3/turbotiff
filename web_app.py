@@ -7705,46 +7705,50 @@ def index():
 @app.route('/pricing')
 def pricing():
     user = _current_user(require_access=False)
-    plans = [
-        {
-            'name': 'Monthly',
-            'price': '$99',
-            'period': '/month',
-            'badge': '7-day free trial',
-            'description': 'Best for individual users and small teams getting started with in-house conversion.',
-            'features': [
-                '7-day free trial',
-                'TIFF/PDF/PNG upload workspace',
-                'Curve extraction workflow',
-                'LAS export',
-                'Saved projects',
-                'Account dashboard',
-                'Billing & invoice history',
-            ],
-            'cta': 'Start Free Trial' if not user else 'Manage From Account',
-            'highlight': False,
-        },
-        {
-            'name': 'Annual',
-            'price': '$999',
-            'period': '/year',
-            'badge': 'Best value',
-            'description': 'For companies that want the lowest effective annual cost and uninterrupted access.',
-            'features': [
-                'Everything in Monthly',
-                '7-day free trial',
-                'Lower annual cost',
-                'Priority account support',
-                'Simplified yearly billing',
-            ],
-            'cta': 'Choose Annual' if not user else 'Manage From Account',
-            'highlight': True,
-        },
-    ]
+    self_service = {
+        'eyebrow': 'In-house workflow',
+        'title': 'Self-Service',
+        'description': 'Use TifLAS in-house to upload logs, extract curves, review results, and export LAS files yourself.',
+        'price_lines': [
+            '7-day free trial',
+            'Includes up to 3 logs',
+            '$99/month',
+            '$999/year',
+        ],
+        'features': [
+            'TIFF, PNG, and PDF upload',
+            'Curve extraction workflow',
+            'Review and correction tools',
+            'LAS export',
+            'Saved projects',
+            'Account dashboard',
+        ],
+        'cta': 'Start Free Trial' if not user else 'Open Member Account',
+        'href': '/signup' if not user else '/account',
+    }
+    managed_processing = {
+        'eyebrow': 'Done-for-you option',
+        'title': 'Full-Service Conversion',
+        'description': 'Send us your logs and we’ll process them for you with review, correction, and final QA built into the workflow.',
+        'price_lines': [
+            '$0.99 per 100 curve-feet',
+            '$29.99 minimum per log',
+        ],
+        'notes': [
+            'Poor scans, overlapping traces, wraps, and heavy cleanup may require additional review.',
+            'Pricing scales with extracted curve volume',
+            'Best for teams that want finished output',
+            'Human review stays in the loop',
+            'Quoted separately for highly difficult logs',
+        ],
+        'cta': 'Request a Quote',
+        'href': '/managed-conversion',
+    }
     return render_template(
         'pricing.html',
         user=user,
-        plans=plans,
+        self_service=self_service,
+        managed_processing=managed_processing,
         current_plan_label=auth_billing.plan_label(user.get('plan_code')) if user else None,
     )
 
