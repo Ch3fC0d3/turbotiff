@@ -8361,6 +8361,9 @@
                     headerRegionDrag = false;
 
                     showStatus(message, statusType);
+
+                    // Auto-save the log to the user's account
+                    void autoSaveLogToAccount();
                 } else {
                     const msg = (data && (data.error || data.message)) ? (data.error || data.message) : 'Error during digitization';
                     showStatus('❌ ' + msg, 'error');
@@ -8452,6 +8455,64 @@
                 showStatus(`ZIP download failed: ${err.message}`, 'error');
             } finally {
                 if (btn) btn.disabled = false;
+            }
+        }
+
+        async function autoSaveLogToAccount() {
+            if (!lastLasContent) {
+                console.log('Auto-save skipped: no LAS content');
+                return;
+            }
+
+            // Generate a default name from the filename or timestamp
+            const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+            const logName = lastLasFilename ? lastLasFilename.replace(/\.las$/i, '') : `Log_${timestamp}`;
+
+            const curveCount = document.querySelectorAll('.track-section').length;
+            const topDepth = parseFloat(document.getElementById('topDepth')?.value) || 0;
+            const bottomDepth = parseFloat(document.getElementById('bottomDepth')?.value) || 0;
+            const depthUnit = document.getElementById('depthUnit')?.value || 'FT';
+
+            // Rebuild LAS to include manual edits
+            let finalLasContent = lastLasContent;
+            if (Array.isArray(lastDigitizedDepth) && lastDigitizedDepth.length > 0 &&
+                lastDigitizedCurves && typeof lastDigitizedCurves === 'object' &&
+                lastDepthConfig) {
+                const rebuilt = buildLasFromDigitized(lastDigitizedDepth, lastDigitizedCurves, lastDepthConfig, lastNullValue);
+                if (rebuilt && typeof rebuilt === 'string' && rebuilt.trim().length) {
+                    finalLasContent = rebuilt;
+                }
+            }
+
+            try {
+                const response = await fetch('/api/logs', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: logName,
+                        curve_count: curveCount,
+                        depth_start: topDepth,
+                        depth_end: bottomDepth,
+                        depth_unit: depthUnit,
+                        las_content: finalLasContent
+                    })
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    console.log(`✅ Log auto-saved: ${logName}`);
+                    showStatus(`✅ Log auto-saved to account: ${logName}`, 'success');
+                    
+                    // Automatically open LAS Viewer after a short delay to let the user see the success message
+                    setTimeout(() => {
+                        const fakeEvent = { preventDefault: () => {} };
+                        openLasViewerWithData(fakeEvent);
+                    }, 1500);
+                } else {
+                    console.warn('Auto-save failed:', data.error || 'Unknown error');
+                }
+            } catch (err) {
+                console.error('Auto-save error:', err);
             }
         }
 
