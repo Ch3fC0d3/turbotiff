@@ -7835,6 +7835,132 @@ def pricing():
     )
 
 
+@app.route('/api/managed-jobs/checkout', methods=['POST'])
+def create_managed_job_checkout():
+    """Create a Stripe Checkout Session in setup mode for a managed job."""
+    if not _is_stripe_configured():
+        return jsonify({'success': False, 'error': 'Stripe is not configured'}), 500
+
+    data = request.json
+    if not data:
+        return jsonify({'success': False, 'error': 'Invalid payload'}), 400
+
+    email = data.get('email', '').strip()
+    if not email:
+        return jsonify({'success': False, 'error': 'Email is required'}), 400
+
+    # 1. Create or find Stripe Customer
+    try:
+        customers = stripe.Customer.list(email=email, limit=1).data
+        if customers:
+            customer_id = customers[0].id
+        else:
+            new_customer = stripe.Customer.create(
+                email=email,
+                name=data.get('contactName', ''),
+                metadata={'company_name': data.get('companyName', '')}
+            )
+            customer_id = new_customer.id
+    except stripe.error.StripeError as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+    # 2. Create managed job record in DB
+    job_id = str(uuid.uuid4())
+    user = _current_user(require_access=False)
+    user_id = user['id'] if user else None
+
+    # Generate a quick estimate using the user's data to save it in DB
+    try:
+        with auth_billing.get_db(config.AUTH_DB_PATH) as conn:
+            conn.execute("""
+                INSERT INTO managed_jobs (
+                    id, user_id, stripe_customer_id, company_name, contact_name, email,
+                    project_name, well_name, estimated_depth_feet, estimated_curve_count,
+                    estimated_complexity, estimated_turnaround, estimated_units,
+                    estimated_amount, notes, status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)
+            """, (
+                job_id, user_id, customer_id,
+                data.get('companyName'), data.get('contactName'), email,
+                data.get('projectName'), data.get('wellName'),
+                float(data.get('depthFeet') or 0),
+                int(data.get('curveCount') or 0),
+                data.get('complexity'), data.get('turnaround'),
+                float(data.get('estimatedUnits') or 0),
+                float(data.get('estimatedTotal') or 0),
+                data.get('notes'),
+                datetime.now(timezone.utc).isoformat(),
+                datetime.now(timezone.utc).isoformat()
+            ))
+    except Exception as e:
+        return jsonify({'success': False, 'error': f"DB Error: {e}"}), 500
+
+    # 3. Create Stripe Checkout Session in setup mode
+    try:
+        session = stripe.checkout.Session.create(
+            mode='setup',
+            customer=customer_id,
+            payment_method_types=['card'],
+            success_url=f"{config.APP_BASE_URL}/submit-job/success?job_id={job_id}&session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=f"{config.APP_BASE_URL}/submit-job",
+            metadata={
+                'job_id': job_id,
+                'job_type': 'managed_conversion'
+            }
+        )
+        
+        # Update DB with session ID
+        with auth_billing.get_db(config.AUTH_DB_PATH) as conn:
+            conn.execute("UPDATE managed_jobs SET stripe_checkout_session_id = ? WHERE id = ?", (session.id, job_id))
+
+        return jsonify({'success': True, 'checkoutUrl': session.url})
+    except stripe.error.StripeError as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/submit-job/success', methods=['GET'])
+def managed_job_success():
+    """Handle successful return from Stripe setup checkout."""
+    job_id = request.args.get('job_id')
+    session_id = request.args.get('session_id')
+    
+    if not job_id or not session_id:
+        flash('Missing job or session ID', 'error')
+        return redirect(url_for('submit_job'))
+
+    try:
+        checkout_session = stripe.checkout.Session.retrieve(session_id)
+        if checkout_session.setup_intent:
+            setup_intent = stripe.SetupIntent.retrieve(checkout_session.setup_intent)
+            payment_method_id = setup_intent.payment_method
+            
+            with auth_billing.get_db(config.AUTH_DB_PATH) as conn:
+                conn.execute("""
+                    UPDATE managed_jobs 
+                    SET stripe_payment_method_id = ?, 
+                        status = 'payment_method_saved',
+                        updated_at = ?
+                    WHERE id = ? AND stripe_checkout_session_id = ?
+                """, (
+                    payment_method_id, 
+                    datetime.now(timezone.utc).isoformat(),
+                    job_id, 
+                    session_id
+                ))
+    except Exception as e:
+        print(f"Error completing managed job checkout: {e}")
+        flash('Error verifying your payment method.', 'error')
+
+    return render_template('submit_job_success.html', job_id=job_id)
+
+
+@app.route('/submit-job')
+def submit_job():
+    """React-based managed job submission flow."""
+    user = _current_user(require_access=False)
+    return render_template('submit_job.html', user=user, stripe_ready=_is_stripe_configured())
+
+
 @app.route('/managed-conversion')
 def managed_conversion():
     user = _current_user(require_access=False)

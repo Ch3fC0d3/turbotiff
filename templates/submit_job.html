@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Submit Job - TifLAS</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <link rel="stylesheet" href="/static/home_backdrop.css">
+    <style>
+        .pricing-surface {
+            box-shadow: 0 20px 50px rgba(2, 6, 23, 0.28);
+            background: rgba(15, 23, 42, 0.85);
+            backdrop-filter: blur(12px);
+        }
+    </style>
+</head>
+<body class="site-backdrop min-h-screen bg-slate-900 text-slate-200 font-sans">
+    <nav class="sticky top-0 z-50 border-b border-slate-700 bg-slate-800/80 backdrop-blur-md">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16">
+                <div class="flex items-center">
+                    <a href="{{ '/dashboard' if user else '/' }}" class="flex-shrink-0 flex items-center">
+                        <img src="/static/images/logo.svg" alt="TifLAS Logo" class="h-12 w-auto">
+                    </a>
+                </div>
+                <div class="flex items-center gap-4">
+                    <a href="/pricing" class="text-sm font-medium text-slate-300 hover:text-white">Pricing</a>
+                    {% if user %}
+                        <a href="/dashboard" class="text-sm font-medium text-slate-300 hover:text-white">Dashboard</a>
+                    {% else %}
+                        <a href="/login" class="text-sm font-medium text-slate-300 hover:text-white">Login</a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        const App = () => {
+            const [formData, setFormData] = useState({
+                companyName: '{{ user.company_name or "" }}',
+                contactName: '{{ user.full_name or "" }}',
+                email: '{{ user.email or "" }}',
+                projectName: '',
+                wellName: '',
+                depthFeet: '',
+                curveCount: '',
+                complexity: 'standard',
+                turnaround: 'standard',
+                notes: '',
+                agreeToFinalBilling: false,
+                files: []
+            });
+
+            const [isSubmitting, setIsSubmitting] = useState(false);
+            const [errorMsg, setErrorMsg] = useState(null);
+
+            // Calculation logic
+            const estimate = useMemo(() => {
+                const depth = parseFloat(formData.depthFeet) || 0;
+                const curves = parseInt(formData.curveCount, 10) || 0;
+                const units = (depth * curves) / 100;
+                
+                let compMult = 1.00;
+                if (formData.complexity === 'standard') compMult = 1.15;
+                if (formData.complexity === 'difficult') compMult = 1.35;
+
+                let turnMult = 1.00;
+                if (formData.turnaround === 'rush') turnMult = 1.20;
+
+                const rawEstimate = units * 0.99 * compMult * turnMult;
+                const total = Math.max(29.99, rawEstimate);
+
+                return {
+                    units: units.toFixed(2),
+                    total: total.toFixed(2),
+                    minimumApplied: total === 29.99 && (depth > 0 || curves > 0)
+                };
+            }, [formData.depthFeet, formData.curveCount, formData.complexity, formData.turnaround]);
+
+            const handleChange = (e) => {
+                const { name, value, type, checked, files } = e.target;
+                if (type === 'checkbox') {
+                    setFormData(prev => ({ ...prev, [name]: checked }));
+                } else if (type === 'file') {
+                    const newFiles = Array.from(files);
+                    setFormData(prev => ({ ...prev, files: [...prev.files, ...newFiles] }));
+                } else {
+                    setFormData(prev => ({ ...prev, [name]: value }));
+                }
+            };
+
+            const removeFile = (idx) => {
+                setFormData(prev => {
+                    const newFiles = [...prev.files];
+                    newFiles.splice(idx, 1);
+                    return { ...prev, files: newFiles };
+                });
+            };
+
+            const handleSubmit = async (e) => {
+                e.preventDefault();
+                setErrorMsg(null);
+
+                if (!formData.agreeToFinalBilling) {
+                    setErrorMsg("You must agree to the final billing terms.");
+                    return;
+                }
+
+                if (formData.files.length === 0) {
+                    setErrorMsg("Please upload at least one log file.");
+                    return;
+                }
+
+                setIsSubmitting(true);
+
+                // Prepare file metadata since actual multipart upload is pending
+                const fileMetadata = formData.files.map(f => ({
+                    name: f.name,
+                    size: f.size,
+                    type: f.type
+                }));
+
+                const payload = {
+                    ...formData,
+                    estimatedUnits: parseFloat(estimate.units),
+                    estimatedTotal: parseFloat(estimate.total),
+                    minimumApplied: estimate.minimumApplied,
+                    files: fileMetadata
+                };
+
+                try {
+                    const res = await fetch('/api/managed-jobs/checkout', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    const data = await res.json();
+                    
+                    if (data.success && data.checkoutUrl) {
+                        window.location.href = data.checkoutUrl;
+                    } else {
+                        setErrorMsg(data.error || "An error occurred during submission.");
+                        setIsSubmitting(false);
+                    }
+                } catch (err) {
+                    console.error(err);
+                    setErrorMsg("A network error occurred. Please try again.");
+                    setIsSubmitting(false);
+                }
+            };
+
+            return (
+                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+                    <div className="mb-8">
+                        <h1 className="text-3xl font-extrabold text-white">Submit Managed Job</h1>
+                        <p className="mt-2 text-lg text-slate-300">Submit your logs for full-service conversion.</p>
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                        <div className="lg:col-span-2">
+                            <form onSubmit={handleSubmit} className="pricing-surface border border-slate-700 rounded-2xl p-8 space-y-6">
+                                {errorMsg && (
+                                    <div className="bg-red-900/40 border border-red-500/50 text-red-200 px-4 py-3 rounded-lg">
+                                        {errorMsg}
+                                    </div>
+                                )}
+                                
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-300">Company Name</label>
+                                        <input type="text" name="companyName" value={formData.companyName} onChange={handleChange} required className="mt-1 block w-full rounded-md border border-slate-600 bg-slate-800 text-white px-3 py-2" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-300">Contact Name</label>
+                                        <input type="text" name="contactName" value={formData.contactName} onChange={handleChange} required className="mt-1 block w-full rounded-md border border-slate-600 bg-slate-800 text-white px-3 py-2" />
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-medium text-slate-300">Email</label>
+                                    <input type="email" name="email" value={formData.email} onChange={handleChange} required className="mt-1 block w-full rounded-md border border-slate-600 bg-slate-800 text-white px-3 py-2" />
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-300">Project Name</label>
+                                        <input type="text" name="projectName" value={formData.projectName} onChange={handleChange} required className="mt-1 block w-full rounded-md border border-slate-600 bg-slate-800 text-white px-3 py-2" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-300">Well Name</label>
+                                        <input type="text" name="wellName" value={formData.wellName} onChange={handleChange} required className="mt-1 block w-full rounded-md border border-slate-600 bg-slate-800 text-white px-3 py-2" />
+                                    </div>
+                                </div>
+
+                                <hr className="border-slate-700" />
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-300">Estimated Depth (Feet)</label>
+                                        <input type="number" name="depthFeet" value={formData.depthFeet} onChange={handleChange} required min="0" step="0.1" className="mt-1 block w-full rounded-md border border-slate-600 bg-slate-800 text-white px-3 py-2" placeholder="e.g. 5000" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-300">Number of Curves</label>
+                                        <input type="number" name="curveCount" value={formData.curveCount} onChange={handleChange} required min="1" className="mt-1 block w-full rounded-md border border-slate-600 bg-slate-800 text-white px-3 py-2" placeholder="e.g. 3" />
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-300">Image Complexity</label>
+                                        <select name="complexity" value={formData.complexity} onChange={handleChange} className="mt-1 block w-full rounded-md border border-slate-600 bg-slate-800 text-white px-3 py-2">
+                                            <option value="clean">Clean (1.0x)</option>
+                                            <option value="standard">Standard (1.15x)</option>
+                                            <option value="difficult">Difficult (1.35x)</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-300">Turnaround Time</label>
+                                        <select name="turnaround" value={formData.turnaround} onChange={handleChange} className="mt-1 block w-full rounded-md border border-slate-600 bg-slate-800 text-white px-3 py-2">
+                                            <option value="standard">Standard - 3 to 5 days (1.0x)</option>
+                                            <option value="rush">Rush - 24 to 48 hours (1.2x)</option>
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-medium text-slate-300">Files to Upload</label>
+                                    <p className="text-xs text-amber-400 mt-1 mb-2">Note: Actual file uploading to S3 is pending implementation. Only file metadata will be sent in this prototype.</p>
+                                    <input type="file" name="files" multiple accept=".tif,.tiff,.pdf,.png,.jpg,.jpeg" onChange={handleChange} className="block w-full text-sm text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-slate-700 file:text-white hover:file:bg-slate-600" />
+                                    
+                                    {formData.files.length > 0 && (
+                                        <ul className="mt-4 space-y-2">
+                                            {formData.files.map((f, i) => (
+                                                <li key={i} className="flex items-center justify-between bg-slate-800 p-2 rounded border border-slate-700">
+                                                    <span className="text-sm truncate mr-4">{f.name} ({(f.size / 1024 / 1024).toFixed(2)} MB)</span>
+                                                    <button type="button" onClick={() => removeFile(i)} className="text-red-400 hover:text-red-300 text-sm">Remove</button>
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    )}
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-medium text-slate-300">Notes / Instructions</label>
+                                    <textarea name="notes" value={formData.notes} onChange={handleChange} rows="3" className="mt-1 block w-full rounded-md border border-slate-600 bg-slate-800 text-white px-3 py-2" placeholder="Any specific instructions for the extraction team?"></textarea>
+                                </div>
+
+                                <div className="flex items-start bg-slate-800/50 p-4 rounded-lg border border-slate-700">
+                                    <div className="flex items-center h-5">
+                                        <input id="agreeToFinalBilling" name="agreeToFinalBilling" type="checkbox" checked={formData.agreeToFinalBilling} onChange={handleChange} className="w-4 h-4 rounded border-slate-600 text-primary-600 focus:ring-primary-500 bg-slate-700" />
+                                    </div>
+                                    <div className="ml-3 text-sm">
+                                        <label htmlFor="agreeToFinalBilling" className="font-medium text-slate-200">I authorize final billing based on actuals.</label>
+                                        <p className="text-slate-400">I understand this is an estimate. I authorize TifLAS to save a payment method and charge the final managed processing amount after review and confirmation of the actual work required.</p>
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <button type="submit" disabled={isSubmitting} className={`w-full flex justify-center py-3 px-4 border border-transparent rounded-lg shadow-sm text-sm font-extrabold text-white ${isSubmitting ? 'bg-slate-600 cursor-not-allowed' : 'bg-[#667eea] hover:bg-[#764ba2] shadow-[0_0_20px_rgba(102,126,234,0.3)]'} focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#667eea] focus:ring-offset-slate-900 transition-colors`}>
+                                        {isSubmitting ? 'Processing...' : 'Continue to Payment Setup'}
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+
+                        <div className="space-y-6">
+                            <div className="pricing-surface border border-slate-700 rounded-2xl p-6 sticky top-24">
+                                <h3 className="text-lg font-bold text-white border-b border-slate-700 pb-3 mb-4">Live Estimate</h3>
+                                
+                                <div className="space-y-3 text-sm text-slate-300">
+                                    <div className="flex justify-between">
+                                        <span>Depth (ft)</span>
+                                        <span className="font-medium text-white">{formData.depthFeet || 0}</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                        <span>Curves</span>
+                                        <span className="font-medium text-white">{formData.curveCount || 0}</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                        <span>100-ft Units</span>
+                                        <span className="font-medium text-white">{estimate.units}</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                        <span>Complexity</span>
+                                        <span className="font-medium text-white capitalize">{formData.complexity}</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                        <span>Turnaround</span>
+                                        <span className="font-medium text-white capitalize">{formData.turnaround}</span>
+                                    </div>
+                                </div>
+
+                                <div className="mt-6 pt-4 border-t border-slate-700">
+                                    <div className="flex justify-between items-baseline">
+                                        <span className="text-base font-semibold text-slate-200">Estimated Total</span>
+                                        <span className="text-3xl font-extrabold text-primary-400">${estimate.total}</span>
+                                    </div>
+                                    {estimate.minimumApplied && (
+                                        <p className="mt-2 text-xs text-amber-400 text-right">Includes $29.99 minimum charge.</p>
+                                    )}
+                                </div>
+                            </div>
+
+                            <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6">
+                                <h3 className="text-md font-bold text-white mb-4">What Happens Next?</h3>
+                                <ul className="space-y-4">
+                                    <li className="flex">
+                                        <div className="flex-shrink-0 h-6 w-6 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-slate-300">1</div>
+                                        <p className="ml-3 text-sm text-slate-300">We securely save your job details and files.</p>
+                                    </li>
+                                    <li className="flex">
+                                        <div className="flex-shrink-0 h-6 w-6 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-slate-300">2</div>
+                                        <p className="ml-3 text-sm text-slate-300">You save a payment method through our secure Stripe portal (no immediate charge).</p>
+                                    </li>
+                                    <li className="flex">
+                                        <div className="flex-shrink-0 h-6 w-6 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-slate-300">3</div>
+                                        <p className="ml-3 text-sm text-slate-300">We review the logs and confirm the actual work required.</p>
+                                    </li>
+                                    <li className="flex">
+                                        <div className="flex-shrink-0 h-6 w-6 rounded-full bg-primary-900/50 border border-primary-500/30 flex items-center justify-center text-xs font-bold text-primary-400">4</div>
+                                        <p className="ml-3 text-sm text-slate-300">We digitize your data, deliver the LAS, and charge the final actual amount.</p>
+                                    </li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

@@ -107,6 +107,38 @@ def init_db(db_path: str) -> None:
         conn.execute("INSERT OR IGNORE INTO admin_settings (setting_key, setting_value) VALUES ('global_banner', '')")
         conn.execute("INSERT OR IGNORE INTO admin_settings (setting_key, setting_value) VALUES ('feature_flag_experimental_ai', '0')")
 
+        # Create managed_jobs table
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS managed_jobs (
+                id TEXT PRIMARY KEY,
+                user_id INTEGER,
+                stripe_customer_id TEXT,
+                stripe_checkout_session_id TEXT,
+                stripe_payment_method_id TEXT,
+                company_name TEXT,
+                contact_name TEXT,
+                email TEXT,
+                project_name TEXT,
+                well_name TEXT,
+                estimated_depth_feet REAL,
+                estimated_curve_count INTEGER,
+                estimated_complexity TEXT,
+                estimated_turnaround TEXT,
+                estimated_units REAL,
+                estimated_amount REAL,
+                actual_depth_feet REAL,
+                actual_curve_count INTEGER,
+                actual_complexity TEXT,
+                actual_turnaround TEXT,
+                actual_units REAL,
+                actual_amount REAL,
+                notes TEXT,
+                status TEXT DEFAULT 'draft',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+
         # Remember-me tokens table
         conn.execute(
             """

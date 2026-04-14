@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Job Submitted - TifLAS</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <link rel="stylesheet" href="/static/home_backdrop.css">
+    <style>
+        .pricing-surface {
+            box-shadow: 0 20px 50px rgba(2, 6, 23, 0.28);
+            background: rgba(15, 23, 42, 0.85);
+            backdrop-filter: blur(12px);
+        }
+    </style>
+</head>
+<body class="site-backdrop min-h-screen bg-slate-900 text-slate-200 font-sans">
+    <nav class="sticky top-0 z-50 border-b border-slate-700 bg-slate-800/80 backdrop-blur-md">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16">
+                <div class="flex items-center">
+                    <a href="/" class="flex-shrink-0 flex items-center">
+                        <img src="/static/images/logo.svg" alt="TifLAS Logo" class="h-12 w-auto">
+                    </a>
+                </div>
+                <div class="flex items-center gap-4">
+                    <a href="/pricing" class="text-sm font-medium text-slate-300 hover:text-white">Pricing</a>
+                    <a href="/dashboard" class="text-sm font-medium text-slate-300 hover:text-white">Dashboard</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-24 text-center">
+        <div class="pricing-surface border border-slate-700 rounded-3xl p-12">
+            <div class="mx-auto flex items-center justify-center h-24 w-24 rounded-full bg-emerald-900/50 border border-emerald-500/30 mb-8">
+                <i data-lucide="check" class="h-12 w-12 text-emerald-400"></i>
+            </div>
+            
+            <h1 class="text-4xl font-extrabold text-white tracking-tight mb-4">Job Successfully Submitted</h1>
+            <p class="text-xl text-slate-300 mb-8">
+                Thank you! Your payment method has been securely saved. Our team will review the log complexity and begin processing your digitization job (ID: {{ job_id }}).
+            </p>
+            
+            <div class="bg-slate-800/60 rounded-xl p-6 border border-slate-700 text-left space-y-4 mb-8">
+                <h3 class="font-bold text-white text-lg">What happens next?</h3>
+                <ul class="list-disc pl-5 space-y-2 text-slate-300">
+                    <li>We will review the actual curve length and complexity.</li>
+                    <li>We will process your LAS file based on your turnaround selection.</li>
+                    <li>You will receive an email once the conversion is complete.</li>
+                    <li>The final, actual amount will be charged to the payment method you just saved.</li>
+                </ul>
+            </div>
+            
+            <a href="/dashboard" class="inline-flex items-center px-8 py-4 border border-transparent text-lg font-bold rounded-xl text-white bg-[#667eea] hover:bg-[#764ba2] transition-colors shadow-[0_0_20px_rgba(102,126,234,0.3)]">
+                Return to Dashboard
+            </a>
+        </div>
+    </div>
+
+    <script>
+        lucide.createIcons();
+    </script>
+</body>
+</html>
