@@ -102,6 +102,7 @@ import hashlib
 ai_tracer = AITracer("curve_trace_model.pt")
 
 # Try to import Google Vision API (optional)
+credentials = None
 try:
     from google.cloud import vision
     from google.oauth2 import service_account
@@ -382,38 +383,24 @@ def _handle_internal_server_error(exc):
 
 @app.errorhandler(Exception)
 def _handle_unhandled_exception(exc):
-    if request.path == '/digitize':
-        import traceback
-        original = getattr(exc, 'original_exception', None)
-        if original is not None:
-            err_msg = str(original)
-        else:
-            err_msg = str(exc)
-
-        tb = traceback.format_exc()
-        
-        print(f"/digitize 500 error: {err_msg}")
-        
-        # Hide details in production
-        if is_prod:
-            return jsonify({
-                'success': False,
-                'error': 'An internal server error occurred during digitization.'
-            }), 500
-            
-        print(tb)
-        tb_lines = tb.splitlines()[-25:]
-        tb_short = "\n".join(tb_lines)
-
+    import traceback
+    original = getattr(exc, 'original_exception', None)
+    err_msg = str(original) if original else str(exc)
+    tb = traceback.format_exc()
+    
+    print(f"500 error: {err_msg}\n{tb}")
+    
+    # Hide details in production
+    if is_prod:
         return jsonify({
             'success': False,
-            'error': err_msg,
-            'traceback': tb_short,
+            'error': f'An internal server error occurred: {err_msg}'
         }), 500
-
+        
     return jsonify({
         'success': False,
-        'error': 'Internal server error',
+        'error': err_msg,
+        'traceback': tb.splitlines()[-25:],
     }), 500
 
 # ----------------------------
@@ -7857,7 +7844,10 @@ def generate_upload_url():
     try:
         # Create a storage client using the exact same credentials loaded for Vision OCR
         global credentials
-        storage_client = storage.Client(credentials=credentials)
+        if credentials:
+            storage_client = storage.Client(credentials=credentials)
+        else:
+            storage_client = storage.Client()
         
         bucket_name = config.GCS_UPLOADS_BUCKET
         bucket = storage_client.bucket(bucket_name)
