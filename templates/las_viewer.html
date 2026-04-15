@@ -959,7 +959,7 @@ function checkLibs() {
         if (sessionLas) {
              console.log('[LAS Viewer] Found session LAS data');
              try {
-                 window.addEventListener('libraries-loaded', () => {
+                 const initSession = () => {
                     const w = window.wellio;
                     lasData = w.las2json(sessionLas);
                     document.getElementById('placeholder').style.display = 'none';
@@ -967,7 +967,9 @@ function checkLibs() {
                     buildCurveChips();
                     document.getElementById('zoomControls').style.display = 'flex';
                     renderPlot();
-                });
+                };
+                if (window.librariesLoaded) initSession();
+                else window.addEventListener('libraries-loaded', initSession);
              } catch (err) {
                  console.error('Session LAS parse error:', err);
                  showError('Failed to parse passed LAS data.');
@@ -975,7 +977,7 @@ function checkLibs() {
         } else if (window.PRELOADED_LAS_CONTENT) {
             console.log('[LAS Viewer] Found PRELOADED LAS data');
             try {
-                window.addEventListener('libraries-loaded', () => {
+                const initPreloaded = () => {
                     const w = window.wellio;
                     lasData = w.las2json(window.PRELOADED_LAS_CONTENT);
                     document.getElementById('placeholder').style.display = 'none';
@@ -994,7 +996,9 @@ function checkLibs() {
                         };
                         img.src = window.PRELOADED_IMAGE_CONTENT;
                     }
-                });
+                };
+                if (window.librariesLoaded) initPreloaded();
+                else window.addEventListener('libraries-loaded', initPreloaded);
             } catch (err) {
                  console.error('Session LAS parse error:', err);
                  showError('Failed to parse passed LAS data.');
