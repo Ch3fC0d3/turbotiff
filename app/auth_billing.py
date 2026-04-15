@@ -550,6 +550,8 @@ def subscription_access_allowed(user: Dict[str, Any]) -> bool:
     return status in {"trialing", "active", "managed_only"}
 
 def can_access_workspace(user: Dict[str, Any]) -> bool:
+    if user.get("is_admin"):
+        return True
     status = (user.get("subscription_status") or "none").lower()
     return status in {"trialing", "active"}
 
