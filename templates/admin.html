@@ -35,9 +35,15 @@
         {% endwith %}
 
         <div class="grid gap-6 md:grid-cols-2 mb-6">
-            <div class="rounded-lg border border-amber-900/50 bg-slate-900 p-6">
-                <h2 class="mb-4 text-lg font-semibold border-b border-slate-800 pb-2">Business Metrics</h2>
-                <div class="space-y-3 text-sm">
+            <div class="rounded-lg border border-amber-900/50 bg-slate-900 p-6 flex flex-col h-full">
+                <div class="flex items-center justify-between mb-4 border-b border-slate-800 pb-2">
+                    <h2 class="text-lg font-semibold">Business Metrics</h2>
+                    <a href="https://dashboard.stripe.com/" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1.5 text-xs font-medium text-indigo-400 hover:text-indigo-300 transition-colors bg-indigo-500/10 px-2.5 py-1 rounded-md border border-indigo-500/20">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-external-link"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>
+                        Stripe Dashboard
+                    </a>
+                </div>
+                <div class="space-y-3 text-sm flex-grow">
                     <div class="flex justify-between border-b border-slate-800/50 pb-2">
                         <span class="text-slate-400">Monthly Recurring Revenue (MRR)</span>
                         <span class="font-bold text-emerald-400">${{ "%.2f"|format(stats.mrr) }}</span>
