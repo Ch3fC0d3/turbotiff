@@ -553,7 +553,7 @@ def can_access_workspace(user: Dict[str, Any]) -> bool:
     if user.get("is_admin"):
         return True
     status = (user.get("subscription_status") or "none").lower()
-    return status in {"trialing", "active"}
+    return status in {"trialing", "active", "managed_only"}
 
 
 def serialize_invoices(stripe_invoices: List[Any]) -> List[Dict[str, Any]]:
