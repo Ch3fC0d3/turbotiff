@@ -7945,6 +7945,7 @@ def create_managed_job_checkout():
             payment_method_types=['card'],
             success_url=f"{config.APP_BASE_URL}/submit-job/success?job_id={job_id}&session_id={{CHECKOUT_SESSION_ID}}",
             cancel_url=f"{config.APP_BASE_URL}/submit-job",
+            allow_promotion_codes=True,
             metadata={
                 'job_id': job_id,
                 'job_type': 'managed_conversion'
