@@ -8713,8 +8713,9 @@ def upload_file():
     
     h, w, _ = img.shape
     
-    # Convert to base64 for display
-    _, buffer = cv2.imencode('.png', img)
+    # Convert to base64 for display - use JPEG with 85% quality to prevent massive payload sizes 
+    # that cause 503 Service Unavailable errors on large well logs
+    _, buffer = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 85])
     img_base64 = base64.b64encode(buffer).decode('utf-8')
     
     # Auto-detect tracks
@@ -8749,7 +8750,7 @@ def upload_file():
 
     return jsonify({
         'success': True,
-        'image': f'data:image/png;base64,{img_base64}',
+        'image': f'data:image/jpeg;base64,{img_base64}',
         'width': w,
         'height': h,
         'tracks': tracks,
