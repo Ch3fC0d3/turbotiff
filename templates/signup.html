@@ -21,7 +21,7 @@
 
     <div class="mt-8 sm:mx-auto sm:w-full sm:max-w-lg">
         <div class="border border-slate-700 bg-slate-900/85 py-8 px-4 shadow-2xl backdrop-blur-sm sm:rounded-lg sm:px-10">
-            <form class="space-y-4" action="/signup" method="POST">
+            <form class="space-y-4" action="/signup{% if managed_mode %}?managed=true{% endif %}" method="POST">
                 {% if error %}
                 <div class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-md text-sm">{{ error }}</div>
                 {% endif %}

@@ -347,16 +347,16 @@ def _current_user(require_access: bool = True):
 
 
 from functools import wraps
-def login_required(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        user = _current_user(require_access=True)
-        if not user:
-            if session.get('user_id'):
-                return redirect(url_for('account'))
-            return redirect(url_for('login', next=request.url))
-        return f(*args, **kwargs)
-    return decorated_function
+def login_required(require_access=True):
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            user = _current_user(require_access=require_access)
+            if user is None:
+                return redirect(url_for('login', next=request.url))
+            return f(*args, **kwargs)
+        return decorated_function
+    return decorator
 
 @app.errorhandler(500)
 def _handle_internal_server_error(exc):
@@ -8114,6 +8114,8 @@ def logout():
 def signup():
     """Create a real user account (password-hashed, persisted in SQLite)."""
     error = None
+    managed_mode = request.args.get('managed') == 'true'
+    
     if request.method == 'POST':
         full_name = request.form.get('full_name', '').strip()
         company_name = request.form.get('company_name', '').strip()
@@ -8133,8 +8135,20 @@ def signup():
                 company_name=company_name,
             )
             session['user_id'] = user_id
-            # Always start a local trial immediately so the user can access the
-            # dashboard right away, regardless of whether Stripe checkout completes.
+            
+            if managed_mode:
+                # Managed jobs users skip the trial and subscription flow.
+                # Give them a 'managed_only' plan to differentiate them.
+                auth_billing.update_user_fields(
+                    config.AUTH_DB_PATH,
+                    user_id,
+                    subscription_status='managed_only',
+                    plan_code='managed_only'
+                )
+                flash('Account created! Welcome to the managed jobs dashboard.', 'success')
+                return redirect(url_for('dashboard'))
+            
+            # Regular self-serve path: start trial immediately
             trial_end_iso = (datetime.now(timezone.utc) + timedelta(days=auth_billing.TRIAL_DAYS)).isoformat()
             auth_billing.update_user_fields(
                 config.AUTH_DB_PATH,
@@ -8149,7 +8163,7 @@ def signup():
             flash('Account created! Your 7-day free trial is now active.', 'success')
             return redirect(url_for('dashboard'))
 
-    return render_template('signup.html', error=error)
+    return render_template('signup.html', error=error, managed_mode=managed_mode)
 
 
 @app.route('/auth-debug')
@@ -8251,7 +8265,7 @@ def update_account():
 
 
 @app.route('/admin')
-@login_required
+@login_required()
 def admin():
     """Admin panel."""
     user = _current_user(require_access=True)
@@ -8272,7 +8286,7 @@ def admin():
 
 
 @app.route('/api/admin/managed-jobs/charge', methods=['POST'])
-@login_required
+@login_required()
 def charge_managed_job():
     if not session.get('is_admin'):
         return jsonify({'success': False, 'error': 'Unauthorized'}), 403
@@ -8338,7 +8352,7 @@ def charge_managed_job():
 
 
 @app.route('/admin/action', methods=['POST'])
-@login_required
+@login_required()
 def admin_action():
     if not session.get('is_admin'):
         return jsonify({'success': False, 'error': 'Unauthorized'}), 403
@@ -8557,7 +8571,7 @@ def stripe_webhook():
 
 
 @app.route('/api/logs', methods=['POST'])
-@login_required
+@login_required()
 def save_log():
     """Save a digitized log to the user's account."""
     user = _current_user(require_access=True)
@@ -8599,7 +8613,7 @@ def save_log():
 
 
 @app.route('/api/logs/<log_id>/download', methods=['GET'])
-@login_required
+@login_required()
 def download_log(log_id):
     """Download a saved log as a .las file."""
     user = _current_user(require_access=True)
@@ -8619,11 +8633,15 @@ def download_log(log_id):
 
 
 @app.route('/workspace')
-@login_required
+@login_required()
 def workspace():
     user = _current_user(require_access=True)
     if not user:
         return redirect(url_for('login'))
+        
+    if not auth_billing.can_access_workspace(user):
+        flash('Full-service users cannot access the self-serve workspace. Upgrade to a self-serve plan to use this feature.', 'warning')
+        return redirect(url_for('dashboard'))
 
     response = make_response(render_template('workspace.html',
                            user=user,
@@ -8637,7 +8655,7 @@ def workspace():
     return response
 
 @app.route('/dashboard')
-@login_required
+@login_required()
 def dashboard():
     """User dashboard listing saved logs."""
     user = _current_user(require_access=True)
@@ -8658,7 +8676,7 @@ def dashboard():
 
 
 @app.route('/las_viewer')
-@login_required
+@login_required()
 def las_viewer():
     log_id = request.args.get('log_id')
     log_data = None
@@ -8747,7 +8765,7 @@ def upload_file():
     })
 
 @app.route('/digitize', methods=['POST'])
-@login_required
+@login_required()
 def digitize():
     """Process digitization request"""
     user = _current_user(require_access=True)

@@ -547,6 +547,10 @@ def plan_label(plan_code: str) -> str:
 
 def subscription_access_allowed(user: Dict[str, Any]) -> bool:
     status = (user.get("subscription_status") or "none").lower()
+    return status in {"trialing", "active", "managed_only"}
+
+def can_access_workspace(user: Dict[str, Any]) -> bool:
+    status = (user.get("subscription_status") or "none").lower()
     return status in {"trialing", "active"}
 
 
