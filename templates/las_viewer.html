@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LAS Viewer - TifLAS</title>
-    <!-- Use ES modules via esm.sh for reliable loading of CommonJS packages -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+    <!-- Use D3 v5 since wellioviz is hard-dependent on v5 APIs -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/5.16.0/d3.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/wellioviz@2.1.2/dist/index.js"></script>
 
     {% if log_data %}
@@ -901,10 +901,10 @@ function renderPlot() {
                         stroke_linecap: ['butt'],
                         fill: [{
                             curve_name: curveName,
-                            fill: 'yes',
+                            fill: 'no',
                             fill_direction: 'left',
                             cutoffs: [],
-                            fill_colors: [color + '28'],
+                            fill_colors: [],
                             curve2: '',
                         }],
                         curve_units: [unit],
