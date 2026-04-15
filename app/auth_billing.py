@@ -244,7 +244,7 @@ def save_user_log(db_path: str, log_id: str, user_id: int, name: str, curve_coun
 def get_user_logs(db_path: str, user_id: int) -> List[Dict[str, Any]]:
     with get_db(db_path) as conn:
         rows = conn.execute(
-            "SELECT id, name, curve_count, depth_start, depth_end, depth_unit, created_at, updated_at FROM user_logs WHERE user_id = ? ORDER BY created_at DESC", 
+            "SELECT id, name, curve_count, depth_start, depth_end, depth_unit, created_at, updated_at, original_image_path FROM user_logs WHERE user_id = ? ORDER BY created_at DESC", 
             (user_id,)
         ).fetchall()
     
