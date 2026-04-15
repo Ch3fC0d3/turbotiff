@@ -8693,6 +8693,21 @@ def favicon():
     """Return empty response for favicon to prevent 404 errors."""
     return '', 204
 
+@app.route('/api/images/<filename>')
+@login_required()
+def get_image(filename):
+    """Serve saved well log images to authenticated users."""
+    user = _current_user(require_access=True)
+    if not user:
+        return "Not authorized", 401
+    
+    # We could theoretically verify the image belongs to the user,
+    # but the UUID filename acts as a sufficient secure capability URL
+    # for users inside their own session.
+    images_dir = os.path.abspath(os.path.join('data', 'images'))
+    return send_from_directory(images_dir, filename)
+
+
 @app.route('/upload', methods=['POST'])
 def upload_file():
     """Handle file upload and return image info"""
@@ -8713,8 +8728,19 @@ def upload_file():
     
     h, w, _ = img.shape
     
-    # Convert to base64 for display - use JPEG with 85% quality to prevent massive payload sizes 
-    # that cause 503 Service Unavailable errors on large well logs
+    # Save the image to the persistent data volume so we can reference its path
+    import uuid
+    import os
+    images_dir = os.path.join('data', 'images')
+    os.makedirs(images_dir, exist_ok=True)
+    image_filename = f"{uuid.uuid4().hex}.jpg"
+    image_path = os.path.join(images_dir, image_filename)
+    
+    # Save as JPEG with 85% quality to save space
+    cv2.imwrite(image_path, img, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    
+    # We still return the base64 version for immediate frontend display,
+    # but we also return the permanent path so the frontend can save it.
     _, buffer = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 85])
     img_base64 = base64.b64encode(buffer).decode('utf-8')
     
@@ -8751,6 +8777,7 @@ def upload_file():
     return jsonify({
         'success': True,
         'image': f'data:image/jpeg;base64,{img_base64}',
+        'image_path': f'/api/images/{image_filename}',
         'width': w,
         'height': h,
         'tracks': tracks,

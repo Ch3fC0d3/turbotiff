@@ -1806,6 +1806,7 @@
 
     <script>
         let uploadedImage = null;
+        let uploadedImagePath = null;
         let imageWidth = 0;
         let imageHeight = 0;
         let detectedTracks = [];
@@ -7105,6 +7106,7 @@
                 
                 if (data.success) {
                     uploadedImage = data.image;
+                    uploadedImagePath = data.image_path || uploadedImage;
                     imageWidth = data.width;
                     imageHeight = data.height;
                     allTracks = sanitizeTrackPairs(data.all_tracks || data.tracks || []);
@@ -11065,7 +11067,7 @@
                         depth_end: bottomDepth,
                         depth_unit: depthUnit,
                         las_content: finalLasContent,
-                        original_image_path: gcsKey
+                        original_image_path: uploadedImagePath
                     })
                 });
 
