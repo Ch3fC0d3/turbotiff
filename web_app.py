@@ -8590,7 +8590,14 @@ def dashboard():
 @app.route('/las_viewer')
 @login_required
 def las_viewer():
-    return render_template('las_viewer.html', app_version=APP_VERSION)
+    log_id = request.args.get('log_id')
+    log_data = None
+    if log_id:
+        user = _current_user()
+        if user:
+            log_data = auth_billing.get_user_log(config.AUTH_DB_PATH, log_id, user['id'])
+    
+    return render_template('las_viewer.html', app_version=APP_VERSION, log_data=log_data)
 
 
 @app.route('/favicon.ico')
