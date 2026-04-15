@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LAS Viewer - TifLAS</title>
     <!-- Load required libraries -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/5.16.0/d3.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/wellioviz@0.0.34/dist/index.js"></script>
 
     {% if log_data %}
@@ -17,21 +17,17 @@
 
     <script type="module">
         import wellio from 'https://esm.sh/wellio@0.1.16';
-        import wellioviz from 'https://esm.sh/wellioviz@0.0.34?deps=d3@7.9.0';
-        import * as d3 from 'https://esm.sh/d3@7.9.0';
-
-        window.d3 = d3;
-        window.wellio = wellio;
-        window.wellioviz = wellioviz;
         
-        // Inject d3 into wellioviz if needed
-        if (wellioviz && !wellioviz.d3) {
-            wellioviz.d3 = d3;
-        }
-
-        console.log("[LAS Viewer] Libraries loaded via ESM");
-        window.librariesLoaded = true;
-        window.dispatchEvent(new Event('libraries-loaded'));
+        window.wellio = wellio;
+        
+        // Give time for D3 and wellioviz globals to attach
+        setTimeout(() => {
+            if (window.wellioviz && window.d3) {
+                console.log("[LAS Viewer] Libraries loaded via Globals");
+                window.librariesLoaded = true;
+                window.dispatchEvent(new Event('libraries-loaded'));
+            }
+        }, 100);
     </script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -804,7 +800,7 @@ document.getElementById('plotWrapper').addEventListener('wheel', function(e) {
 function renderPlot() {
     if (!lasData) return;
 
-    const wviz = resolveWellioviz();
+    const wviz = window.wellioviz;
     if (!wviz) {
         showError('wellioviz library failed to load. Cannot render plot. Please refresh the page.');
         return;
@@ -946,8 +942,8 @@ function renderPlot() {
 
 // ── Library load check ─────────────────────────────────────────────────────
 function checkLibs() {
-    const w = resolveWellio();
-    const wv = resolveWellioviz();
+    const w = window.wellio;
+    const wv = window.wellioviz;
     if (w && wv) {
         // Libraries ready
         console.log('[LAS Viewer] Libraries verified ready');
@@ -960,14 +956,15 @@ function checkLibs() {
         if (sessionLas) {
              console.log('[LAS Viewer] Found session LAS data');
              try {
-                 lasData = w.las2json(sessionLas);
-                 zoomLevel = 1.0;
-                 document.getElementById('zoomLabel').textContent = '100%';
-                 document.getElementById('placeholder').style.display = 'none';
-                 showInfo(lasData);
-                 buildCurveChips();
-                 document.getElementById('zoomControls').style.display = 'flex';
-                 renderPlot();
+                 window.addEventListener('libraries-loaded', () => {
+                    const w = window.wellio;
+                    lasData = w.las2json(sessionLas);
+                    document.getElementById('placeholder').style.display = 'none';
+                    showInfo(lasData);
+                    buildCurveChips();
+                    document.getElementById('zoomControls').style.display = 'flex';
+                    renderPlot();
+                });
              } catch (err) {
                  console.error('Session LAS parse error:', err);
                  showError('Failed to parse passed LAS data.');
