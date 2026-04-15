@@ -7834,8 +7834,11 @@ def generate_upload_url():
     filename = data.get('filename')
     content_type = data.get('contentType')
     
-    if not filename or not content_type:
-        return jsonify({'success': False, 'error': 'Missing filename or contentType'}), 400
+    if not content_type:
+        content_type = 'application/octet-stream'
+        
+    if not filename:
+        return jsonify({'success': False, 'error': 'Missing filename'}), 400
 
     # Ensure Vision API/Cloud credentials exist to use GCS
     if not VISION_API_AVAILABLE:

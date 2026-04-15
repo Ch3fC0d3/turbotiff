@@ -127,12 +127,13 @@
                     const uploadedFiles = [];
                     for (const file of formData.files) {
                         // Get presigned URL
+                        const contentType = file.type || 'application/octet-stream';
                         const urlRes = await fetch('/api/managed-jobs/upload-url', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
                                 filename: file.name,
-                                contentType: file.type
+                                contentType: contentType
                             })
                         });
                         const urlData = await urlRes.json();
@@ -145,7 +146,7 @@
                         const uploadRes = await fetch(urlData.uploadUrl, {
                             method: 'PUT',
                             headers: {
-                                'Content-Type': file.type,
+                                'Content-Type': contentType,
                             },
                             body: file
                         });
