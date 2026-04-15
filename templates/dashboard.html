@@ -111,6 +111,11 @@
                         <button onclick="viewLog('{{ log.id }}')" class="flex-1 inline-flex justify-center items-center gap-2 rounded-md bg-emerald-900/10 px-3 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-900/16 ring-1 ring-inset ring-emerald-700/25 transition-colors">
                             <i data-lucide="line-chart" class="h-4 w-4"></i> View LAS
                         </button>
+                        {% if log.original_image_path %}
+                        <a href="{{ log.original_image_path }}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center justify-center rounded-md bg-white/75 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-white ring-1 ring-inset ring-stone-400/55 transition-colors" title="View Original Image">
+                            <i data-lucide="image" class="h-4 w-4"></i>
+                        </a>
+                        {% endif %}
                         <a href="/api/logs/{{ log.id }}/download" class="inline-flex items-center justify-center rounded-md bg-white/75 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-white ring-1 ring-inset ring-stone-400/55 transition-colors" title="Download LAS">
                             <i data-lucide="download" class="h-4 w-4"></i>
                         </a>
