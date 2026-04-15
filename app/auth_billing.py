@@ -88,6 +88,7 @@ def init_db(db_path: str) -> None:
                 depth_unit TEXT,
                 original_image_path TEXT,
                 created_at TEXT NOT NULL,
+                updated_at TEXT,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             )
             """
@@ -96,6 +97,18 @@ def init_db(db_path: str) -> None:
         # Safe migration if original_image_path is missing
         try:
             conn.execute("ALTER TABLE user_logs ADD COLUMN original_image_path TEXT")
+        except sqlite3.OperationalError:
+            pass
+
+        # Safe migration if updated_at is missing
+        try:
+            conn.execute("ALTER TABLE user_logs ADD COLUMN updated_at TEXT")
+        except sqlite3.OperationalError:
+            pass
+
+        # Best-effort backfill for legacy rows (ignore if column already existed or other issues)
+        try:
+            conn.execute("UPDATE user_logs SET updated_at = created_at WHERE updated_at IS NULL")
         except sqlite3.OperationalError:
             pass
         conn.execute("CREATE INDEX IF NOT EXISTS idx_user_logs_user_id ON user_logs(user_id)")
