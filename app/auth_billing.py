@@ -330,15 +330,25 @@ def get_all_users_for_admin(db_path: str) -> List[Dict[str, Any]]:
 
 def get_all_logs_for_admin(db_path: str) -> List[Dict[str, Any]]:
     with get_db(db_path) as conn:
-        rows = conn.execute(
-            """
-            SELECT l.id, l.name, l.curve_count, l.created_at, LENGTH(l.las_content) as size_bytes, u.email as user_email
+        rows = conn.execute("""
+            SELECT l.*, u.email as user_email
             FROM user_logs l
             JOIN users u ON l.user_id = u.id
             ORDER BY l.created_at DESC
-            """
-        ).fetchall()
-    return [dict(r) for r in rows]
+            LIMIT 500
+        """).fetchall()
+        return [dict(r) for r in rows]
+
+def get_all_managed_jobs_for_admin(db_path: str) -> List[Dict[str, Any]]:
+    with get_db(db_path) as conn:
+        rows = conn.execute("""
+            SELECT m.*, u.email as account_email
+            FROM managed_jobs m
+            LEFT JOIN users u ON m.user_id = u.id
+            ORDER BY m.created_at DESC
+            LIMIT 500
+        """).fetchall()
+        return [dict(r) for r in rows]
 
 def get_admin_stats(db_path: str) -> Dict[str, Any]:
     stats = {

@@ -7945,7 +7945,6 @@ def create_managed_job_checkout():
             payment_method_types=['card'],
             success_url=f"{config.APP_BASE_URL}/submit-job/success?job_id={job_id}&session_id={{CHECKOUT_SESSION_ID}}",
             cancel_url=f"{config.APP_BASE_URL}/submit-job",
-            allow_promotion_codes=True,
             metadata={
                 'job_id': job_id,
                 'job_type': 'managed_conversion'
@@ -8259,13 +8258,80 @@ def admin():
         
     users = auth_billing.get_all_users_for_admin(config.AUTH_DB_PATH)
     logs = auth_billing.get_all_logs_for_admin(config.AUTH_DB_PATH)
+    managed_jobs = auth_billing.get_all_managed_jobs_for_admin(config.AUTH_DB_PATH)
     stats = auth_billing.get_admin_stats(config.AUTH_DB_PATH)
     settings = auth_billing.get_admin_settings(config.AUTH_DB_PATH)
     
     # Determine which user we are impersonating, if any
     impersonating_id = session.get('impersonate_user_id')
     
-    return render_template('admin.html', user=user, users=users, logs=logs, stats=stats, settings=settings, impersonating_id=impersonating_id)
+    return render_template('admin.html', user=user, users=users, logs=logs, managed_jobs=managed_jobs, stats=stats, settings=settings, impersonating_id=impersonating_id)
+
+
+@app.route('/api/admin/managed-jobs/charge', methods=['POST'])
+@login_required
+def charge_managed_job():
+    if not session.get('is_admin'):
+        return jsonify({'success': False, 'error': 'Unauthorized'}), 403
+        
+    data = request.json or {}
+    job_id = data.get('job_id')
+    amount_dollars = data.get('amount')
+    
+    if not job_id or amount_dollars is None:
+        return jsonify({'success': False, 'error': 'Missing job_id or amount'}), 400
+        
+    try:
+        amount_cents = int(float(amount_dollars) * 100)
+        if amount_cents <= 0:
+            return jsonify({'success': False, 'error': 'Invalid amount'}), 400
+            
+        # Fetch the job
+        with auth_billing.get_db(config.AUTH_DB_PATH) as conn:
+            job = conn.execute("SELECT * FROM managed_jobs WHERE id = ?", (job_id,)).fetchone()
+            
+        if not job:
+            return jsonify({'success': False, 'error': 'Job not found'}), 404
+            
+        job = dict(job)
+        if job.get('status') == 'paid':
+            return jsonify({'success': False, 'error': 'Job is already paid'}), 400
+            
+        payment_method_id = job.get('stripe_payment_method_id')
+        customer_id = job.get('stripe_customer_id')
+        
+        if not payment_method_id or not customer_id:
+            return jsonify({'success': False, 'error': 'No saved payment method found for this job'}), 400
+            
+        # Charge the card via Stripe PaymentIntent off-session
+        intent = stripe.PaymentIntent.create(
+            amount=amount_cents,
+            currency='usd',
+            customer=customer_id,
+            payment_method=payment_method_id,
+            off_session=True,
+            confirm=True,
+            description=f"TifLAS Managed Conversion: {job.get('well_name', 'Well')} - Job ID {job_id[:8]}",
+            metadata={'job_id': job_id}
+        )
+        
+        if intent.status == 'succeeded':
+            # Update DB
+            with auth_billing.get_db(config.AUTH_DB_PATH) as conn:
+                conn.execute("""
+                    UPDATE managed_jobs 
+                    SET status = 'paid', actual_amount = ?, updated_at = ?
+                    WHERE id = ?
+                """, (float(amount_dollars), datetime.now(timezone.utc).isoformat(), job_id))
+            return jsonify({'success': True, 'charge_id': intent.id})
+        else:
+            return jsonify({'success': False, 'error': f"Charge failed with status: {intent.status}"}), 400
+            
+    except stripe.error.CardError as e:
+        err = e.error
+        return jsonify({'success': False, 'error': f"Card error: {err.message}"}), 400
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/admin/action', methods=['POST'])

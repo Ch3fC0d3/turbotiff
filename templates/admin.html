@@ -63,9 +63,9 @@
                 </div>
             </div>
             
-            <div class="rounded-lg border border-amber-900/50 bg-slate-900 p-6">
+            <div class="rounded-lg border border-amber-900/50 bg-slate-900 p-6 flex flex-col h-full">
                 <h2 class="mb-4 text-lg font-semibold border-b border-slate-800 pb-2">Usage Metrics</h2>
-                <div class="space-y-3 text-sm">
+                <div class="space-y-3 text-sm flex-grow">
                     <div class="flex justify-between border-b border-slate-800/50 pb-2">
                         <span class="text-slate-400">Logs Digitized (24h / 7d)</span>
                         <span class="font-medium">{{ stats.logs_24h }} / {{ stats.logs_7d }}</span>
@@ -88,6 +88,67 @@
                     </div>
                 </div>
             </div>
+        </div>
+        
+        <!-- Managed Jobs Section -->
+        <div class="mb-6 rounded-lg border border-fuchsia-900/50 bg-slate-900 p-6 overflow-x-auto">
+            <h2 class="mb-4 text-lg font-semibold border-b border-slate-800 pb-2 text-fuchsia-400">Managed Jobs</h2>
+            <table class="w-full text-left text-sm whitespace-nowrap">
+                <thead class="bg-slate-950 text-slate-400">
+                    <tr>
+                        <th class="px-4 py-2 font-medium">Date / Job ID</th>
+                        <th class="px-4 py-2 font-medium">Company / Email</th>
+                        <th class="px-4 py-2 font-medium">Details</th>
+                        <th class="px-4 py-2 font-medium">Estimate</th>
+                        <th class="px-4 py-2 font-medium">Status</th>
+                        <th class="px-4 py-2 font-medium">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-800">
+                    {% for job in managed_jobs %}
+                    <tr class="hover:bg-slate-800/50">
+                        <td class="px-4 py-3">
+                            <div>{{ job.created_at.split('T')[0] }}</div>
+                            <div class="text-xs text-slate-500" title="{{ job.id }}">{{ job.id[:8] }}...</div>
+                        </td>
+                        <td class="px-4 py-3">
+                            <div class="font-medium text-slate-200">{{ job.company_name or 'N/A' }}</div>
+                            <div class="text-xs text-slate-400">{{ job.email }}</div>
+                        </td>
+                        <td class="px-4 py-3 max-w-[200px] truncate" title="{{ job.project_name }} / {{ job.well_name }}">
+                            <div>{{ job.well_name or 'Unnamed Well' }}</div>
+                            <div class="text-xs text-slate-500">{{ job.estimated_curve_count }} curves &middot; {{ job.estimated_complexity }}</div>
+                        </td>
+                        <td class="px-4 py-3">
+                            ${{ "%.2f"|format(job.estimated_amount or 0) }}
+                        </td>
+                        <td class="px-4 py-3">
+                            <span class="inline-flex rounded-full bg-slate-800 px-2 py-0.5 text-xs font-semibold
+                                {% if job.status == 'payment_method_saved' %}text-emerald-400
+                                {% elif job.status == 'paid' %}text-indigo-400
+                                {% else %}text-amber-400{% endif %}">
+                                {{ job.status }}
+                            </span>
+                        </td>
+                        <td class="px-4 py-3">
+                            {% if job.status == 'payment_method_saved' and job.stripe_payment_method_id %}
+                                <button onclick="chargeManagedJob('{{ job.id }}', '{{ job.estimated_amount }}')" class="rounded bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-emerald-500 transition-colors">
+                                    Charge & Complete
+                                </button>
+                            {% elif job.status == 'paid' %}
+                                <span class="text-xs text-indigo-400 font-medium">Charged: ${{ "%.2f"|format(job.actual_amount or 0) }}</span>
+                            {% else %}
+                                <span class="text-xs text-slate-500">Pending Setup</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="6" class="px-4 py-8 text-center text-slate-500">No managed jobs found.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
         </div>
         
         <div class="mb-6 rounded-lg border border-indigo-900/50 bg-slate-900 p-6">
@@ -283,6 +344,41 @@
                 });
             } catch (e) {
                 console.error('Toggle failed');
+            }
+        }
+        async function chargeManagedJob(jobId, estimatedAmount) {
+            const finalAmount = prompt(`Enter the final charge amount for this managed job.\nThe original estimate was $${parseFloat(estimatedAmount).toFixed(2)}.`, parseFloat(estimatedAmount).toFixed(2));
+            
+            if (finalAmount === null) return; // cancelled
+            
+            const parsedAmount = parseFloat(finalAmount);
+            if (isNaN(parsedAmount) || parsedAmount <= 0) {
+                alert("Please enter a valid positive amount.");
+                return;
+            }
+            
+            if (!confirm(`Are you sure you want to instantly charge the saved card $${parsedAmount.toFixed(2)}?`)) {
+                return;
+            }
+            
+            try {
+                const res = await fetch('/api/admin/managed-jobs/charge', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        job_id: jobId,
+                        amount: parsedAmount
+                    })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    alert('Successfully charged!');
+                    window.location.reload();
+                } else {
+                    alert('Failed to charge: ' + data.error);
+                }
+            } catch (e) {
+                alert('An error occurred: ' + e);
             }
         }
     </script>
