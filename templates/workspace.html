@@ -11067,7 +11067,7 @@
                         depth_end: bottomDepth,
                         depth_unit: depthUnit,
                         las_content: finalLasContent,
-                        original_image_path: uploadedImagePath
+                        original_image_path: gcsKey || uploadedImagePath
                     })
                 });
 
@@ -11163,7 +11163,7 @@
                     depth_end: bottomDepth,
                     depth_unit: depthUnit,
                     las_content: finalLasContent,
-                    original_image_path: uploadedImage
+                    original_image_path: uploadedImagePath
                 })
             })
             .then(r => r.json())
