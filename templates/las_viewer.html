@@ -12,6 +12,9 @@
     <script>
         // Preload LAS data from database if log_id was provided
         window.PRELOADED_LAS_CONTENT = {{ log_data.las_content | tojson | safe }};
+        {% if log_data.original_image_path %}
+        window.PRELOADED_IMAGE_CONTENT = {{ log_data.original_image_path | tojson | safe }};
+        {% endif %}
     </script>
     {% endif %}
 
@@ -969,6 +972,33 @@ function checkLibs() {
                  console.error('Session LAS parse error:', err);
                  showError('Failed to parse passed LAS data.');
              }
+        } else if (window.PRELOADED_LAS_CONTENT) {
+            console.log('[LAS Viewer] Found PRELOADED LAS data');
+            try {
+                window.addEventListener('libraries-loaded', () => {
+                    const w = window.wellio;
+                    lasData = w.las2json(window.PRELOADED_LAS_CONTENT);
+                    document.getElementById('placeholder').style.display = 'none';
+                    showInfo(lasData);
+                    buildCurveChips();
+                    document.getElementById('zoomControls').style.display = 'flex';
+                    renderPlot();
+                    
+                    if (window.PRELOADED_IMAGE_CONTENT) {
+                        console.log('[LAS Viewer] Found PRELOADED Image data');
+                        const img = document.getElementById('uploadedImage');
+                        img.onload = () => {
+                            document.getElementById('imagePlaceholder').style.display = 'none';
+                            document.getElementById('imageContent').style.display = 'block';
+                            document.getElementById('imageControls').style.display = 'flex';
+                        };
+                        img.src = window.PRELOADED_IMAGE_CONTENT;
+                    }
+                });
+            } catch (err) {
+                 console.error('Session LAS parse error:', err);
+                 showError('Failed to parse passed LAS data.');
+            }
         } else {
              document.getElementById('placeholder').innerHTML = `
                 <div class="icon">🗂️</div>
