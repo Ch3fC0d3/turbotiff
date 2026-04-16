@@ -976,8 +976,15 @@ function checkLibs() {
                  showError('Failed to parse passed LAS data.');
              }
         } else if (window.PRELOADED_LAS_CONTENT) {
-            console.log('[LAS Viewer] Found PRELOADED LAS data');
-            try {
+        console.log('[LAS Viewer] Found PRELOADED LAS data');
+        try {
+            if (window.PRELOADED_LAS_CONTENT.trim() === '') {
+                document.getElementById('placeholder').innerHTML = `
+                    <div class="icon">🚧</div>
+                    <p>No LAS data has been generated for this log yet.</p>
+                    <small>Return to the Dashboard and open this log in the Workspace to digitize it.</small>
+                `;
+            } else {
                 const initPreloaded = () => {
                     const w = window.wellio;
                     lasData = w.las2json(window.PRELOADED_LAS_CONTENT);
@@ -986,7 +993,7 @@ function checkLibs() {
                     buildCurveChips();
                     document.getElementById('zoomControls').style.display = 'flex';
                     renderPlot();
-                    
+
                     if (window.PRELOADED_IMAGE_CONTENT) {
                         console.log('[LAS Viewer] Found PRELOADED Image data');
                         const img = document.getElementById('uploadedImage');
@@ -1000,7 +1007,8 @@ function checkLibs() {
                 };
                 if (window.librariesLoaded) initPreloaded();
                 else window.addEventListener('libraries-loaded', initPreloaded);
-            } catch (err) {
+            }
+        } catch (err) {
                  console.error('Session LAS parse error:', err);
                  showError('Failed to parse passed LAS data.');
             }

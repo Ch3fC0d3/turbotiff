@@ -384,8 +384,13 @@ def _handle_internal_server_error(exc):
         'traceback': tb.splitlines()[-5:] if tb else []
     }), 500
 
+from werkzeug.exceptions import HTTPException
+
 @app.errorhandler(Exception)
 def _handle_unhandled_exception(exc):
+    if isinstance(exc, HTTPException):
+        return exc
+    
     import traceback
     original = getattr(exc, 'original_exception', None)
     err_msg = str(original) if original else str(exc)
