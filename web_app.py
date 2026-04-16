@@ -8629,7 +8629,9 @@ def save_log():
                 log_id, user['id'], name, curve_count, depth_start, depth_end, depth_unit, las_content, original_image_path,
                 datetime.now(timezone.utc).isoformat()
             ))
-
+            conn.commit()
+            
+        print(f"[SAVE LOG] Successfully saved log {log_id} for user {user['id']}: {name}")
         return jsonify({'success': True, 'log_id': log_id})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -8691,6 +8693,9 @@ def dashboard():
     global_banner = settings.get('global_banner')
         
     logs = auth_billing.get_user_logs(config.AUTH_DB_PATH, user['id'])
+    print(f"[DASHBOARD] User {user['id']} ({user.get('email')}) has {len(logs)} logs")
+    if logs:
+        print(f"[DASHBOARD] Log names: {[log['name'] for log in logs]}")
     return render_template('dashboard.html', 
                           user=user,
                           logs=logs,
