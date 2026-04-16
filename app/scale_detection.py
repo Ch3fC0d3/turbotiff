@@ -78,6 +78,23 @@ def classify_curve_type(name: str) -> Optional[dict]:
     return None
 
 
+def get_mnemonic_defaults(mnemonic: str) -> Optional[dict]:
+    """Lookup defaults by canonical mnemonic (GR, SP, RT, RHOB, NPHI, DT, CALI, PEF)."""
+    if not mnemonic:
+        return None
+    m = str(mnemonic).upper().strip()
+    for aliases, canonical, scale_type, lo, hi, unit in _CURVE_REGISTRY:
+        if canonical == m:
+            return {
+                "mnemonic": canonical,
+                "scale_type": scale_type,
+                "default_left": lo,
+                "default_right": hi,
+                "unit": unit,
+            }
+    return None
+
+
 # ────────────────────────────────────────────────────────────────────
 # Label parsing & linear/log classification
 # ────────────────────────────────────────────────────────────────────

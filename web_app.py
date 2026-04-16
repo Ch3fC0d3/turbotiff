@@ -11157,41 +11157,115 @@ def ml_predict_curve_trace():
          return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@app.route('/api/detect-scale', methods=['POST'])
-def api_detect_scale():
-    """Detect the track scale (linear/log/centered) + left/right values for a panel.
-
-    Request JSON:
-        image:       data URL (base64-encoded image)
-        region:      {left_px, right_px, top_px, bottom_px}  - panel bounds within image
-        curve_name:  optional hint like "GR" or "ILD"
-        xs_trace:    optional array of already-traced pixel x-positions (for wrap detection)
-
-    Response JSON:
-        success:     bool
-        scale:       DetectedScale dict
-        ocr_labels:  list of raw OCR strings the detector used
-    """
-    data = request.json or {}
-    image_data = data.get('image')
-    region = data.get('region') or {}
-    curve_name = (data.get('curve_name') or '').strip()
-    xs_trace = data.get('xs_trace')
-
+def _decode_image_data_url(image_data):
+    """Decode a data-URL image. Returns (img_bgr, error_message)."""
     if not image_data or ',' not in image_data:
-        return jsonify({'success': False, 'error': 'Missing image data'}), 400
-
+        return None, 'Missing image data'
     try:
         img_payload = image_data.split(',', 1)[1]
         img_bytes = base64.b64decode(img_payload)
     except Exception:
-        return jsonify({'success': False, 'error': 'Invalid image data'}), 400
-
+        return None, 'Invalid image data'
     nparr = np.frombuffer(img_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if img is None:
-        return jsonify({'success': False, 'error': 'Could not decode image'}), 400
+        return None, 'Could not decode image'
+    return img, None
 
+
+def _ocr_strings(crop):
+    """Run OCR on a small crop and return a list of plain strings."""
+    try:
+        ok, buf = cv2.imencode('.jpg', crop, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        if not ok:
+            return []
+        result = detect_text_vision_api(buf.tobytes()) or {}
+        raw = result.get('raw') or []
+        out = []
+        for item in raw:
+            if isinstance(item, dict):
+                t = item.get('text') or item.get('description')
+                if t:
+                    out.append(str(t))
+            elif isinstance(item, str):
+                out.append(item)
+        return out
+    except Exception as exc:
+        print(f'[detect-scale] OCR failed: {exc}')
+        return []
+
+
+def _llm_identify_curve(header_strings, axis_strings, existing_guess=None):
+    """When local pattern matching fails, ask the LLM to pick a canonical mnemonic.
+
+    Returns a dict { mnemonic, scale_type, left, right, unit, confidence } or None.
+    Uses the existing call_ai_curve_suggestions plumbing to avoid adding a new API key.
+    """
+    if existing_guess and (existing_guess.get('confidence') or 0) >= 0.6:
+        return None  # local detection is already confident enough
+
+    payload = {
+        "task": "identify_well_log_curve",
+        "header_ocr":  header_strings or [],
+        "axis_ocr":    axis_strings or [],
+        "allowed_mnemonics": ["GR", "SP", "RT", "ILD", "LLD", "LLS", "MSFL",
+                              "RHOB", "NPHI", "DT", "CALI", "PEF", "OTHER"],
+        "instruction": (
+            "Given OCR strings from a paper well-log track header and axis labels, "
+            "return the most likely canonical curve mnemonic (one of allowed_mnemonics). "
+            "Also return the scale_type as one of 'linear', 'log', 'centered'. "
+            "For resistivity (RT/ILD/LLD/LLS/MSFL) always return scale_type='log'. "
+            "For SP always return 'centered'. For everything else return 'linear'. "
+            "If axis numeric labels are present, return left and right as the numeric "
+            "scale endpoints you read; otherwise omit them. "
+            "Respond with JSON ONLY using this schema: "
+            '{"mnemonic": string, "scale_type": string, "left": number|null, '
+            '"right": number|null, "unit": string|null, "confidence": number}'
+        ),
+    }
+    try:
+        result = call_ai_curve_suggestions(payload)
+    except Exception as exc:
+        print(f'[detect-scale] LLM call failed: {exc}')
+        return None
+    if not isinstance(result, dict):
+        return None
+
+    # Accept both the schema above and a wrapped {curves:[{mnemonic:...}]} shape
+    candidate = result
+    if 'curves' in result and isinstance(result['curves'], list) and result['curves']:
+        candidate = result['curves'][0]
+
+    mnemonic = str(candidate.get('mnemonic') or '').upper().strip()
+    if not mnemonic or mnemonic == 'OTHER':
+        return None
+    defaults = scale_detection.get_mnemonic_defaults(mnemonic) or {}
+    scale_type = (candidate.get('scale_type') or defaults.get('scale_type') or 'linear').lower()
+    left = candidate.get('left', defaults.get('default_left'))
+    right = candidate.get('right', defaults.get('default_right'))
+    try:
+        left = float(left) if left is not None else None
+        right = float(right) if right is not None else None
+    except (TypeError, ValueError):
+        left = defaults.get('default_left')
+        right = defaults.get('default_right')
+    unit = candidate.get('unit') or defaults.get('unit')
+    confidence = float(candidate.get('confidence') or 0.7)
+    return {
+        'mnemonic': mnemonic,
+        'scale_type': scale_type,
+        'left_value': left,
+        'right_value': right,
+        'unit': unit,
+        'confidence': max(0.0, min(1.0, confidence)),
+    }
+
+
+def _detect_scale_for_region(img, region, curve_name='', xs_trace=None, use_llm=True):
+    """Shared detector used by both single-curve and batch endpoints.
+
+    Returns dict: { ok, error?, scale?, ocr_header?, ocr_axis_labels?, llm_used? }
+    """
     H, W, _ = img.shape
     try:
         left = max(0, int(region.get('left_px', 0)))
@@ -11199,47 +11273,23 @@ def api_detect_scale():
         top = max(0, int(region.get('top_px', 0)))
         bottom = min(H, int(region.get('bottom_px', H)))
     except Exception:
-        return jsonify({'success': False, 'error': 'Invalid region'}), 400
-
+        return {'ok': False, 'error': 'Invalid region'}
     if right <= left or bottom <= top:
-        return jsonify({'success': False, 'error': 'Empty region'}), 400
+        return {'ok': False, 'error': 'Empty region'}
 
     panel = img[top:bottom, left:right]
     panel_h, panel_w, _ = panel.shape
     if panel_h < 2 or panel_w < 2:
-        return jsonify({'success': False, 'error': 'Panel too small'}), 400
+        return {'ok': False, 'error': 'Panel too small'}
 
-    # OCR: header band (top 20%) + axis band (top 8% + bottom 8%) — cheap and effective
     header_band = panel[: max(1, panel_h // 5), :]
     axis_top    = panel[: max(1, panel_h // 12), :]
     axis_bot    = panel[-max(1, panel_h // 12):, :]
 
-    def _ocr_strings(crop):
-        try:
-            ok, buf = cv2.imencode('.jpg', crop, [cv2.IMWRITE_JPEG_QUALITY, 90])
-            if not ok:
-                return []
-            result = detect_text_vision_api(buf.tobytes()) or {}
-            raw = result.get('raw') or []
-            # `raw` items are typically dicts with 'text' keys; also accept plain strings
-            out = []
-            for item in raw:
-                if isinstance(item, dict):
-                    t = item.get('text') or item.get('description')
-                    if t:
-                        out.append(str(t))
-                elif isinstance(item, str):
-                    out.append(item)
-            return out
-        except Exception as exc:
-            print(f'[detect-scale] OCR failed: {exc}')
-            return []
-
     header_strings = _ocr_strings(header_band)
-    axis_strings   = _ocr_strings(axis_top) + _ocr_strings(axis_bot)
+    axis_strings = _ocr_strings(axis_top) + _ocr_strings(axis_bot)
 
     header_text = curve_name or ' '.join(header_strings)
-
     xs_np = None
     if isinstance(xs_trace, list) and xs_trace:
         try:
@@ -11253,13 +11303,109 @@ def api_detect_scale():
         xs_trace=xs_np,
         width_px=panel_w,
     )
+    scale_dict = detected.to_dict()
+    llm_used = False
 
-    return jsonify({
-        'success': True,
-        'scale': detected.to_dict(),
+    # LLM fallback when local detection is unsure
+    if use_llm and scale_dict.get('confidence', 0.0) < 0.6:
+        llm = _llm_identify_curve(header_strings, axis_strings, existing_guess=scale_dict)
+        if llm:
+            llm_used = True
+            scale_dict['mnemonic'] = llm['mnemonic']
+            scale_dict['scale_type'] = llm['scale_type']
+            if llm.get('left_value') is not None:
+                scale_dict['left_value'] = llm['left_value']
+            if llm.get('right_value') is not None:
+                scale_dict['right_value'] = llm['right_value']
+            if llm.get('unit'):
+                scale_dict['unit'] = llm['unit']
+            # Boost confidence, but cap at 0.85 so UI still shows review for LLM-only picks
+            scale_dict['confidence'] = max(scale_dict.get('confidence', 0.0), min(0.85, llm['confidence']))
+            scale_dict.setdefault('reasons', []).append('LLM fallback used')
+
+    return {
+        'ok': True,
+        'scale': scale_dict,
         'ocr_header': header_strings,
         'ocr_axis_labels': axis_strings,
+        'llm_used': llm_used,
+    }
+
+
+@app.route('/api/detect-scale', methods=['POST'])
+def api_detect_scale():
+    """Detect scale for a single curve region. See /api/detect-all-scales for batch."""
+    data = request.json or {}
+    img, err = _decode_image_data_url(data.get('image'))
+    if err:
+        return jsonify({'success': False, 'error': err}), 400
+
+    res = _detect_scale_for_region(
+        img,
+        region=data.get('region') or {},
+        curve_name=(data.get('curve_name') or '').strip(),
+        xs_trace=data.get('xs_trace'),
+        use_llm=bool(data.get('use_llm', True)),
+    )
+    if not res.get('ok'):
+        return jsonify({'success': False, 'error': res.get('error')}), 400
+    return jsonify({
+        'success': True,
+        'scale': res['scale'],
+        'ocr_header': res['ocr_header'],
+        'ocr_axis_labels': res['ocr_axis_labels'],
+        'llm_used': res['llm_used'],
     })
+
+
+@app.route('/api/detect-all-scales', methods=['POST'])
+def api_detect_all_scales():
+    """Batch detect scales for many curves in one image with a single OCR pass per region.
+
+    Request JSON:
+        image:   data URL
+        curves:  [ { id, left_px, right_px, top_px, bottom_px, name? }, ... ]
+        use_llm: bool (default True) — enable LLM fallback for low-confidence tracks
+
+    Response:
+        { success: bool, results: [ { id, scale, ocr_header, ocr_axis_labels, llm_used, error? } ] }
+    """
+    data = request.json or {}
+    img, err = _decode_image_data_url(data.get('image'))
+    if err:
+        return jsonify({'success': False, 'error': err}), 400
+
+    curves = data.get('curves') or []
+    if not isinstance(curves, list) or not curves:
+        return jsonify({'success': False, 'error': 'Missing curves[]'}), 400
+
+    use_llm = bool(data.get('use_llm', True))
+    results = []
+    for idx, c in enumerate(curves):
+        region = {
+            'left_px':   c.get('left_px', 0),
+            'right_px':  c.get('right_px', 0),
+            'top_px':    c.get('top_px', 0),
+            'bottom_px': c.get('bottom_px', img.shape[0]),
+        }
+        res = _detect_scale_for_region(
+            img,
+            region=region,
+            curve_name=(c.get('name') or '').strip(),
+            xs_trace=c.get('xs_trace'),
+            use_llm=use_llm,
+        )
+        entry = {'id': c.get('id', idx)}
+        if not res.get('ok'):
+            entry['error'] = res.get('error')
+        else:
+            entry['scale'] = res['scale']
+            entry['ocr_header'] = res['ocr_header']
+            entry['ocr_axis_labels'] = res['ocr_axis_labels']
+            entry['llm_used'] = res['llm_used']
+        results.append(entry)
+
+    return jsonify({'success': True, 'results': results})
 
 
 if __name__ == '__main__':

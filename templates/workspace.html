@@ -1659,6 +1659,12 @@
                                     </div>
                                 </div>
 
+                                <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:6px 0;">
+                                    <button type="button" class="btn" style="padding:4px 10px;font-size:0.85em;" onclick="detectAllScales()" title="Run OCR + AI on every configured curve to set scale type, wrapped, and endpoints in one pass">
+                                        🤖 AI detect all scales
+                                    </button>
+                                    <span id="detectAllStatus" class="hint-text" style="font-size:0.8em;color:#94a3b8;"></span>
+                                </div>
                                 <div id="curvesContainer"></div>
                                 <div id="curveScaleSummary" class="hint-text mt-1"></div>
                                 <div class="curve-list-wrapper" style="margin-top:4px;">
@@ -8603,6 +8609,112 @@
             } catch (err) {
                 if (hintEl) hintEl.textContent = `Detection error: ${err.message || err}`;
                 showStatus(`Curve ${index + 1}: detection error.`, 'error');
+            }
+        }
+
+        async function detectAllScales() {
+            const statusEl = document.getElementById('detectAllStatus');
+            if (!uploadedImage) {
+                showStatus('Upload an image first.', 'error');
+                return;
+            }
+            const numCurves = parseInt(document.getElementById('numCurves')?.value || '0', 10);
+            if (!numCurves) {
+                showStatus('Configure curves first.', 'error');
+                return;
+            }
+            const topPx = parseInt(document.getElementById('topPx')?.value || '0', 10) || 0;
+            const bottomPx = parseInt(document.getElementById('bottomPx')?.value || `${imageHeight}`, 10) || imageHeight;
+
+            const curvesPayload = [];
+            for (let i = 0; i < numCurves; i++) {
+                const leftPx = parseInt(document.getElementById(`leftPx${i}`)?.value || '0', 10);
+                const rightPx = parseInt(document.getElementById(`rightPx${i}`)?.value || '0', 10);
+                if (!(rightPx > leftPx)) continue;
+                curvesPayload.push({
+                    id: i,
+                    left_px: leftPx,
+                    right_px: rightPx,
+                    top_px: topPx,
+                    bottom_px: bottomPx,
+                    name: document.getElementById(`name${i}`)?.value || document.getElementById(`type${i}`)?.value || '',
+                });
+            }
+            if (!curvesPayload.length) {
+                showStatus('No valid curve regions to detect.', 'error');
+                return;
+            }
+
+            if (statusEl) statusEl.textContent = `Detecting ${curvesPayload.length} curves…`;
+            try {
+                const resp = await fetch('/api/detect-all-scales', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ image: uploadedImage, curves: curvesPayload, use_llm: true }),
+                });
+                const data = await resp.json();
+                if (!data.success) {
+                    if (statusEl) statusEl.textContent = `Failed: ${data.error || 'unknown'}`;
+                    showStatus(`Batch detection failed: ${data.error || 'unknown'}`, 'error');
+                    return;
+                }
+                const results = Array.isArray(data.results) ? data.results : [];
+                let lowConfidence = 0;
+                let llmUsed = 0;
+                for (const r of results) {
+                    const i = r.id;
+                    const hintEl = document.getElementById(`scaleHint${i}`);
+                    if (r.error) {
+                        if (hintEl) hintEl.textContent = `Error: ${r.error}`;
+                        continue;
+                    }
+                    const s = r.scale || {};
+                    const scaleSel = document.getElementById(`scaleType${i}`);
+                    if (scaleSel && s.scale_type) scaleSel.value = s.scale_type;
+                    const wrapEl = document.getElementById(`wrapped${i}`);
+                    if (wrapEl) wrapEl.checked = !!s.wrapped;
+                    if (Number.isFinite(Number(s.left_value))) {
+                        const leftValEl = document.getElementById(`leftVal${i}`);
+                        if (leftValEl) leftValEl.value = s.left_value;
+                    }
+                    if (Number.isFinite(Number(s.right_value))) {
+                        const rightValEl = document.getElementById(`rightVal${i}`);
+                        if (rightValEl) rightValEl.value = s.right_value;
+                    }
+                    // Also set the curve type dropdown if LLM identified a standard mnemonic
+                    if (s.mnemonic) {
+                        const typeSel = document.getElementById(`type${i}`);
+                        if (typeSel) {
+                            const target = /^(RT|ILD|LLD|LLS|MSFL)$/i.test(s.mnemonic) ? 'RT' : s.mnemonic.toUpperCase();
+                            // Only change if the mnemonic is in the dropdown
+                            const exists = Array.from(typeSel.options).some(o => o.value === target);
+                            if (exists) typeSel.value = target;
+                        }
+                    }
+
+                    const conf = Number(s.confidence) || 0;
+                    const confPct = Math.round(conf * 100);
+                    if (conf < 0.6) lowConfidence++;
+                    if (r.llm_used) llmUsed++;
+
+                    const badge = conf < 0.6 ? '⚠ REVIEW · ' : '';
+                    const llmTag = r.llm_used ? ' · 🤖 AI' : '';
+                    const reasons = Array.isArray(s.reasons) ? s.reasons.join('; ') : '';
+                    if (hintEl) {
+                        hintEl.textContent = `${badge}${s.scale_type || '?'} · ${s.left_value ?? '?'}→${s.right_value ?? '?'}${s.wrapped ? ' · wrapped' : ''} · ${confPct}%${llmTag}${reasons ? ` · ${reasons}` : ''}`;
+                        hintEl.style.color = conf < 0.6 ? '#fbbf24' : '#94a3b8';
+                    }
+                }
+                if (statusEl) {
+                    statusEl.textContent = `Detected ${results.length} curves · ${llmUsed} used AI · ${lowConfidence} need review`;
+                    statusEl.style.color = lowConfidence > 0 ? '#fbbf24' : '#86efac';
+                }
+                showStatus(`Detected ${results.length} scales (${lowConfidence} need review).`, lowConfidence > 0 ? 'info' : 'success');
+                updateCurveScaleHints && updateCurveScaleHints();
+                renderCurveListView && renderCurveListView();
+            } catch (err) {
+                if (statusEl) statusEl.textContent = `Error: ${err.message || err}`;
+                showStatus(`Batch detection error: ${err.message || err}`, 'error');
             }
         }
 
