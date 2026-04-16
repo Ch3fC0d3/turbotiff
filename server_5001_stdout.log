@@ -1,0 +1,7 @@
+[OK] EasyOCR available for local OCR fallback.
+[OK] AI Model loaded from curve_trace_model.pt (Device: cuda)
+[WARN] Google Vision API: No credentials found
+[OK] lasio imported; LAS validation enabled.
+Open: http://localhost:5001
+ * Serving Flask app 'web_app'
+ * Debug mode: off

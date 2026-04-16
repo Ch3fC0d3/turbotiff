@@ -23,12 +23,7 @@ from dotenv import load_dotenv
 load_dotenv()  # Load .env
 load_dotenv('.env.local', override=True)  # Load .env.local (overrides .env)
 
-from google.cloud import storage
-
-from flask import (
-    Flask, render_template, request, jsonify, make_response, 
-    send_file, Response, redirect, url_for, session, flash, send_from_directory
-)
+from flask import Flask, render_template, request, jsonify, send_file, Response, session, redirect, url_for, flash, make_response
 import math
 import os
 import random
@@ -63,13 +58,6 @@ import requests
 import openai
 from huggingface_hub import InferenceClient
 
-try:
-    from flask_talisman import Talisman
-    TALISMAN_AVAILABLE = True
-except ImportError:
-    TALISMAN_AVAILABLE = False
-    print("[WARN] flask_talisman not installed. Security headers will not be applied.")
-
 TORCH_AVAILABLE = False
 try:
     import torch
@@ -102,7 +90,6 @@ import hashlib
 ai_tracer = AITracer("curve_trace_model.pt")
 
 # Try to import Google Vision API (optional)
-credentials = None
 try:
     from google.cloud import vision
     from google.oauth2 import service_account
@@ -191,64 +178,10 @@ APP_VERSION = os.environ.get("APP_VERSION", "dev")
 APP_BUILD_TIME = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
 
 app = Flask(__name__)
-
-# Basic security config
-is_prod = os.environ.get("FLASK_ENV") == "production" or os.environ.get("RENDER") == "true" or os.environ.get("RAILWAY_ENVIRONMENT") is not None
 app.config['MAX_CONTENT_LENGTH'] = 2 * 1024 * 1024 * 1024  # 2GB max request size
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=30)
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-app.config['SESSION_COOKIE_SECURE'] = is_prod  # Require HTTPS for cookies in production
-app.config['SESSION_COOKIE_HTTPONLY'] = True   # Prevent JS access to session cookie
 app.secret_key = config.SECRET_KEY
-
-# Initialize Talisman for security headers if in production and installed
-if TALISMAN_AVAILABLE and is_prod:
-    csp = {
-        'default-src': [
-            '\'self\'',
-            'https://fonts.googleapis.com',
-            'https://fonts.gstatic.com',
-            'https://cdn.jsdelivr.net',
-            'https://cdnjs.cloudflare.com',
-            'https://js.stripe.com',
-        ],
-        'script-src': [
-            '\'self\'',
-            '\'unsafe-inline\'',  # Needed for some inline scripts in the app
-            '\'unsafe-eval\'',    # Needed for some charting/canvas libraries
-            'https://cdn.jsdelivr.net',
-            'https://cdnjs.cloudflare.com',
-            'https://js.stripe.com',
-        ],
-        'img-src': [
-            '\'self\'',
-            'data:',
-            'blob:',
-            'https://images.unsplash.com',
-            '*',  # Allow external images for now given the dynamic nature
-        ],
-        'style-src': [
-            '\'self\'',
-            '\'unsafe-inline\'',
-            'https://fonts.googleapis.com',
-            'https://cdn.jsdelivr.net',
-            'https://cdnjs.cloudflare.com',
-        ],
-        'frame-src': [
-            '\'self\'',
-            'https://js.stripe.com',
-            'https://hooks.stripe.com',
-        ],
-        'connect-src': [
-            '\'self\'',
-            'https://api.stripe.com',
-        ],
-    }
-    Talisman(app, 
-             content_security_policy=csp, 
-             force_https=True,
-             strict_transport_security=True,
-             session_cookie_secure=True)
 
 REMEMBER_COOKIE_NAME = 'remember_token'
 REMEMBER_COOKIE_DAYS = 30
@@ -298,9 +231,6 @@ stripe.api_key = config.STRIPE_SECRET_KEY
 PLAN_TO_PRICE = {
     'monthly': config.STRIPE_PRICE_MONTHLY,
     'annual': config.STRIPE_PRICE_ANNUAL,
-    'managed_simple': config.STRIPE_PRICE_MANAGED_SIMPLE,
-    'managed_standard': config.STRIPE_PRICE_MANAGED_STANDARD,
-    'managed_complex': config.STRIPE_PRICE_MANAGED_COMPLEX,
 }
 PRICE_TO_PLAN = {v: k for k, v in PLAN_TO_PRICE.items() if v}
 
@@ -350,16 +280,16 @@ def _current_user(require_access: bool = True):
 
 
 from functools import wraps
-def login_required(require_access=True):
-    def decorator(f):
-        @wraps(f)
-        def decorated_function(*args, **kwargs):
-            user = _current_user(require_access=require_access)
-            if user is None:
-                return redirect(url_for('login', next=request.url))
-            return f(*args, **kwargs)
-        return decorated_function
-    return decorator
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        user = _current_user(require_access=True)
+        if not user:
+            if session.get('user_id'):
+                return redirect(url_for('account'))
+            return redirect(url_for('login', next=request.url))
+        return f(*args, **kwargs)
+    return decorated_function
 
 @app.errorhandler(500)
 def _handle_internal_server_error(exc):
@@ -369,46 +299,40 @@ def _handle_internal_server_error(exc):
     err_msg = str(original) if original else str(exc)
     
     print(f"500 Error: {err_msg}")
-    
-    # Hide details in production
-    if is_prod:
-        return jsonify({
-            'success': False,
-            'error': 'An internal server error occurred.'
-        }), 500
-
     print(tb)
+
     return jsonify({
         'success': False,
         'error': f'Internal server error: {err_msg}',
         'traceback': tb.splitlines()[-5:] if tb else []
     }), 500
 
-from werkzeug.exceptions import HTTPException
+@app.errorhandler(500)
+def _handle_internal_server_error(exc):
+    if request.path == '/digitize':
+        import traceback
+        original = getattr(exc, 'original_exception', None)
+        if original is not None:
+            print(f"/digitize 500 error: {original}")
+            print(traceback.format_exc())
+            err_msg = str(original)
+        else:
+            print(f"/digitize 500 error: {exc}")
+            err_msg = str(exc)
 
-@app.errorhandler(Exception)
-def _handle_unhandled_exception(exc):
-    if isinstance(exc, HTTPException):
-        return exc
-    
-    import traceback
-    original = getattr(exc, 'original_exception', None)
-    err_msg = str(original) if original else str(exc)
-    tb = traceback.format_exc()
-    
-    print(f"500 error: {err_msg}\n{tb}")
-    
-    # Hide details in production
-    if is_prod:
+        tb = traceback.format_exc()
+        tb_lines = tb.splitlines()[-25:]
+        tb_short = "\n".join(tb_lines)
+
         return jsonify({
             'success': False,
-            'error': f'An internal server error occurred: {err_msg}'
+            'error': err_msg,
+            'traceback': tb_short,
         }), 500
-        
+
     return jsonify({
         'success': False,
-        'error': err_msg,
-        'traceback': tb.splitlines()[-25:],
+        'error': 'Internal server error',
     }), 500
 
 # ----------------------------
@@ -4902,9 +4826,9 @@ def refine_black_trace_to_dark_run_center(
 
     Unlike the probability-map centerline pass, this works from the ROI's
     grayscale ink directly, which better matches thick filled black curves.
-    When the stroke gets wide, bias the target toward the chart-reading side
-    so black curves hit visible crest tips instead of sitting on the inner half
-    of the printed stroke.
+    GR can still optionally lean toward the chart-reading side on wide runs,
+    but other black curves should stay centered on the stroke body instead of
+    riding an edge.
     """
     if roi_bgr is None or xs is None:
         return xs
@@ -4942,6 +4866,7 @@ def refine_black_trace_to_dark_run_center(
     dark_score = (255.0 - gray.astype(np.float32)) / 255.0
     residual_support = None
     grid_support = None
+    body_support = None
     try:
         residual_score, grid_score = compute_black_curve_residual(gray)
         if residual_score is not None and residual_score.shape[:2] == (h, w):
@@ -4956,19 +4881,26 @@ def refine_black_trace_to_dark_run_center(
                 (5, 5),
                 0,
             )
+        if residual_support is not None:
+            body_support = 0.78 * residual_support + 0.22 * np.clip(dark_score, 0.0, 1.0)
+            if grid_support is not None:
+                body_support = body_support - 0.72 * grid_support
+            body_support = cv2.GaussianBlur(
+                np.clip(body_support, 0.0, 1.0).astype(np.float32),
+                (5, 3),
+                0,
+            )
     except Exception:
         residual_support = None
         grid_support = None
+        body_support = None
 
     xs_ref = xs.copy().astype(np.float32)
     radius = max(4, int(search_radius))
     base_max_shift = max(1.0, float(max_shift))
     blend = float(np.clip(blend, 0.0, 1.0))
     curve_type_upper = str(curve_type or "").upper()
-    # Keep black traces centered on the visible stroke body. The earlier
-    # hot-side bias helped crest picking in some cases, but on real scans it
-    # is the main reason the trace rides the stroke edge and nearby grid rails.
-    use_hot_bias = False
+    use_hot_bias = hot_side in ("left", "right")
     prev_target = None
 
     for y in range(min(h, xs_ref.size)):
@@ -4988,6 +4920,16 @@ def refine_black_trace_to_dark_run_center(
         if row_mask.size == 0 or not np.any(row_mask):
             prev_target = None
             continue
+
+        row_body = None
+        body_thresh = 0.0
+        if body_support is not None:
+            row_body = body_support[y, x0:x1]
+            if row_body.size > 0:
+                row_body_max = float(np.max(row_body))
+                if row_body_max > 0.0:
+                    base_thresh = 0.10 if curve_type_upper == "GR" else 0.12
+                    body_thresh = max(base_thresh, row_body_max * (0.42 if curve_type_upper == "GR" else 0.35))
 
         segs = []
         in_seg = False
@@ -5027,11 +4969,24 @@ def refine_black_trace_to_dark_run_center(
             if grid_support is not None:
                 seg_grid = grid_support[y, x0 + l:x0 + r + 1]
                 grid_mean = float(seg_grid.mean()) if seg_grid.size > 0 else 0.0
-            score = (dist, -width, -darkness)
+            body_peak = 0.0
+            body_mean = 0.0
+            if row_body is not None:
+                seg_body = row_body[l:r + 1]
+                body_peak = float(seg_body.max()) if seg_body.size > 0 else 0.0
+                body_mean = float(seg_body.mean()) if seg_body.size > 0 else 0.0
+
+            if curve_type_upper == "GR":
+                score = (-body_peak, dist, -width, grid_mean, -darkness)
+            else:
+                # For slower black curves, prefer the most curve-like stroke
+                # body rather than whichever dark segment is closest to the
+                # current edge-biased trace.
+                score = (-body_peak, -body_mean, grid_mean, dist, -width, -darkness)
             if best is None or score < best:
                 best = score
                 chosen = (l, r)
-                chosen_info = (res_peak, grid_mean)
+                chosen_info = (res_peak, grid_mean, body_peak, body_mean)
 
         if chosen is None:
             prev_target = None
@@ -5043,17 +4998,23 @@ def refine_black_trace_to_dark_run_center(
             and prev_target is not None
             and chosen_info is not None
         ):
-            chosen_res_peak, chosen_grid_mean = chosen_info
+            chosen_res_peak, chosen_grid_mean, chosen_body_peak, _chosen_body_mean = chosen_info
             # If the nearest dark run looks overwhelmingly grid-like, do not
             # reacquire on this row at all. For RHOB/DT-type curves, holding
             # the incoming trace for one row is more stable than jumping onto
             # a likely rail and then trying to recover a few rows later.
-            if chosen_grid_mean > 0.90 and chosen_res_peak < 0.08:
+            if chosen_grid_mean > 0.88 and max(chosen_res_peak, chosen_body_peak) < 0.10:
                 continue
 
         seg_dark = dark_score[y, x0 + l:x0 + r + 1]
         xs_local = np.arange(x0 + l, x0 + r + 1, dtype=np.float32)
-        weights = np.power(np.clip(seg_dark, 0.0, 1.0), 1.8)
+        weights = None
+        if body_support is not None:
+            seg_body = body_support[y, x0 + l:x0 + r + 1]
+            if seg_body.size > 0 and float(np.max(seg_body)) >= body_thresh:
+                weights = np.power(np.clip(seg_body, 0.0, 1.0), 2.4)
+        if weights is None:
+            weights = np.power(np.clip(seg_dark, 0.0, 1.0), 1.8)
         if float(weights.sum()) > 1e-8:
             x_center = float((xs_local * weights).sum() / weights.sum())
         else:
@@ -5063,23 +5024,16 @@ def refine_black_trace_to_dark_run_center(
         local_max_shift = base_max_shift
         local_blend = blend
 
-        if use_hot_bias:
+        if use_hot_bias and curve_type_upper == "GR":
             run_width = float(r - l + 1)
             hot_edge = float(x0 + r) if hot_side == "right" else float(x0 + l)
-            if curve_type_upper == "GR":
-                # GR should preserve visible right-side crest tips, but still
-                # stay anchored to the same dark run.
-                width_t = float(np.clip((run_width - 3.0) / 14.0, 0.0, 1.0))
-                bias = 0.58 + 0.38 * width_t
-                local_max_shift = max(local_max_shift, 22.0)
-                local_blend = max(local_blend, 0.98)
-            else:
-                # RHOB/DT-like strokes are slower and thicker; bias more gently
-                # but still move well past the geometric center on wide rows.
-                width_t = float(np.clip((run_width - 3.0) / 18.0, 0.0, 1.0))
-                bias = 0.48 + 0.42 * width_t
-                local_max_shift = max(local_max_shift, 22.0)
-                local_blend = max(local_blend, 0.94)
+            # GR should preserve visible reading-side crests during the early
+            # branch-selection pass, but a later centerline pass will still
+            # pull the final output back onto the middle of the stroke body.
+            width_t = float(np.clip((run_width - 3.0) / 14.0, 0.0, 1.0))
+            bias = 0.58 + 0.38 * width_t
+            local_max_shift = max(local_max_shift, 22.0)
+            local_blend = max(local_blend, 0.98)
             x_target = float(x_center + (hot_edge - x_center) * bias)
 
         dx = x_target - float(x_prev)
@@ -6790,13 +6744,10 @@ def auto_layout_tracks():
                 })
         except Exception as exc:
             import traceback
-            tb = traceback.format_exc()[-1500:]
-            if is_prod:
-                tb = None
             return jsonify({
                 'success': False,
                 'error': f'Edge fallback failed: {str(exc)}',
-                'traceback': tb
+                'traceback': traceback.format_exc()[-1500:]
             }), 500
         
         if not tracks_out:
@@ -6852,13 +6803,10 @@ def auto_layout_tracks():
                 })
         except Exception as exc:
             import traceback
-            tb = traceback.format_exc()[-1500:]
-            if is_prod:
-                tb = None
             return jsonify({
                 'success': False,
                 'error': f'AI layout returned no result, and edge fallback failed: {str(exc)}',
-                'traceback': tb
+                'traceback': traceback.format_exc()[-1500:]
             }), 500
 
         if tracks_out:
@@ -7787,231 +7735,48 @@ def index():
 @app.route('/pricing')
 def pricing():
     user = _current_user(require_access=False)
-    self_service = {
-        'eyebrow': 'In-house workflow',
-        'title': 'Self-Service',
-        'description': 'Use TifLAS in-house to upload logs, extract curves, review results, and export LAS files yourself.',
-        'price_lines': [
-            '7-day free trial',
-            'Includes up to 3 free logs',
-            '$99/month',
-            '$999/year',
-        ],
-        'features': [
-            'TIFF, PNG, and PDF upload',
-            'Curve extraction workflow',
-            'Review and correction tools',
-            'LAS export',
-            'Saved projects',
-            'Account dashboard',
-        ],
-        'cta': 'Start Free Trial' if not user else 'Open Member Account',
-        'href': '/signup' if not user else '/account',
-    }
-    managed_processing = {
-        'eyebrow': 'Done-for-you option',
-        'title': 'Full-Service Conversion',
-        'description': 'Send us your logs and we’ll process them for you with review, correction, and final QA built into the workflow.',
-        'price_lines': [
-            '$0.99 per 100 curve-feet',
-            '$29.99 minimum per log',
-        ],
-        'notes': [
-            'Poor scans, overlapping traces, wraps, and heavy cleanup may require additional review.',
-            'Pricing scales with extracted curve volume',
-            'Best for teams that want finished output',
-            'Human review stays in the loop',
-            'Quoted separately for highly difficult logs',
-        ],
-        'cta': 'Request a Quote',
-        'href': '/managed-conversion',
-    }
+    plans = [
+        {
+            'name': 'Monthly',
+            'price': '$99',
+            'period': '/month',
+            'badge': '30-day free trial',
+            'description': 'Best for individual users and small teams getting started with in-house conversion.',
+            'features': [
+                '30-day free trial',
+                'TIFF/PDF/PNG upload workspace',
+                'Curve extraction workflow',
+                'LAS export',
+                'Saved projects',
+                'Account dashboard',
+                'Billing & invoice history',
+            ],
+            'cta': 'Start Free Trial' if not user else 'Manage From Account',
+            'highlight': False,
+        },
+        {
+            'name': 'Annual',
+            'price': '$999',
+            'period': '/year',
+            'badge': 'Best value',
+            'description': 'For companies that want the lowest effective annual cost and uninterrupted access.',
+            'features': [
+                'Everything in Monthly',
+                '30-day free trial',
+                'Lower annual cost',
+                'Priority account support',
+                'Simplified yearly billing',
+            ],
+            'cta': 'Choose Annual' if not user else 'Manage From Account',
+            'highlight': True,
+        },
+    ]
     return render_template(
         'pricing.html',
         user=user,
-        self_service=self_service,
-        managed_processing=managed_processing,
+        plans=plans,
         current_plan_label=auth_billing.plan_label(user.get('plan_code')) if user else None,
     )
-
-
-@app.route('/api/managed-jobs/upload-url', methods=['POST'])
-def generate_upload_url():
-    """Generate a presigned URL to securely upload a file directly to Google Cloud Storage."""
-    data = request.json
-    filename = data.get('filename')
-    content_type = data.get('contentType')
-    
-    if not content_type:
-        content_type = 'application/octet-stream'
-        
-    if not filename:
-        return jsonify({'success': False, 'error': 'Missing filename'}), 400
-
-    # Ensure Vision API/Cloud credentials exist to use GCS
-    if not VISION_API_AVAILABLE:
-        return jsonify({'success': False, 'error': 'Cloud storage is not configured.'}), 500
-
-    try:
-        # Create a storage client using the exact same credentials loaded for Vision OCR
-        global credentials
-        if credentials:
-            storage_client = storage.Client(credentials=credentials)
-        else:
-            storage_client = storage.Client()
-        
-        bucket_name = config.GCS_UPLOADS_BUCKET
-        bucket = storage_client.bucket(bucket_name)
-        
-        # Generate a unique path for the file: uploads/{uuid}/{filename}
-        file_uuid = str(uuid.uuid4())
-        safe_filename = filename.replace(" ", "_")
-        blob_path = f"uploads/{file_uuid}/{safe_filename}"
-        
-        blob = bucket.blob(blob_path)
-        
-        # Generate a presigned URL valid for 30 minutes for a PUT request
-        url = blob.generate_signed_url(
-            version="v4",
-            expiration=timedelta(minutes=30),
-            method="PUT",
-            content_type=content_type,
-        )
-        
-        return jsonify({
-            'success': True, 
-            'uploadUrl': url, 
-            'fileKey': blob_path
-        })
-    except Exception as e:
-        print(f"Failed to generate presigned URL: {e}")
-        return jsonify({'success': False, 'error': 'Failed to generate upload URL.'}), 500
-
-
-@app.route('/api/managed-jobs/checkout', methods=['POST'])
-def create_managed_job_checkout():
-    """Create a Stripe Checkout Session in setup mode for a managed job."""
-    if not _is_stripe_configured():
-        return jsonify({'success': False, 'error': 'Stripe is not configured'}), 500
-
-    data = request.json
-    if not data:
-        return jsonify({'success': False, 'error': 'Invalid payload'}), 400
-
-    email = data.get('email', '').strip()
-    if not email:
-        return jsonify({'success': False, 'error': 'Email is required'}), 400
-
-    # 1. Create or find Stripe Customer
-    try:
-        customers = stripe.Customer.list(email=email, limit=1).data
-        if customers:
-            customer_id = customers[0].id
-        else:
-            new_customer = stripe.Customer.create(
-                email=email,
-                name=data.get('contactName', ''),
-                metadata={'company_name': data.get('companyName', '')}
-            )
-            customer_id = new_customer.id
-    except stripe.error.StripeError as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-    # 2. Create managed job record in DB
-    job_id = str(uuid.uuid4())
-    user = _current_user(require_access=False)
-    user_id = user['id'] if user else None
-
-    # Generate a quick estimate using the user's data to save it in DB
-    try:
-        with auth_billing.get_db(config.AUTH_DB_PATH) as conn:
-            conn.execute("""
-                INSERT INTO managed_jobs (
-                    id, user_id, stripe_customer_id, company_name, contact_name, email,
-                    project_name, well_name, estimated_depth_feet, estimated_curve_count,
-                    estimated_complexity, estimated_turnaround, estimated_units,
-                    estimated_amount, notes, status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)
-            """, (
-                job_id, user_id, customer_id,
-                data.get('companyName'), data.get('contactName'), email,
-                data.get('projectName'), data.get('wellName'),
-                float(data.get('depthFeet') or 0),
-                int(data.get('curveCount') or 0),
-                data.get('complexity'), data.get('turnaround'),
-                float(data.get('estimatedUnits') or 0),
-                float(data.get('estimatedTotal') or 0),
-                f"{data.get('notes', '')}\n\nFiles: {json.dumps(data.get('files', []))}", # Append filekeys temporarily to notes to save DB migrations
-                datetime.now(timezone.utc).isoformat(),
-                datetime.now(timezone.utc).isoformat()
-            ))
-    except Exception as e:
-        return jsonify({'success': False, 'error': f"DB Error: {e}"}), 500
-
-    # 3. Create Stripe Checkout Session in setup mode
-    try:
-        session = stripe.checkout.Session.create(
-            mode='setup',
-            customer=customer_id,
-            payment_method_types=['card'],
-            success_url=f"{config.APP_BASE_URL}/submit-job/success?job_id={job_id}&session_id={{CHECKOUT_SESSION_ID}}",
-            cancel_url=f"{config.APP_BASE_URL}/submit-job",
-            metadata={
-                'job_id': job_id,
-                'job_type': 'managed_conversion'
-            }
-        )
-        
-        # Update DB with session ID
-        with auth_billing.get_db(config.AUTH_DB_PATH) as conn:
-            conn.execute("UPDATE managed_jobs SET stripe_checkout_session_id = ? WHERE id = ?", (session.id, job_id))
-
-        return jsonify({'success': True, 'checkoutUrl': session.url})
-    except stripe.error.StripeError as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-
-@app.route('/submit-job/success', methods=['GET'])
-def managed_job_success():
-    """Handle successful return from Stripe setup checkout."""
-    job_id = request.args.get('job_id')
-    session_id = request.args.get('session_id')
-    
-    if not job_id or not session_id:
-        flash('Missing job or session ID', 'error')
-        return redirect(url_for('submit_job'))
-
-    try:
-        checkout_session = stripe.checkout.Session.retrieve(session_id)
-        if checkout_session.setup_intent:
-            setup_intent = stripe.SetupIntent.retrieve(checkout_session.setup_intent)
-            payment_method_id = setup_intent.payment_method
-            
-            with auth_billing.get_db(config.AUTH_DB_PATH) as conn:
-                conn.execute("""
-                    UPDATE managed_jobs 
-                    SET stripe_payment_method_id = ?, 
-                        status = 'payment_method_saved',
-                        updated_at = ?
-                    WHERE id = ? AND stripe_checkout_session_id = ?
-                """, (
-                    payment_method_id, 
-                    datetime.now(timezone.utc).isoformat(),
-                    job_id, 
-                    session_id
-                ))
-    except Exception as e:
-        print(f"Error completing managed job checkout: {e}")
-        flash('Error verifying your payment method.', 'error')
-
-    return render_template('submit_job_success.html', job_id=job_id)
-
-
-@app.route('/submit-job')
-def submit_job():
-    """React-based managed job submission flow."""
-    user = _current_user(require_access=False)
-    return render_template('submit_job.html', user=user, stripe_ready=_is_stripe_configured())
 
 
 @app.route('/managed-conversion')
@@ -8122,8 +7887,6 @@ def logout():
 def signup():
     """Create a real user account (password-hashed, persisted in SQLite)."""
     error = None
-    managed_mode = request.args.get('managed') == 'true'
-    
     if request.method == 'POST':
         full_name = request.form.get('full_name', '').strip()
         company_name = request.form.get('company_name', '').strip()
@@ -8143,20 +7906,8 @@ def signup():
                 company_name=company_name,
             )
             session['user_id'] = user_id
-            
-            if managed_mode:
-                # Managed jobs users skip the trial and subscription flow.
-                # Give them a 'managed_only' plan to differentiate them.
-                auth_billing.update_user_fields(
-                    config.AUTH_DB_PATH,
-                    user_id,
-                    subscription_status='managed_only',
-                    plan_code='managed_only'
-                )
-                flash('Account created! Welcome to the managed jobs dashboard.', 'success')
-                return redirect(url_for('dashboard'))
-            
-            # Regular self-serve path: start trial immediately
+            # Always start a local trial immediately so the user can access the
+            # dashboard right away, regardless of whether Stripe checkout completes.
             trial_end_iso = (datetime.now(timezone.utc) + timedelta(days=auth_billing.TRIAL_DAYS)).isoformat()
             auth_billing.update_user_fields(
                 config.AUTH_DB_PATH,
@@ -8168,10 +7919,10 @@ def signup():
             )
             if _is_stripe_configured():
                 return redirect(url_for('create_checkout_session', plan='monthly', mode='trial'))
-            flash('Account created! Your 7-day free trial is now active.', 'success')
+            flash('Account created! Your 30-day free trial is now active.', 'success')
             return redirect(url_for('dashboard'))
 
-    return render_template('signup.html', error=error, managed_mode=managed_mode)
+    return render_template('signup.html', error=error)
 
 
 @app.route('/auth-debug')
@@ -8273,7 +8024,7 @@ def update_account():
 
 
 @app.route('/admin')
-@login_required()
+@login_required
 def admin():
     """Admin panel."""
     user = _current_user(require_access=True)
@@ -8283,84 +8034,17 @@ def admin():
         
     users = auth_billing.get_all_users_for_admin(config.AUTH_DB_PATH)
     logs = auth_billing.get_all_logs_for_admin(config.AUTH_DB_PATH)
-    managed_jobs = auth_billing.get_all_managed_jobs_for_admin(config.AUTH_DB_PATH)
     stats = auth_billing.get_admin_stats(config.AUTH_DB_PATH)
     settings = auth_billing.get_admin_settings(config.AUTH_DB_PATH)
     
     # Determine which user we are impersonating, if any
     impersonating_id = session.get('impersonate_user_id')
     
-    return render_template('admin.html', user=user, users=users, logs=logs, managed_jobs=managed_jobs, stats=stats, settings=settings, impersonating_id=impersonating_id)
-
-
-@app.route('/api/admin/managed-jobs/charge', methods=['POST'])
-@login_required()
-def charge_managed_job():
-    if not session.get('is_admin'):
-        return jsonify({'success': False, 'error': 'Unauthorized'}), 403
-        
-    data = request.json or {}
-    job_id = data.get('job_id')
-    amount_dollars = data.get('amount')
-    
-    if not job_id or amount_dollars is None:
-        return jsonify({'success': False, 'error': 'Missing job_id or amount'}), 400
-        
-    try:
-        amount_cents = int(float(amount_dollars) * 100)
-        if amount_cents <= 0:
-            return jsonify({'success': False, 'error': 'Invalid amount'}), 400
-            
-        # Fetch the job
-        with auth_billing.get_db(config.AUTH_DB_PATH) as conn:
-            job = conn.execute("SELECT * FROM managed_jobs WHERE id = ?", (job_id,)).fetchone()
-            
-        if not job:
-            return jsonify({'success': False, 'error': 'Job not found'}), 404
-            
-        job = dict(job)
-        if job.get('status') == 'paid':
-            return jsonify({'success': False, 'error': 'Job is already paid'}), 400
-            
-        payment_method_id = job.get('stripe_payment_method_id')
-        customer_id = job.get('stripe_customer_id')
-        
-        if not payment_method_id or not customer_id:
-            return jsonify({'success': False, 'error': 'No saved payment method found for this job'}), 400
-            
-        # Charge the card via Stripe PaymentIntent off-session
-        intent = stripe.PaymentIntent.create(
-            amount=amount_cents,
-            currency='usd',
-            customer=customer_id,
-            payment_method=payment_method_id,
-            off_session=True,
-            confirm=True,
-            description=f"TifLAS Managed Conversion: {job.get('well_name', 'Well')} - Job ID {job_id[:8]}",
-            metadata={'job_id': job_id}
-        )
-        
-        if intent.status == 'succeeded':
-            # Update DB
-            with auth_billing.get_db(config.AUTH_DB_PATH) as conn:
-                conn.execute("""
-                    UPDATE managed_jobs 
-                    SET status = 'paid', actual_amount = ?, updated_at = ?
-                    WHERE id = ?
-                """, (float(amount_dollars), datetime.now(timezone.utc).isoformat(), job_id))
-            return jsonify({'success': True, 'charge_id': intent.id})
-        else:
-            return jsonify({'success': False, 'error': f"Charge failed with status: {intent.status}"}), 400
-            
-    except stripe.error.CardError as e:
-        err = e.error
-        return jsonify({'success': False, 'error': f"Card error: {err.message}"}), 400
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+    return render_template('admin.html', user=user, users=users, logs=logs, stats=stats, settings=settings, impersonating_id=impersonating_id)
 
 
 @app.route('/admin/action', methods=['POST'])
-@login_required()
+@login_required
 def admin_action():
     if not session.get('is_admin'):
         return jsonify({'success': False, 'error': 'Unauthorized'}), 403
@@ -8400,75 +8084,6 @@ def admin_action():
     return jsonify({'success': False, 'error': 'Invalid action'})
 
 
-@app.route('/api/admin/diagnostics', methods=['GET'])
-@login_required()
-def admin_diagnostics():
-    """Diagnostic endpoint to check database and volume status."""
-    user = _current_user(require_access=True)
-    if not user.get('is_admin') and not session.get('is_admin'):
-        return jsonify({'error': 'Admin access required'}), 403
-    
-    import os
-    from pathlib import Path
-    
-    diagnostics = {
-        'database': {},
-        'volume': {},
-        'logs': {},
-        'images': {}
-    }
-    
-    # Check database path and existence
-    db_path = config.AUTH_DB_PATH
-    diagnostics['database']['path'] = db_path
-    diagnostics['database']['exists'] = os.path.exists(db_path)
-    if os.path.exists(db_path):
-        diagnostics['database']['size_bytes'] = os.path.getsize(db_path)
-        diagnostics['database']['readable'] = os.access(db_path, os.R_OK)
-        diagnostics['database']['writable'] = os.access(db_path, os.W_OK)
-    
-    # Check volume mount
-    volume_mount = os.environ.get('RAILWAY_VOLUME_MOUNT_PATH', '')
-    diagnostics['volume']['mount_path'] = volume_mount
-    diagnostics['volume']['mount_exists'] = os.path.exists(volume_mount) if volume_mount else False
-    
-    # Check data directory
-    data_dir = Path.cwd() / 'data'
-    diagnostics['volume']['data_dir'] = str(data_dir)
-    diagnostics['volume']['data_dir_exists'] = data_dir.exists()
-    
-    # Check images directory
-    images_dir = data_dir / 'images'
-    diagnostics['images']['dir'] = str(images_dir)
-    diagnostics['images']['exists'] = images_dir.exists()
-    if images_dir.exists():
-        try:
-            image_files = list(images_dir.glob('*'))
-            diagnostics['images']['count'] = len(image_files)
-            diagnostics['images']['files'] = [f.name for f in image_files[:10]]  # First 10
-        except Exception as e:
-            diagnostics['images']['error'] = str(e)
-    
-    # Check logs in database
-    try:
-        all_logs = auth_billing.get_all_logs_for_admin(config.AUTH_DB_PATH)
-        diagnostics['logs']['total_count'] = len(all_logs)
-        diagnostics['logs']['by_user'] = {}
-        for log in all_logs:
-            user_id = log.get('user_id')
-            if user_id not in diagnostics['logs']['by_user']:
-                diagnostics['logs']['by_user'][user_id] = []
-            diagnostics['logs']['by_user'][user_id].append({
-                'id': log.get('id'),
-                'name': log.get('name'),
-                'created_at': log.get('created_at')
-            })
-    except Exception as e:
-        diagnostics['logs']['error'] = str(e)
-    
-    return jsonify(diagnostics)
-
-
 @app.route('/billing/create-checkout-session', methods=['GET', 'POST'])
 def create_checkout_session():
     user = _current_user(require_access=False)
@@ -8481,7 +8096,7 @@ def create_checkout_session():
 
     plan = (request.values.get('plan') or '').strip().lower()
     mode = (request.values.get('mode') or 'upgrade').strip().lower()
-    if plan not in ('monthly', 'annual', 'managed_simple', 'managed_standard', 'managed_complex'):
+    if plan not in ('monthly', 'annual'):
         flash('Invalid plan selected.', 'error')
         return redirect(url_for('account'))
 
@@ -8510,47 +8125,30 @@ def create_checkout_session():
             customer_id = customer['id']
             auth_billing.update_user_fields(config.AUTH_DB_PATH, user['id'], stripe_customer_id=customer_id)
 
-        if mode == 'managed':
-            # One-time payment for managed service
-            checkout = stripe.checkout.Session.create(
-                mode='payment',
-                customer=customer_id,
-                line_items=[{'price': price_id, 'quantity': 1}],
-                metadata={
-                    'user_id': str(user['id']),
-                    'plan_code': plan,
-                    'mode': mode,
-                },
-                success_url=f"{config.APP_BASE_URL}/managed-conversion",
-                cancel_url=f"{config.APP_BASE_URL}/managed-conversion",
-            )
-        else:
-            # Recurring subscription (monthly, annual, trial)
-            subscription_data = {
-                'metadata': {
-                    'user_id': str(user['id']),
-                    'plan_code': plan,
-                    'mode': mode,
-                }
+        subscription_data = {
+            'metadata': {
+                'user_id': str(user['id']),
+                'plan_code': plan,
+                'mode': mode,
             }
-            if mode == 'trial':
-                subscription_data['trial_period_days'] = auth_billing.TRIAL_DAYS
-    
-            checkout = stripe.checkout.Session.create(
-                mode='subscription',
-                customer=customer_id,
-                line_items=[{'price': price_id, 'quantity': 1}],
-                payment_method_collection='always',
-                allow_promotion_codes=True,
-                metadata={
-                    'user_id': str(user['id']),
-                    'plan_code': plan,
-                    'mode': mode,
-                },
-                subscription_data=subscription_data,
-                success_url=f"{config.APP_BASE_URL}/account?checkout=success",
-                cancel_url=f"{config.APP_BASE_URL}/account?checkout=cancel",
-            )
+        }
+        if mode == 'trial':
+            subscription_data['trial_period_days'] = auth_billing.TRIAL_DAYS
+
+        checkout = stripe.checkout.Session.create(
+            mode='subscription',
+            customer=customer_id,
+            line_items=[{'price': price_id, 'quantity': 1}],
+            payment_method_collection='always',
+            metadata={
+                'user_id': str(user['id']),
+                'plan_code': plan,
+                'mode': mode,
+            },
+            success_url=f"{config.APP_BASE_URL}/account?checkout=success",
+            cancel_url=f"{config.APP_BASE_URL}/account?checkout=cancel",
+            subscription_data=subscription_data,
+        )
         return redirect(checkout.url, code=303)
     except stripe.error.StripeError as exc:
         import traceback; traceback.print_exc()
@@ -8664,19 +8262,10 @@ def stripe_webhook():
 
 
 @app.route('/api/logs', methods=['POST'])
-@login_required()
+@login_required
 def save_log():
     """Save a digitized log to the user's account."""
     user = _current_user(require_access=True)
-    if not user:
-        return jsonify({'success': False, 'error': 'Not authorized'}), 401
-        
-    # Enforce trial limits
-    if user.get('subscription_status') == 'trialing' and not user.get('is_admin'):
-        user_logs = auth_billing.get_user_logs(config.AUTH_DB_PATH, user['id'])
-        if len(user_logs) >= 3:
-            return jsonify({'success': False, 'error': 'Trial limit reached. You can only save up to 3 logs on the free trial. Please upgrade your account to save more logs.'}), 403
-
     data = request.json
     
     try:
@@ -8688,19 +8277,21 @@ def save_log():
         depth_end = float(data.get('depth_end', 0))
         depth_unit = data.get('depth_unit', 'FT')
         las_content = data.get('las_content', '')
-        original_image_path = data.get('original_image_path', None)
-
-        with auth_billing.get_db(config.AUTH_DB_PATH) as conn:
-            conn.execute("""
-                INSERT INTO user_logs (id, user_id, name, curve_count, depth_start, depth_end, depth_unit, las_content, original_image_path, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                log_id, user['id'], name, curve_count, depth_start, depth_end, depth_unit, las_content, original_image_path,
-                datetime.now(timezone.utc).isoformat()
-            ))
-            conn.commit()
+        
+        if not las_content:
+            return jsonify({'success': False, 'error': 'Missing LAS content'}), 400
             
-        print(f"[SAVE LOG] Successfully saved log {log_id} for user {user['id']}: {name}")
+        auth_billing.save_user_log(
+            config.AUTH_DB_PATH,
+            log_id=log_id,
+            user_id=user['id'],
+            name=name,
+            curve_count=curve_count,
+            depth_start=depth_start,
+            depth_end=depth_end,
+            depth_unit=depth_unit,
+            las_content=las_content
+        )
         return jsonify({'success': True, 'log_id': log_id})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -8708,7 +8299,7 @@ def save_log():
 
 
 @app.route('/api/logs/<log_id>/download', methods=['GET'])
-@login_required()
+@login_required
 def download_log(log_id):
     """Download a saved log as a .las file."""
     user = _current_user(require_access=True)
@@ -8728,15 +8319,11 @@ def download_log(log_id):
 
 
 @app.route('/workspace')
-@login_required()
+@login_required
 def workspace():
     user = _current_user(require_access=True)
     if not user:
         return redirect(url_for('login'))
-        
-    if not auth_billing.can_access_workspace(user):
-        flash('Full-service users cannot access the self-serve workspace. Upgrade to a self-serve plan to use this feature.', 'warning')
-        return redirect(url_for('dashboard'))
 
     response = make_response(render_template('workspace.html',
                            user=user,
@@ -8750,7 +8337,7 @@ def workspace():
     return response
 
 @app.route('/dashboard')
-@login_required()
+@login_required
 def dashboard():
     """User dashboard listing saved logs."""
     user = _current_user(require_access=True)
@@ -8762,9 +8349,6 @@ def dashboard():
     global_banner = settings.get('global_banner')
         
     logs = auth_billing.get_user_logs(config.AUTH_DB_PATH, user['id'])
-    print(f"[DASHBOARD] User {user['id']} ({user.get('email')}) has {len(logs)} logs")
-    if logs:
-        print(f"[DASHBOARD] Log names: {[log['name'] for log in logs]}")
     return render_template('dashboard.html', 
                           user=user,
                           logs=logs,
@@ -8774,38 +8358,15 @@ def dashboard():
 
 
 @app.route('/las_viewer')
-@login_required()
+@login_required
 def las_viewer():
-    log_id = request.args.get('log_id')
-    log_data = None
-    if log_id:
-        user = _current_user()
-        if user:
-            log_data = auth_billing.get_user_log(config.AUTH_DB_PATH, log_id, user['id'])
-    
-    return render_template('las_viewer.html', app_version=APP_VERSION, log_data=log_data)
+    return render_template('las_viewer.html', app_version=APP_VERSION)
 
 
 @app.route('/favicon.ico')
 def favicon():
     """Return empty response for favicon to prevent 404 errors."""
     return '', 204
-
-@app.route('/api/images/<filename>')
-@login_required()
-def get_image(filename):
-    """Serve saved well log images to authenticated users."""
-    user = _current_user(require_access=True)
-    if not user:
-        return "Not authorized", 401
-    
-    # We could theoretically verify the image belongs to the user,
-    # but the UUID filename acts as a sufficient secure capability URL
-    # for users inside their own session.
-    from pathlib import Path
-    images_dir = Path(config.DATA_ROOT) / 'images'
-    return send_from_directory(str(images_dir), filename)
-
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
@@ -8827,21 +8388,8 @@ def upload_file():
     
     h, w, _ = img.shape
     
-    # Save the image to the persistent data volume so we can reference its path
-    import uuid
-    import os
-    from pathlib import Path
-    images_dir = Path(config.DATA_ROOT) / 'images'
-    images_dir.mkdir(parents=True, exist_ok=True)
-    image_filename = f"{uuid.uuid4().hex}.jpg"
-    image_path = images_dir / image_filename
-    
-    # Save as JPEG with 85% quality to save space
-    cv2.imwrite(str(image_path), img, [cv2.IMWRITE_JPEG_QUALITY, 85])
-    
-    # We still return the base64 version for immediate frontend display,
-    # but we also return the permanent path so the frontend can save it.
-    _, buffer = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    # Convert to base64 for display
+    _, buffer = cv2.imencode('.png', img)
     img_base64 = base64.b64encode(buffer).decode('utf-8')
     
     # Auto-detect tracks
@@ -8876,8 +8424,7 @@ def upload_file():
 
     return jsonify({
         'success': True,
-        'image': f'data:image/jpeg;base64,{img_base64}',
-        'image_path': f'/api/images/{image_filename}',
+        'image': f'data:image/png;base64,{img_base64}',
         'width': w,
         'height': h,
         'tracks': tracks,
@@ -8893,22 +8440,8 @@ def upload_file():
     })
 
 @app.route('/digitize', methods=['POST'])
-@login_required()
 def digitize():
     """Process digitization request"""
-    user = _current_user(require_access=True)
-    if not user:
-        return jsonify({'success': False, 'error': 'Not authorized'}), 401
-        
-    # Enforce trial limits on processing as well to prevent abuse
-    if user.get('subscription_status') == 'trialing' and not user.get('is_admin'):
-        user_logs = auth_billing.get_user_logs(config.AUTH_DB_PATH, user['id'])
-        if len(user_logs) >= 3:
-            return jsonify({
-                'success': False, 
-                'error': 'Trial limit reached. You have already processed and saved your 3 free logs. Please upgrade your account to continue digitizing.'
-            }), 403
-
     data = request.json
 
     # Decode image
@@ -9370,6 +8903,15 @@ def digitize():
             except Exception:
                 pass
 
+            try:
+                # Once the trace is back on the visible black stroke body,
+                # nudge wide local runs toward the chart-reading side so crest
+                # tips are actually hit instead of averaged through.
+                if curve_type.upper() == "GR":
+                    xs = refine_black_trace_to_hot_side_crests(roi, xs, hot_side=hot_side, curve_type=curve_type)
+            except Exception:
+                pass
+
         # Do not run the old non-GR black smoother here. After the dark-run
         # recenter/hot-side bias pass, even light smoothing pulls RHOB/DT-type
         # traces back toward the inner half of the stroke and weakens the
@@ -9390,7 +8932,7 @@ def digitize():
             s = s.interpolate(method='linear', limit_direction='both', limit=max_gap, limit_area=None)
             # Handle edge cases
             if s.isna().any():
-                s = s.ffill(limit=max_gap).bfill(limit=max_gap)
+                s = s.fillna(method='ffill', limit=max_gap).fillna(method='bfill', limit=max_gap)
             xs = s.to_numpy(dtype=np.float32)
 
         if mode not in colored_modes:
@@ -9398,17 +8940,24 @@ def digitize():
                 xs = suppress_black_grid_lock_runs(roi, xs, curve_type=curve_type)
             except Exception:
                 pass
-
             try:
-                # Finish black mode the same way the successful color path
-                # does: re-center after the grid-lock cleanup, not before it.
-                # This keeps the line on the middle of the visible black ink
-                # instead of on the stroke edge or a nearby rail.
-                xs = refine_to_stroke_centerline(mask, xs, threshold_ratio=0.45, window_size=16)
+                # Final black-mode output should ride the middle of the visible
+                # stroke body instead of staying on a chosen edge or a nearby rail.
+                xs = refine_black_trace_to_dark_run_center(
+                    roi,
+                    xs,
+                    search_radius=18,
+                    max_shift=8.0,
+                    blend=0.92,
+                    hot_side=None,
+                    curve_type=curve_type,
+                )
             except Exception:
                 pass
-
             try:
+                # One more blob-centering pass after rail cleanup helps thick
+                # black traces settle into the visible ink body instead of
+                # clinging to a nearby grid edge.
                 xs = recenter_black_trace_post_dp(roi, xs)
             except Exception:
                 pass
@@ -9515,24 +9064,22 @@ def digitize():
         vals_out = np.where(np.isnan(vals), null_val, vals).astype(np.float32)
         curve_data[name] = {'unit': unit, 'values': vals_out}
 
-        # Build a continuous display trace for the UI overlay. The exported LAS
-        # values can still contain nulls, but the visible editing line should
-        # remain continuous rather than showing gaps.
+        # Build a sparse set of trace points in original image coordinates for UI overlay
         trace_points = []
         if xs.size > 0:
-            try:
-                xs_display = pd.Series(xs.astype(np.float32)).interpolate(
-                    method='linear',
-                    limit_direction='both',
-                    limit_area=None,
-                ).to_numpy(dtype=np.float32)
-            except Exception:
-                xs_display = xs
-
-            valid_rows = np.where(~np.isnan(xs_display))[0]
+            # Only sample from rows where the DP tracer produced a valid X.
+            # This avoids the corner-case where all sampled indices land on
+            # NaNs even though some rows are valid, which would yield an
+            # empty trace and no cyan dots in the UI.
+            valid_rows = np.where(~np.isnan(xs))[0]
             if valid_rows.size > 0:
+                # Send EVERY single traced point - no sampling at all.
+                # This creates a completely solid line that shows the exact trace.
                 for row_idx in valid_rows:
-                    x_val = xs_display[row_idx]
+                    x_val = xs[row_idx]
+                    # Preserve sub-pixel X precision so the zoomed browser
+                    # overlay stays centered on narrow or thick strokes instead
+                    # of stair-stepping to one side after rounding.
                     x_img = float(left_px) + float(x_val)
                     y_img = float(top + row_idx)
                     trace_points.append([x_img, y_img])
@@ -10013,7 +9560,7 @@ def refine_edit():
                 max_gap = 25
                 s = s.interpolate(method='linear', limit_direction='both', limit=max_gap, limit_area=None)
                 if s.isna().any():
-                    s = s.ffill(limit=max_gap).bfill(limit=max_gap)
+                    s = s.fillna(method='ffill', limit=max_gap).fillna(method='bfill', limit=max_gap)
                 xs_refined = s.to_numpy(dtype=np.float32)
             except Exception:
                 pass
@@ -10118,14 +9665,10 @@ def refine_edit():
         
     except Exception as e:
         import traceback
-        tb = traceback.format_exc()
-        if is_prod:
-            tb = None
-            print(f"Auto capture error: {e}")
         return jsonify({
             'success': False,
             'error': str(e),
-            'traceback': tb
+            'traceback': traceback.format_exc()
         })
 
 
@@ -10794,7 +10337,7 @@ def export_training_data():
 
         writer.writerow(['image_id', 'depth_top_px', 'depth_bottom_px', 'depth_top_depth',
                         'depth_bottom_depth', 'depth_unit', 'curve_name', 'pixel_trace',
-                        'depth_values'])
+                        'depth', 'curve_values'])
 
         for item in training_data:
             depth = item['depth']
@@ -10816,6 +10359,7 @@ def export_training_data():
                     depth['unit'],
                     curve['name'],
                     json.dumps(pixel_trace_clean),
+                    json.dumps(depth['values']),
                     json.dumps(depth_values_clean),
                 ])
 

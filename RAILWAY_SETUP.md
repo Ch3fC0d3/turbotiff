@@ -1,5 +1,36 @@
 # Railway Deployment Setup
 
+## CRITICAL: Persistent Volume Setup
+
+**Without a persistent volume, all saved logs and images will be lost on every deployment!**
+
+### Steps to Add Persistent Volume:
+
+1. Go to your Railway project dashboard
+2. Click on your service (web)
+3. Go to **Settings** tab
+4. Scroll to **Volumes** section
+5. Click **+ New Volume**
+6. Configure:
+   - **Mount Path**: `/app/data`
+   - **Size**: Start with 1GB (can increase later)
+7. Click **Add**
+8. Service will redeploy automatically
+
+### Verify Volume is Mounted:
+
+After deployment, visit: `https://tiflas.com/api/admin/diagnostics`
+
+You should see:
+```json
+{
+  "volume": {
+    "mount_path": "/app/data",
+    "mount_exists": true
+  }
+}
+```
+
 ## Required Environment Variables
 
 Your Railway app needs these environment variables configured:

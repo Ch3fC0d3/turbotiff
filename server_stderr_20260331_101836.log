@@ -1,0 +1,31 @@
+C:\Users\gabep\AppData\Roaming\Python\Python312\site-packages\lasio\las_version.py:2: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+  from pkg_resources import get_distribution, DistributionNotFound
+D:\Users\gabep\Desktop\sweetweb\web_app.py:165: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  APP_BUILD_TIME = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://192.168.1.161:5000
+Press CTRL+C to quit
+127.0.0.1 - - [31/Mar/2026 10:19:23] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [31/Mar/2026 10:23:36] "GET / HTTP/1.1" 302 -
+127.0.0.1 - - [31/Mar/2026 10:23:36] "GET /dashboard HTTP/1.1" 200 -
+127.0.0.1 - - [31/Mar/2026 10:23:36] "GET /static/home_backdrop.css HTTP/1.1" 304 -
+127.0.0.1 - - [31/Mar/2026 10:23:36] "GET /static/images/logo.svg HTTP/1.1" 304 -
+127.0.0.1 - - [31/Mar/2026 10:23:37] "GET /favicon.ico HTTP/1.1" 204 -
+127.0.0.1 - - [31/Mar/2026 10:23:39] "GET /workspace HTTP/1.1" 200 -
+127.0.0.1 - - [31/Mar/2026 10:23:39] "GET /static/home_backdrop.css HTTP/1.1" 304 -
+127.0.0.1 - - [31/Mar/2026 10:23:39] "GET /static/images/logo.svg HTTP/1.1" 304 -
+127.0.0.1 - - [31/Mar/2026 10:23:39] "GET /favicon.ico HTTP/1.1" 204 -
+127.0.0.1 - - [31/Mar/2026 10:23:42] "POST /upload HTTP/1.1" 200 -
+127.0.0.1 - - [31/Mar/2026 10:23:59] "POST /reanalyze_panel HTTP/1.1" 200 -
+127.0.0.1 - - [31/Mar/2026 10:24:02] "POST /crop_to_panel HTTP/1.1" 200 -
+D:\Users\gabep\Desktop\sweetweb\web_app.py:7994: FutureWarning: Series.fillna with 'method' is deprecated and will raise in a future version. Use obj.ffill() or obj.bfill() instead.
+  s = s.fillna(method='ffill', limit=max_gap).fillna(method='bfill', limit=max_gap)
+127.0.0.1 - - [31/Mar/2026 10:24:37] "POST /digitize HTTP/1.1" 200 -
+D:\Users\gabep\Desktop\sweetweb\web_app.py:8790: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  now = datetime.utcnow()
+127.0.0.1 - - [31/Mar/2026 10:24:38] "POST /api/save_bad_black_segment HTTP/1.1" 200 -
+127.0.0.1 - - [31/Mar/2026 10:24:57] "POST /digitize HTTP/1.1" 200 -
+127.0.0.1 - - [31/Mar/2026 10:24:57] "POST /api/save_bad_black_segment HTTP/1.1" 200 -
+127.0.0.1 - - [31/Mar/2026 10:24:57] "POST /api/save_bad_black_segment HTTP/1.1" 200 -

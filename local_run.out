@@ -1,0 +1,188 @@
+[OK] EasyOCR available for local OCR fallback.
+[OK] AI Model loaded from curve_trace_model.pt (Device: cuda)
+[OK] Google Vision API: Loaded from file
+[OK] lasio imported; LAS validation enabled.
+Starting TIFF-to-LAS Web App
+Google Vision API: Available
+Open: http://localhost:5000
+ * Serving Flask app 'web_app'
+ * Debug mode: off
+Gemini API error (auto_layout): 400 {
+  "error": {
+    "code": 400,
+    "message": "* GenerateContentRequest.model: unexpected model name format\n",
+    "status": "INVALID_ARGUMENT"
+  }
+}
+
+[WARN] AI layout inference returned no result; falling back to edge-based track detection
+Gemini API error (auto_layout): 400 {
+  "error": {
+    "code": 400,
+    "message": "* GenerateContentRequest.model: unexpected model name format\n",
+    "status": "INVALID_ARGUMENT"
+  }
+}
+
+[WARN] AI layout inference returned no result; falling back to edge-based track detection
+Gemini API error (analysis): 400 {
+  "error": {
+    "code": 400,
+    "message": "* GenerateContentRequest.model: unexpected model name format\n",
+    "status": "INVALID_ARGUMENT"
+  }
+}
+
+Gemini API error (analysis): 400 {
+  "error": {
+    "code": 400,
+    "message": "* GenerateContentRequest.model: unexpected model name format\n",
+    "status": "INVALID_ARGUMENT"
+  }
+}
+
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+Vision API error: 503 GOAWAY received; Error code: 0; Debug Text: session_timed_out
+[OK] EasyOCR reader initialized (GPU).
+Gemini API error (auto_layout): 400 {
+  "error": {
+    "code": 400,
+    "message": "* GenerateContentRequest.model: unexpected model name format\n",
+    "status": "INVALID_ARGUMENT"
+  }
+}
+
+[WARN] AI layout inference returned no result; falling back to edge-based track detection
+Gemini API error (auto_layout): 400 {
+  "error": {
+    "code": 400,
+    "message": "* GenerateContentRequest.model: unexpected model name format\n",
+    "status": "INVALID_ARGUMENT"
+  }
+}
+
+[WARN] AI layout inference returned no result; falling back to edge-based track detection
+Gemini API error (analysis): 400 {
+  "error": {
+    "code": 400,
+    "message": "* GenerateContentRequest.model: unexpected model name format\n",
+    "status": "INVALID_ARGUMENT"
+  }
+}
+
+Vision API error: 503 GOAWAY received; Error code: 0; Debug Text: session_timed_out
+Gemini API error (analysis): 400 {
+  "error": {
+    "code": 400,
+    "message": "* GenerateContentRequest.model: unexpected model name format\n",
+    "status": "INVALID_ARGUMENT"
+  }
+}
+
+Gemini API error (auto_layout): 400 {
+  "error": {
+    "code": 400,
+    "message": "* GenerateContentRequest.model: unexpected model name format\n",
+    "status": "INVALID_ARGUMENT"
+  }
+}
+
+[WARN] AI layout inference returned no result; falling back to edge-based track detection
+Gemini API error (auto_layout): 400 {
+  "error": {
+    "code": 400,
+    "message": "* GenerateContentRequest.model: unexpected model name format\n",
+    "status": "INVALID_ARGUMENT"
+  }
+}
+
+[WARN] AI layout inference returned no result; falling back to edge-based track detection
+Gemini API error (analysis): 400 {
+  "error": {
+    "code": 400,
+    "message": "* GenerateContentRequest.model: unexpected model name format\n",
+    "status": "INVALID_ARGUMENT"
+  }
+}
+
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+Vision API error: 503 GOAWAY received; Error code: 0; Debug Text: session_timed_out
+Gemini API error (analysis): 400 {
+  "error": {
+    "code": 400,
+    "message": "* GenerateContentRequest.model: unexpected model name format\n",
+    "status": "INVALID_ARGUMENT"
+  }
+}
+
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+refine_edit: trace_curve_multiscale failed (name 'roi' is not defined), returning edit position
+Gemini API error (analysis): 400 {
+  "error": {
+    "code": 400,
+    "message": "* GenerateContentRequest.model: unexpected model name format\n",
+    "status": "INVALID_ARGUMENT"
+  }
+}
+
+Vision API error: 503 GOAWAY received; Error code: 0; Debug Text: session_timed_out
+Gemini API error (auto_layout): 400 {
+  "error": {
+    "code": 400,
+    "message": "* GenerateContentRequest.model: unexpected model name format\n",
+    "status": "INVALID_ARGUMENT"
+  }
+}
+[OK] EasyOCR available for local OCR fallback.
+[OK] AI Model loaded from curve_trace_model.pt (Device: cuda)
+[OK] Google Vision API: Loaded from file
+[OK] lasio imported; LAS validation enabled.
+Starting TIFF-to-LAS Web App
+Google Vision API: Available
+Open: http://localhost:5000
+ * Serving Flask app 'web_app'
+ * Debug mode: off

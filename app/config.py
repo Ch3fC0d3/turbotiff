@@ -101,8 +101,18 @@ SECRET_KEY = os.environ.get("SECRET_KEY", "tiflas-dev-secret-key-change-in-prod"
 
 APP_BASE_URL = os.environ.get("APP_BASE_URL", "http://localhost:5000")
 
-_default_auth_db_path = Path.cwd() / "data" / "auth_billing.db"
+# Use Railway volume mount if available, otherwise fall back to local data directory
+_volume_mount = os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", "").strip()
+if _volume_mount:
+    _data_root = Path(_volume_mount)
+else:
+    _data_root = Path.cwd() / "data"
+
+_default_auth_db_path = _data_root / "auth_billing.db"
 AUTH_DB_PATH = os.environ.get("AUTH_DB_PATH", str(_default_auth_db_path))
+
+# Export data root for use in other parts of the app
+DATA_ROOT = str(_data_root)
 
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")

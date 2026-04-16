@@ -1,0 +1,9 @@
+[OK] EasyOCR available for local OCR fallback.
+[OK] AI Model loaded from curve_trace_model.pt (Device: cuda)
+[OK] Google Vision API: Loaded from file
+[OK] lasio imported; LAS validation enabled.
+Starting TIFF-to-LAS Web App
+Google Vision API: Available
+Open: http://localhost:5000
+ * Serving Flask app 'web_app'
+ * Debug mode: off
