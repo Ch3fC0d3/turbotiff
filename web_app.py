@@ -298,6 +298,9 @@ stripe.api_key = config.STRIPE_SECRET_KEY
 PLAN_TO_PRICE = {
     'monthly': config.STRIPE_PRICE_MONTHLY,
     'annual': config.STRIPE_PRICE_ANNUAL,
+    'managed_simple': config.STRIPE_PRICE_MANAGED_SIMPLE,
+    'managed_standard': config.STRIPE_PRICE_MANAGED_STANDARD,
+    'managed_complex': config.STRIPE_PRICE_MANAGED_COMPLEX,
 }
 PRICE_TO_PLAN = {v: k for k, v in PLAN_TO_PRICE.items() if v}
 
@@ -8404,7 +8407,7 @@ def create_checkout_session():
 
     plan = (request.values.get('plan') or '').strip().lower()
     mode = (request.values.get('mode') or 'upgrade').strip().lower()
-    if plan not in ('monthly', 'annual'):
+    if plan not in ('monthly', 'annual', 'managed_simple', 'managed_standard', 'managed_complex'):
         flash('Invalid plan selected.', 'error')
         return redirect(url_for('account'))
 
@@ -8433,31 +8436,47 @@ def create_checkout_session():
             customer_id = customer['id']
             auth_billing.update_user_fields(config.AUTH_DB_PATH, user['id'], stripe_customer_id=customer_id)
 
-        subscription_data = {
-            'metadata': {
-                'user_id': str(user['id']),
-                'plan_code': plan,
-                'mode': mode,
+        if mode == 'managed':
+            # One-time payment for managed service
+            checkout = stripe.checkout.Session.create(
+                mode='payment',
+                customer=customer_id,
+                line_items=[{'price': price_id, 'quantity': 1}],
+                metadata={
+                    'user_id': str(user['id']),
+                    'plan_code': plan,
+                    'mode': mode,
+                },
+                success_url=f"{config.APP_BASE_URL}/managed-conversion",
+                cancel_url=f"{config.APP_BASE_URL}/managed-conversion",
+            )
+        else:
+            # Recurring subscription (monthly, annual, trial)
+            subscription_data = {
+                'metadata': {
+                    'user_id': str(user['id']),
+                    'plan_code': plan,
+                    'mode': mode,
+                }
             }
-        }
-        if mode == 'trial':
-            subscription_data['trial_period_days'] = auth_billing.TRIAL_DAYS
-
-        checkout = stripe.checkout.Session.create(
-            mode='subscription',
-            customer=customer_id,
-            line_items=[{'price': price_id, 'quantity': 1}],
-            payment_method_collection='always',
-            allow_promotion_codes=True,
-            metadata={
-                'user_id': str(user['id']),
-                'plan_code': plan,
-                'mode': mode,
-            },
-            subscription_data=subscription_data,
-            success_url=f"{config.APP_BASE_URL}/account?checkout=success",
-            cancel_url=f"{config.APP_BASE_URL}/account?checkout=cancel",
-        )
+            if mode == 'trial':
+                subscription_data['trial_period_days'] = auth_billing.TRIAL_DAYS
+    
+            checkout = stripe.checkout.Session.create(
+                mode='subscription',
+                customer=customer_id,
+                line_items=[{'price': price_id, 'quantity': 1}],
+                payment_method_collection='always',
+                allow_promotion_codes=True,
+                metadata={
+                    'user_id': str(user['id']),
+                    'plan_code': plan,
+                    'mode': mode,
+                },
+                subscription_data=subscription_data,
+                success_url=f"{config.APP_BASE_URL}/account?checkout=success",
+                cancel_url=f"{config.APP_BASE_URL}/account?checkout=cancel",
+            )
         return redirect(checkout.url, code=303)
     except stripe.error.StripeError as exc:
         import traceback; traceback.print_exc()

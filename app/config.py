@@ -108,5 +108,8 @@ STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 STRIPE_PRICE_MONTHLY = os.getenv('STRIPE_PRICE_MONTHLY', 'price_fake_monthly')
 STRIPE_PRICE_ANNUAL = os.getenv('STRIPE_PRICE_ANNUAL', 'price_fake_annual')
+STRIPE_PRICE_MANAGED_SIMPLE = os.getenv('STRIPE_PRICE_MANAGED_SIMPLE', 'price_fake_managed_simple')
+STRIPE_PRICE_MANAGED_STANDARD = os.getenv('STRIPE_PRICE_MANAGED_STANDARD', 'price_fake_managed_standard')
+STRIPE_PRICE_MANAGED_COMPLEX = os.getenv('STRIPE_PRICE_MANAGED_COMPLEX', 'price_fake_managed_complex')
 
 GCS_UPLOADS_BUCKET = os.getenv('GCS_UPLOADS_BUCKET', 'tiflas-managed-jobs')
