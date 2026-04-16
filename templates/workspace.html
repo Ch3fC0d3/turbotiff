@@ -3991,6 +3991,8 @@
                     right_px: parseInt(document.getElementById(`rightPx${i}`)?.value || '0', 10),
                     left_value: normalizedScale.left,
                     right_value: normalizedScale.right,
+                    scale_type: (document.getElementById(`scaleType${i}`)?.value || 'linear').toLowerCase(),
+                    wrapped: !!document.getElementById(`wrapped${i}`)?.checked,
                     mode: document.getElementById(`mode${i}`)?.value || 'black',
                 });
             }
@@ -8539,6 +8541,71 @@
             showStatus(`No header key scale found for Curve ${index + 1}.`, 'info');
         }
 
+        async function detectScaleForCurve(index) {
+            const leftPxEl = document.getElementById(`leftPx${index}`);
+            const rightPxEl = document.getElementById(`rightPx${index}`);
+            const topPxEl = document.getElementById('topPx');
+            const bottomPxEl = document.getElementById('bottomPx');
+            const hintEl = document.getElementById(`scaleHint${index}`);
+
+            if (!uploadedImage) {
+                showStatus('Upload an image first.', 'error');
+                return;
+            }
+            const leftPx = parseInt(leftPxEl?.value || '0', 10);
+            const rightPx = parseInt(rightPxEl?.value || '0', 10);
+            if (!(rightPx > leftPx)) {
+                showStatus(`Curve ${index + 1}: set valid left/right pixels first.`, 'error');
+                return;
+            }
+            const topPx = parseInt(topPxEl?.value || '0', 10) || 0;
+            const bottomPx = parseInt(bottomPxEl?.value || `${imageHeight}`, 10) || imageHeight;
+            const curveName = document.getElementById(`name${index}`)?.value || document.getElementById(`type${index}`)?.value || '';
+
+            if (hintEl) hintEl.textContent = 'Detecting scale…';
+            try {
+                const resp = await fetch('/api/detect-scale', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        image: uploadedImage,
+                        region: { left_px: leftPx, right_px: rightPx, top_px: topPx, bottom_px: bottomPx },
+                        curve_name: curveName,
+                    }),
+                });
+                const data = await resp.json();
+                if (!data.success) {
+                    if (hintEl) hintEl.textContent = `Detection failed: ${data.error || 'unknown error'}`;
+                    showStatus(`Curve ${index + 1}: ${data.error || 'detection failed'}`, 'error');
+                    return;
+                }
+                const s = data.scale || {};
+                const scaleSel = document.getElementById(`scaleType${index}`);
+                if (scaleSel && s.scale_type) scaleSel.value = s.scale_type;
+                const wrapEl = document.getElementById(`wrapped${index}`);
+                if (wrapEl) wrapEl.checked = !!s.wrapped;
+                if (Number.isFinite(Number(s.left_value))) {
+                    const leftValEl = document.getElementById(`leftVal${index}`);
+                    if (leftValEl) leftValEl.value = s.left_value;
+                }
+                if (Number.isFinite(Number(s.right_value))) {
+                    const rightValEl = document.getElementById(`rightVal${index}`);
+                    if (rightValEl) rightValEl.value = s.right_value;
+                }
+                const confPct = Math.round((Number(s.confidence) || 0) * 100);
+                if (hintEl) {
+                    const reasons = Array.isArray(s.reasons) ? s.reasons.join('; ') : '';
+                    hintEl.textContent = `${s.scale_type || '?'} · ${s.left_value ?? '?'}→${s.right_value ?? '?'}${s.wrapped ? ' · wrapped' : ''} · ${confPct}% confidence${reasons ? ` · ${reasons}` : ''}`;
+                }
+                showStatus(`Curve ${index + 1}: detected ${s.scale_type} scale (${confPct}%).`, 'success');
+                updateCurveScaleHints && updateCurveScaleHints();
+                renderCurveListView && renderCurveListView();
+            } catch (err) {
+                if (hintEl) hintEl.textContent = `Detection error: ${err.message || err}`;
+                showStatus(`Curve ${index + 1}: detection error.`, 'error');
+            }
+        }
+
         function generateCurveInputs(tracks = null) {
             const numCurves = parseInt(document.getElementById('numCurves').value);
             const container = document.getElementById('curvesContainer');
@@ -8680,7 +8747,8 @@
                                     <option value="DT" ${defaultType === 'DT' ? 'selected' : ''}>DT/DTC</option>
                                     <option value="CALI" ${defaultType === 'CALI' ? 'selected' : ''}>CALI</option>
                                     <option value="SP" ${defaultType === 'SP' ? 'selected' : ''}>SP</option>
-                                    <option value="OTHER" ${(defaultType !== 'GR' && defaultType !== 'RHOB' && defaultType !== 'NPHI' && defaultType !== 'DT' && defaultType !== 'CALI' && defaultType !== 'SP') ? 'selected' : ''}>Other</option>
+                                    <option value="RT" ${defaultType === 'RT' ? 'selected' : ''}>RT/ILD/Resistivity</option>
+                                    <option value="OTHER" ${(defaultType !== 'GR' && defaultType !== 'RHOB' && defaultType !== 'NPHI' && defaultType !== 'DT' && defaultType !== 'CALI' && defaultType !== 'SP' && defaultType !== 'RT') ? 'selected' : ''}>Other</option>
                                 </select>
                             </div>
                             <div class="field">
@@ -8722,9 +8790,23 @@
                                 <label for="rightVal${i}">Right value</label>
                                 <input type="number" id="rightVal${i}" placeholder="Right val" step="0.01" value="${rightScaleDefault}">
                             </div>
+                            <div class="field">
+                                <label for="scaleType${i}">Scale</label>
+                                <select id="scaleType${i}" title="Linear, log (e.g. resistivity), or centered (e.g. SP around 0)">
+                                    <option value="linear">Linear</option>
+                                    <option value="log">Log</option>
+                                    <option value="centered">Centered</option>
+                                </select>
+                            </div>
+                            <div class="field">
+                                <label for="wrapped${i}" style="font-size:0.8em;">Wrapped</label>
+                                <input type="checkbox" id="wrapped${i}" title="Curve re-enters opposite side (common on old resistivity)">
+                            </div>
                         </div>
                         <div class="hint-text" id="curveHint${i}" style="margin-top:4px;"></div>
+                        <div id="scaleHint${i}" class="hint-text" style="margin-top:2px;color:#94a3b8;font-size:0.75em;"></div>
                         <button type="button" class="btn" style="padding:3px 7px;font-size:0.78em;margin-top:4px;" onclick="applyHeaderScaleForCurve(${i})">Use header scale</button>
+                        <button type="button" class="btn" style="padding:3px 7px;font-size:0.78em;margin-top:4px;margin-left:6px;" onclick="detectScaleForCurve(${i})">Detect scale</button>
                         <!-- Advanced inputs hidden here — controlled via Step 5 panel -->
                         <div style="display:none;">
                             <input type="number" id="xOffset${i}" value="0">
@@ -8865,10 +8947,28 @@
                 if (typeEl) {
                     typeEl.addEventListener('change', () => {
                         syncCurveTypeToLabels(i, { syncScale: 'auto' });
+                        // Default scale_type from the curve type
+                        const scaleSel = document.getElementById(`scaleType${i}`);
+                        if (scaleSel) {
+                            const t = String(typeEl.value || '').toUpperCase();
+                            if (/^(RT|RES|ILD|ILM|LLD|LLS|MSFL)$/.test(t)) scaleSel.value = 'log';
+                            else if (t === 'SP') scaleSel.value = 'centered';
+                            else scaleSel.value = 'linear';
+                        }
                         updateCurveScaleHints();
                         renderCurveListView();
                     });
                 }
+
+                // Seed scale_type default for this row's initial curve type
+                (function seedScaleType() {
+                    const scaleSel = document.getElementById(`scaleType${i}`);
+                    if (!scaleSel) return;
+                    const t = String((typeEl && typeEl.value) || '').toUpperCase();
+                    if (/^(RT|RES|ILD|ILM|LLD|LLS|MSFL)$/.test(t)) scaleSel.value = 'log';
+                    else if (t === 'SP') scaleSel.value = 'centered';
+                    else scaleSel.value = 'linear';
+                })();
 
                 if (nameEl) {
                     nameEl.addEventListener('input', () => {

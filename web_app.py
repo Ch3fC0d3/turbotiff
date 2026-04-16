@@ -38,6 +38,7 @@ import string
 import sqlite3
 from app import auth_billing
 from app import mailer
+from app import scale_detection
 import app.config as config
 from werkzeug.security import generate_password_hash, check_password_hash
 import stripe
@@ -9571,9 +9572,23 @@ def digitize():
                 if std_x < std_threshold:
                     xs[:] = np.nan
 
-        vals = np.full(xs.shape, np.nan, dtype=np.float32)
-        valid = ~np.isnan(xs)
-        vals[valid] = left_value + (xs[valid] / max(1, width_px-1)) * (right_value - left_value)
+        # Scale-aware pixel → value conversion.
+        # curve config may carry scale_type ('linear' | 'log' | 'centered') and wrapped.
+        # If missing, fall back to the curve-type default (e.g. resistivity → log).
+        scale_type = (c.get('scale_type') or '').lower().strip()
+        wrapped_flag = bool(c.get('wrapped'))
+        if not scale_type:
+            _hint = scale_detection.classify_curve_type(c.get('name') or c.get('type') or '')
+            scale_type = (_hint or {}).get('scale_type', 'linear')
+
+        vals = scale_detection.pixel_to_value(
+            xs=xs,
+            width_px=width_px,
+            left_value=left_value,
+            right_value=right_value,
+            scale_type=scale_type,
+            wrapped=wrapped_flag,
+        )
 
         vals_out = np.where(np.isnan(vals), null_val, vals).astype(np.float32)
         curve_data[name] = {'unit': unit, 'values': vals_out}
@@ -11140,6 +11155,111 @@ def ml_predict_curve_trace():
          })
      except Exception as e:
          return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/detect-scale', methods=['POST'])
+def api_detect_scale():
+    """Detect the track scale (linear/log/centered) + left/right values for a panel.
+
+    Request JSON:
+        image:       data URL (base64-encoded image)
+        region:      {left_px, right_px, top_px, bottom_px}  - panel bounds within image
+        curve_name:  optional hint like "GR" or "ILD"
+        xs_trace:    optional array of already-traced pixel x-positions (for wrap detection)
+
+    Response JSON:
+        success:     bool
+        scale:       DetectedScale dict
+        ocr_labels:  list of raw OCR strings the detector used
+    """
+    data = request.json or {}
+    image_data = data.get('image')
+    region = data.get('region') or {}
+    curve_name = (data.get('curve_name') or '').strip()
+    xs_trace = data.get('xs_trace')
+
+    if not image_data or ',' not in image_data:
+        return jsonify({'success': False, 'error': 'Missing image data'}), 400
+
+    try:
+        img_payload = image_data.split(',', 1)[1]
+        img_bytes = base64.b64decode(img_payload)
+    except Exception:
+        return jsonify({'success': False, 'error': 'Invalid image data'}), 400
+
+    nparr = np.frombuffer(img_bytes, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if img is None:
+        return jsonify({'success': False, 'error': 'Could not decode image'}), 400
+
+    H, W, _ = img.shape
+    try:
+        left = max(0, int(region.get('left_px', 0)))
+        right = min(W, int(region.get('right_px', W)))
+        top = max(0, int(region.get('top_px', 0)))
+        bottom = min(H, int(region.get('bottom_px', H)))
+    except Exception:
+        return jsonify({'success': False, 'error': 'Invalid region'}), 400
+
+    if right <= left or bottom <= top:
+        return jsonify({'success': False, 'error': 'Empty region'}), 400
+
+    panel = img[top:bottom, left:right]
+    panel_h, panel_w, _ = panel.shape
+    if panel_h < 2 or panel_w < 2:
+        return jsonify({'success': False, 'error': 'Panel too small'}), 400
+
+    # OCR: header band (top 20%) + axis band (top 8% + bottom 8%) — cheap and effective
+    header_band = panel[: max(1, panel_h // 5), :]
+    axis_top    = panel[: max(1, panel_h // 12), :]
+    axis_bot    = panel[-max(1, panel_h // 12):, :]
+
+    def _ocr_strings(crop):
+        try:
+            ok, buf = cv2.imencode('.jpg', crop, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            if not ok:
+                return []
+            result = detect_text_vision_api(buf.tobytes()) or {}
+            raw = result.get('raw') or []
+            # `raw` items are typically dicts with 'text' keys; also accept plain strings
+            out = []
+            for item in raw:
+                if isinstance(item, dict):
+                    t = item.get('text') or item.get('description')
+                    if t:
+                        out.append(str(t))
+                elif isinstance(item, str):
+                    out.append(item)
+            return out
+        except Exception as exc:
+            print(f'[detect-scale] OCR failed: {exc}')
+            return []
+
+    header_strings = _ocr_strings(header_band)
+    axis_strings   = _ocr_strings(axis_top) + _ocr_strings(axis_bot)
+
+    header_text = curve_name or ' '.join(header_strings)
+
+    xs_np = None
+    if isinstance(xs_trace, list) and xs_trace:
+        try:
+            xs_np = np.asarray(xs_trace, dtype=np.float32)
+        except Exception:
+            xs_np = None
+
+    detected = scale_detection.detect_scale(
+        header_text=header_text,
+        axis_labels=axis_strings,
+        xs_trace=xs_np,
+        width_px=panel_w,
+    )
+
+    return jsonify({
+        'success': True,
+        'scale': detected.to_dict(),
+        'ocr_header': header_strings,
+        'ocr_axis_labels': axis_strings,
+    })
 
 
 if __name__ == '__main__':
