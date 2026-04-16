@@ -1601,6 +1601,13 @@
                             <div class="form-group">
                                 <label>Depth Configuration</label>
 
+                                <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:4px 0 6px 0;">
+                                    <button type="button" class="btn" style="padding:4px 10px;font-size:0.85em;" onclick="detectDepthAxis()" title="OCR the left depth column to auto-fill Top/Bottom depth values and unit">
+                                        🤖 AI detect depth axis
+                                    </button>
+                                    <span id="detectDepthStatus" class="hint-text" style="font-size:0.8em;color:#94a3b8;"></span>
+                                </div>
+
                                 <div class="depth-row">
                                     <div class="field">
                                         <label for="topDepth">Top depth value</label>
@@ -1831,6 +1838,9 @@
         let headerRegionDrag = false;
         let headerRegion = null; // { left_px, right_px, top_px, bottom_px }
         let headerTracks = null; // array of tracks from header capture
+        // Per-curve snapshot of the last AI scale detection, used to record user corrections.
+        // Shape: { [curveIndex]: { ai_choice, header_ocr, axis_ocr } }
+        let lastScaleDetections = {};
         let headerMetadata = null; // well/log metadata parsed from header OCR
         let headerCaptureEnabled = true;
         let lastDigitizedDepth = null;   // array of depths from last /digitize
@@ -8586,6 +8596,18 @@
                     return;
                 }
                 const s = data.scale || {};
+                // Snapshot for correction recording
+                lastScaleDetections[index] = {
+                    header_ocr: data.ocr_header || [],
+                    axis_ocr: data.ocr_axis_labels || [],
+                    ai_choice: {
+                        mnemonic: s.mnemonic || null,
+                        scale_type: s.scale_type || null,
+                        left: Number.isFinite(Number(s.left_value)) ? Number(s.left_value) : null,
+                        right: Number.isFinite(Number(s.right_value)) ? Number(s.right_value) : null,
+                        wrapped: !!s.wrapped,
+                    },
+                };
                 const scaleSel = document.getElementById(`scaleType${index}`);
                 if (scaleSel && s.scale_type) scaleSel.value = s.scale_type;
                 const wrapEl = document.getElementById(`wrapped${index}`);
@@ -8601,7 +8623,8 @@
                 const confPct = Math.round((Number(s.confidence) || 0) * 100);
                 if (hintEl) {
                     const reasons = Array.isArray(s.reasons) ? s.reasons.join('; ') : '';
-                    hintEl.textContent = `${s.scale_type || '?'} · ${s.left_value ?? '?'}→${s.right_value ?? '?'}${s.wrapped ? ' · wrapped' : ''} · ${confPct}% confidence${reasons ? ` · ${reasons}` : ''}`;
+                    const tag = data.llm_used ? ' · 🤖 AI' : (data.memory_used ? ' · 🧠 memory' : '');
+                    hintEl.textContent = `${s.scale_type || '?'} · ${s.left_value ?? '?'}→${s.right_value ?? '?'}${s.wrapped ? ' · wrapped' : ''} · ${confPct}% confidence${tag}${reasons ? ` · ${reasons}` : ''}`;
                 }
                 showStatus(`Curve ${index + 1}: detected ${s.scale_type} scale (${confPct}%).`, 'success');
                 updateCurveScaleHints && updateCurveScaleHints();
@@ -8609,6 +8632,149 @@
             } catch (err) {
                 if (hintEl) hintEl.textContent = `Detection error: ${err.message || err}`;
                 showStatus(`Curve ${index + 1}: detection error.`, 'error');
+            }
+        }
+
+        // Debounced per-curve correction recorder.
+        // Fires ~1.5s after the user stops editing scale fields for that curve.
+        const _correctionTimers = {};
+        function scheduleCorrectionRecording(index) {
+            if (!lastScaleDetections[index]) return; // only record corrections to AI detections
+            if (_correctionTimers[index]) clearTimeout(_correctionTimers[index]);
+            _correctionTimers[index] = setTimeout(() => recordScaleCorrection(index), 1500);
+        }
+
+        async function recordScaleCorrection(index) {
+            const snap = lastScaleDetections[index];
+            if (!snap) return;
+
+            const typeSel = document.getElementById(`type${index}`);
+            const scaleSel = document.getElementById(`scaleType${index}`);
+            const leftValEl = document.getElementById(`leftVal${index}`);
+            const rightValEl = document.getElementById(`rightVal${index}`);
+            const wrapEl = document.getElementById(`wrapped${index}`);
+
+            const user = {
+                mnemonic: typeSel ? (typeSel.value || null) : null,
+                scale_type: scaleSel ? (scaleSel.value || null) : null,
+                left: leftValEl && leftValEl.value !== '' ? parseFloat(leftValEl.value) : null,
+                right: rightValEl && rightValEl.value !== '' ? parseFloat(rightValEl.value) : null,
+                wrapped: !!(wrapEl && wrapEl.checked),
+            };
+            const ai = snap.ai_choice || {};
+
+            // Only record if user actually changed something substantive
+            const changed = (
+                (ai.mnemonic || null) !== user.mnemonic ||
+                (ai.scale_type || null) !== user.scale_type ||
+                (Number.isFinite(ai.left) ? ai.left : null) !== (Number.isFinite(user.left) ? user.left : null) ||
+                (Number.isFinite(ai.right) ? ai.right : null) !== (Number.isFinite(user.right) ? user.right : null) ||
+                !!ai.wrapped !== !!user.wrapped
+            );
+            if (!changed) return;
+
+            try {
+                await fetch('/api/record-correction', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        header_ocr: snap.header_ocr || [],
+                        axis_ocr: snap.axis_ocr || [],
+                        ai_choice: ai,
+                        user_choice: user,
+                    }),
+                });
+            } catch (err) {
+                console.warn('record-correction failed:', err);
+            }
+        }
+
+        async function detectDepthAxis() {
+            const statusEl = document.getElementById('detectDepthStatus');
+            if (!uploadedImage) {
+                showStatus('Upload an image first.', 'error');
+                return;
+            }
+
+            // Depth column is conventionally on the left edge. Use the first ~8% of
+            // panel width, or the panel's left bound if a panel was selected.
+            let leftPx = 0;
+            let rightPx = Math.max(1, Math.floor(imageWidth * 0.08));
+            let topPx = 0;
+            let bottomPx = Math.max(1, imageHeight - 1);
+
+            if (primaryRegion && Number.isFinite(Number(primaryRegion.left_px))) {
+                leftPx = Math.max(0, Number(primaryRegion.left_px) - Math.floor(imageWidth * 0.08));
+                rightPx = Math.max(leftPx + 10, Number(primaryRegion.left_px));
+                if (Number.isFinite(Number(primaryRegion.top_px))) topPx = Number(primaryRegion.top_px);
+                if (Number.isFinite(Number(primaryRegion.bottom_px))) bottomPx = Number(primaryRegion.bottom_px);
+            }
+
+            const unitHint = document.getElementById('depthUnit')?.value || null;
+
+            if (statusEl) statusEl.textContent = 'Detecting depth axis…';
+            try {
+                const resp = await fetch('/api/detect-depth-axis', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        image: uploadedImage,
+                        region: { left_px: leftPx, right_px: rightPx, top_px: topPx, bottom_px: bottomPx },
+                        unit_hint: unitHint,
+                    }),
+                });
+                const data = await resp.json();
+                if (!data.success) {
+                    if (statusEl) statusEl.textContent = `Failed: ${data.error || 'unknown'}`;
+                    showStatus(`Depth detection failed: ${data.error || 'unknown'}`, 'error');
+                    return;
+                }
+                const a = data.axis || {};
+                const nLabels = Array.isArray(a.labels) ? a.labels.length : 0;
+                const conf = Number(a.confidence) || 0;
+                const confPct = Math.round(conf * 100);
+
+                if (nLabels < 2 || a.top_depth == null || a.bottom_depth == null) {
+                    if (statusEl) {
+                        statusEl.textContent = `Only found ${nLabels} depth label${nLabels === 1 ? '' : 's'}; try widening the left strip.`;
+                        statusEl.style.color = '#fbbf24';
+                    }
+                    showStatus('Could not fit depth axis — too few labels detected.', 'info');
+                    return;
+                }
+
+                // Fill the inputs
+                const topDepthEl = document.getElementById('topDepth');
+                const bottomDepthEl = document.getElementById('bottomDepth');
+                const topPxEl = document.getElementById('topPx');
+                const bottomPxEl = document.getElementById('bottomPx');
+                const unitSel = document.getElementById('depthUnit');
+
+                if (topDepthEl) topDepthEl.value = Number(a.top_depth).toFixed(1);
+                if (bottomDepthEl) bottomDepthEl.value = Number(a.bottom_depth).toFixed(1);
+                if (topPxEl && Number.isFinite(Number(a.top_px_image))) topPxEl.value = a.top_px_image;
+                if (bottomPxEl && Number.isFinite(Number(a.bottom_px_image))) bottomPxEl.value = a.bottom_px_image;
+                if (unitSel && a.unit) {
+                    const target = String(a.unit).toUpperCase();
+                    const exists = Array.from(unitSel.options).some(o => o.value === target);
+                    if (exists) unitSel.value = target;
+                }
+
+                const reasons = Array.isArray(a.reasons) ? a.reasons.join('; ') : '';
+                const linearBadge = a.linear ? '✓ linear' : '⚠ non-linear';
+                if (statusEl) {
+                    statusEl.textContent = `${a.top_depth.toFixed(0)} → ${a.bottom_depth.toFixed(0)} ${a.unit || ''} · ${nLabels} labels · R²=${Number(a.r_squared).toFixed(3)} · ${linearBadge} · ${confPct}%${reasons ? ` · ${reasons}` : ''}`;
+                    statusEl.style.color = (!a.linear || conf < 0.6) ? '#fbbf24' : '#86efac';
+                }
+                showStatus(`Depth axis detected: ${a.top_depth.toFixed(0)}–${a.bottom_depth.toFixed(0)} ${a.unit}`, 'success');
+
+                // Trigger overlays / listeners that already watch these inputs
+                [topDepthEl, bottomDepthEl, topPxEl, bottomPxEl].forEach(el => {
+                    if (el) el.dispatchEvent(new Event('change', { bubbles: true }));
+                });
+            } catch (err) {
+                if (statusEl) statusEl.textContent = `Error: ${err.message || err}`;
+                showStatus(`Depth detection error: ${err.message || err}`, 'error');
             }
         }
 
@@ -8661,6 +8827,7 @@
                 const results = Array.isArray(data.results) ? data.results : [];
                 let lowConfidence = 0;
                 let llmUsed = 0;
+                let memoryUsed = 0;
                 for (const r of results) {
                     const i = r.id;
                     const hintEl = document.getElementById(`scaleHint${i}`);
@@ -8669,6 +8836,18 @@
                         continue;
                     }
                     const s = r.scale || {};
+                    // Snapshot for later user-correction recording
+                    lastScaleDetections[i] = {
+                        header_ocr: r.ocr_header || [],
+                        axis_ocr: r.ocr_axis_labels || [],
+                        ai_choice: {
+                            mnemonic: s.mnemonic || null,
+                            scale_type: s.scale_type || null,
+                            left: Number.isFinite(Number(s.left_value)) ? Number(s.left_value) : null,
+                            right: Number.isFinite(Number(s.right_value)) ? Number(s.right_value) : null,
+                            wrapped: !!s.wrapped,
+                        },
+                    };
                     const scaleSel = document.getElementById(`scaleType${i}`);
                     if (scaleSel && s.scale_type) scaleSel.value = s.scale_type;
                     const wrapEl = document.getElementById(`wrapped${i}`);
@@ -8696,9 +8875,10 @@
                     const confPct = Math.round(conf * 100);
                     if (conf < 0.6) lowConfidence++;
                     if (r.llm_used) llmUsed++;
+                    if (r.memory_used) memoryUsed++;
 
                     const badge = conf < 0.6 ? '⚠ REVIEW · ' : '';
-                    const llmTag = r.llm_used ? ' · 🤖 AI' : '';
+                    const llmTag = r.llm_used ? ' · 🤖 AI' : (r.memory_used ? ' · 🧠 memory' : '');
                     const reasons = Array.isArray(s.reasons) ? s.reasons.join('; ') : '';
                     if (hintEl) {
                         hintEl.textContent = `${badge}${s.scale_type || '?'} · ${s.left_value ?? '?'}→${s.right_value ?? '?'}${s.wrapped ? ' · wrapped' : ''} · ${confPct}%${llmTag}${reasons ? ` · ${reasons}` : ''}`;
@@ -8706,7 +8886,8 @@
                     }
                 }
                 if (statusEl) {
-                    statusEl.textContent = `Detected ${results.length} curves · ${llmUsed} used AI · ${lowConfidence} need review`;
+                    const memTag = memoryUsed > 0 ? ` · ${memoryUsed} from 🧠 memory` : '';
+                    statusEl.textContent = `Detected ${results.length} curves · ${llmUsed} used AI${memTag} · ${lowConfidence} need review`;
                     statusEl.style.color = lowConfidence > 0 ? '#fbbf24' : '#86efac';
                 }
                 showStatus(`Detected ${results.length} scales (${lowConfidence} need review).`, lowConfidence > 0 ? 'info' : 'success');
@@ -9069,8 +9250,17 @@
                         }
                         updateCurveScaleHints();
                         renderCurveListView();
+                        scheduleCorrectionRecording(i);
                     });
                 }
+
+                // Learn-from-corrections: capture user edits to scale fields after AI detection
+                ['scaleType', 'leftVal', 'rightVal', 'wrapped'].forEach(prefix => {
+                    const el = document.getElementById(`${prefix}${i}`);
+                    if (!el) return;
+                    const evt = (el.tagName === 'SELECT' || el.type === 'checkbox') ? 'change' : 'input';
+                    el.addEventListener(evt, () => scheduleCorrectionRecording(i));
+                });
 
                 // Seed scale_type default for this row's initial curve type
                 (function seedScaleType() {

@@ -308,6 +308,189 @@ class DetectedScale:
         return d
 
 
+# ────────────────────────────────────────────────────────────────────
+# Depth-axis detection
+# ────────────────────────────────────────────────────────────────────
+
+@dataclass
+class DepthLabel:
+    value: float
+    y_px: int
+    raw_text: str
+
+
+@dataclass
+class DetectedDepthAxis:
+    top_depth: Optional[float]
+    bottom_depth: Optional[float]
+    top_px: Optional[int]
+    bottom_px: Optional[int]
+    unit: Optional[str]            # "FT" | "M" | None
+    linear: bool
+    r_squared: float               # goodness of linear fit (0..1)
+    labels: List[dict]             # list of {value, y_px, raw_text} with fit errors
+    confidence: float
+    reasons: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "top_depth":    self.top_depth,
+            "bottom_depth": self.bottom_depth,
+            "top_px":       self.top_px,
+            "bottom_px":    self.bottom_px,
+            "unit":         self.unit,
+            "linear":       self.linear,
+            "r_squared":    self.r_squared,
+            "labels":       self.labels,
+            "confidence":   self.confidence,
+            "reasons":      self.reasons,
+        }
+
+
+def detect_depth_axis(
+    ocr_numbers: Sequence[dict],
+    panel_height_px: int,
+    unit_hint: Optional[str] = None,
+) -> DetectedDepthAxis:
+    """Fit a depth axis given OCR-extracted numeric entries from the depth column.
+
+    Args:
+        ocr_numbers: list of dicts, each with keys 'value' (float) and 'y' (int pixel row)
+        panel_height_px: total height of the panel in pixels
+        unit_hint: optional 'FT' or 'M' hint; else inferred from label spacing
+
+    Returns DetectedDepthAxis with linear-fit quality score and optional unit detection.
+    """
+    reasons: List[str] = []
+
+    # Keep only plausible depth values (0 < v < 50000) and distinct y rows
+    cleaned: List[DepthLabel] = []
+    seen_y = set()
+    for entry in ocr_numbers or []:
+        try:
+            v = float(entry.get("value"))
+            y = int(entry.get("y"))
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(v) or v <= 0 or v > 50000:
+            continue
+        if y in seen_y:
+            continue
+        seen_y.add(y)
+        cleaned.append(DepthLabel(value=v, y_px=y, raw_text=str(entry.get("text", v))))
+
+    if len(cleaned) < 2:
+        return DetectedDepthAxis(
+            top_depth=None, bottom_depth=None, top_px=None, bottom_px=None,
+            unit=unit_hint, linear=False, r_squared=0.0, labels=[],
+            confidence=0.0, reasons=["fewer than 2 depth labels found"],
+        )
+
+    # Sort by pixel row (top to bottom)
+    cleaned.sort(key=lambda e: e.y_px)
+
+    # Robust linear fit: y_px = a * value + b  →  value = (y - b) / a
+    ys = np.array([e.y_px for e in cleaned], dtype=np.float64)
+    vs = np.array([e.value for e in cleaned], dtype=np.float64)
+
+    # If values decrease as y increases (unusual orientation), the math still works
+    # because numpy.polyfit handles negative slope.
+    try:
+        coeffs = np.polyfit(vs, ys, 1)  # y = slope*value + intercept
+        slope, intercept = float(coeffs[0]), float(coeffs[1])
+    except Exception:
+        return DetectedDepthAxis(
+            top_depth=None, bottom_depth=None, top_px=None, bottom_px=None,
+            unit=unit_hint, linear=False, r_squared=0.0, labels=[],
+            confidence=0.0, reasons=["polyfit failed"],
+        )
+
+    # Compute R² of the linear fit
+    y_pred = slope * vs + intercept
+    ss_res = float(np.sum((ys - y_pred) ** 2))
+    ss_tot = float(np.sum((ys - np.mean(ys)) ** 2))
+    r2 = 1.0 - (ss_res / ss_tot) if ss_tot > 1e-9 else 0.0
+    r2 = float(max(0.0, min(1.0, r2)))
+
+    linear = r2 >= 0.97
+    if not linear:
+        reasons.append(f"R²={r2:.3f} below 0.97 — depth scale may be non-linear")
+    else:
+        reasons.append(f"linear fit R²={r2:.3f}")
+
+    # Extrapolate to top / bottom of panel
+    if abs(slope) < 1e-9:
+        return DetectedDepthAxis(
+            top_depth=None, bottom_depth=None, top_px=None, bottom_px=None,
+            unit=unit_hint, linear=False, r_squared=r2, labels=[],
+            confidence=0.0, reasons=reasons + ["degenerate slope"],
+        )
+
+    # Solve for depth at y=0 (top) and y=panel_height_px-1 (bottom)
+    top_depth = (0 - intercept) / slope
+    bottom_depth = (panel_height_px - 1 - intercept) / slope
+
+    # Infer unit from label spacing if no hint
+    unit = unit_hint
+    if not unit:
+        # Compute typical spacing between consecutive labels in depth units
+        sorted_vs = sorted(set(v for v in vs if v > 0))
+        if len(sorted_vs) >= 2:
+            spacings = [b - a for a, b in zip(sorted_vs, sorted_vs[1:]) if b > a]
+            if spacings:
+                med_spacing = float(np.median(spacings))
+                # Typical well-log label spacings:
+                #   Feet: 10, 25, 50, 100, 250 ft
+                #   Meters: 5, 10, 25, 50 m
+                # If values are in multiples of 10 and go above ~500, more likely feet
+                max_v = max(sorted_vs)
+                if max_v > 3000:
+                    unit = "FT"
+                    reasons.append("unit=FT (max value > 3000)")
+                elif med_spacing < 10 and max_v < 500:
+                    unit = "M"
+                    reasons.append("unit=M (small spacing, small max)")
+                else:
+                    unit = "FT"  # default for oilfield logs
+                    reasons.append(f"unit=FT (default; max={max_v:.0f}, spacing={med_spacing:.1f})")
+
+    # Build label residuals for UI display
+    label_dicts = []
+    for lbl in cleaned:
+        predicted_y = slope * lbl.value + intercept
+        residual = float(lbl.y_px - predicted_y)
+        label_dicts.append({
+            "value":    lbl.value,
+            "y_px":     lbl.y_px,
+            "raw_text": lbl.raw_text,
+            "residual_px": residual,
+            "ok": abs(residual) < max(5.0, 0.01 * panel_height_px),
+        })
+
+    # Confidence: blend of R² and label count
+    n_factor = min(1.0, len(cleaned) / 5.0)
+    confidence = float(0.5 * r2 + 0.5 * n_factor)
+    if not linear:
+        confidence *= 0.6
+
+    return DetectedDepthAxis(
+        top_depth=float(top_depth),
+        bottom_depth=float(bottom_depth),
+        top_px=0,
+        bottom_px=int(panel_height_px - 1),
+        unit=unit,
+        linear=linear,
+        r_squared=r2,
+        labels=label_dicts,
+        confidence=confidence,
+        reasons=reasons,
+    )
+
+
+# ────────────────────────────────────────────────────────────────────
+# Combined detector
+# ────────────────────────────────────────────────────────────────────
+
 def detect_scale(
     header_text: Optional[str],
     axis_labels: Sequence[str],

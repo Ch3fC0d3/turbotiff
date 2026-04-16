@@ -39,6 +39,7 @@ import sqlite3
 from app import auth_billing
 from app import mailer
 from app import scale_detection
+from app import corrections_store
 import app.config as config
 from werkzeug.security import generate_password_hash, check_password_hash
 import stripe
@@ -11195,6 +11196,76 @@ def _ocr_strings(crop):
         return []
 
 
+def _document_ocr_numbers(crop_bgr):
+    """Run document-level OCR (better for dense text + rotation) and return numeric entries.
+
+    Prefers Google Vision's DOCUMENT_TEXT_DETECTION when available; falls back to the
+    generic text detector (which is what our EasyOCR fallback implements anyway).
+
+    Returns a list of dicts { value: float, text: str, x: int, y: int }.
+    """
+    try:
+        ok, buf = cv2.imencode('.jpg', crop_bgr, [cv2.IMWRITE_JPEG_QUALITY, 92])
+        if not ok:
+            return []
+        img_bytes = buf.tobytes()
+    except Exception:
+        return []
+
+    numeric_entries = []
+
+    if VISION_API_AVAILABLE and vision_client is not None:
+        try:
+            image = vision.Image(content=img_bytes)
+            response = vision_client.document_text_detection(image=image)
+            # Iterate word-level blocks, which preserves position accurately
+            if response.full_text_annotation and response.full_text_annotation.pages:
+                for page in response.full_text_annotation.pages:
+                    for block in page.blocks:
+                        for para in block.paragraphs:
+                            for word in para.words:
+                                text = ''.join(sym.text for sym in word.symbols)
+                                vtx = word.bounding_box.vertices
+                                if not vtx:
+                                    continue
+                                x = int(vtx[0].x)
+                                y = int(vtx[0].y)
+                                # middle-y of the word is more representative
+                                ys = [v.y for v in vtx]
+                                y_mid = int(sum(ys) / len(ys))
+                                for tok in re.findall(r'-?\d+(?:\.\d+)?', text):
+                                    try:
+                                        numeric_entries.append({
+                                            'value': float(tok),
+                                            'text': text,
+                                            'x': x,
+                                            'y': y_mid,
+                                        })
+                                    except ValueError:
+                                        continue
+                return numeric_entries
+        except Exception as exc:
+            print(f'[document-ocr] Vision API error, falling back: {exc}')
+
+    # Fallback: reuse the generic detector and synthesize numeric_entries from 'numbers'
+    try:
+        result = detect_text_vision_api(img_bytes) or {}
+        for n in result.get('numbers') or []:
+            try:
+                numeric_entries.append({
+                    'value': float(n.get('value')),
+                    'text':  str(n.get('text', n.get('value'))),
+                    'x':     int(n.get('x', 0)),
+                    'y':     int(n.get('y', 0)),
+                })
+            except (TypeError, ValueError):
+                continue
+    except Exception as exc:
+        print(f'[document-ocr] fallback failed: {exc}')
+
+    return numeric_entries
+
+
 def _llm_identify_curve(header_strings, axis_strings, existing_guess=None):
     """When local pattern matching fails, ask the LLM to pick a canonical mnemonic.
 
@@ -11305,8 +11376,43 @@ def _detect_scale_for_region(img, region, curve_name='', xs_trace=None, use_llm=
     )
     scale_dict = detected.to_dict()
     llm_used = False
+    memory_used = False
 
-    # LLM fallback when local detection is unsure
+    # Prior-correction memory: check if we've seen a similar OCR pattern before.
+    # Stored user choices beat generic rules when available.
+    try:
+        uid = session.get('user_id') if 'session' in globals() else None
+    except Exception:
+        uid = None
+    try:
+        prior = corrections_store.best_suggestion(
+            header_ocr=header_strings,
+            axis_ocr=axis_strings,
+            user_id=uid,
+        )
+    except Exception as exc:
+        print(f'[detect-scale] corrections lookup failed: {exc}')
+        prior = None
+
+    if prior and prior.get('confidence', 0.0) > scale_dict.get('confidence', 0.0):
+        uc = prior['user_choice']
+        memory_used = True
+        if uc.get('mnemonic'):
+            scale_dict['mnemonic'] = uc['mnemonic']
+        if uc.get('scale_type'):
+            scale_dict['scale_type'] = uc['scale_type']
+        if uc.get('left') is not None:
+            scale_dict['left_value'] = uc['left']
+        if uc.get('right') is not None:
+            scale_dict['right_value'] = uc['right']
+        if 'wrapped' in uc:
+            scale_dict['wrapped'] = bool(uc['wrapped'])
+        scale_dict['confidence'] = max(scale_dict.get('confidence', 0.0), prior['confidence'])
+        scale_dict.setdefault('reasons', []).append(
+            f"Applied prior correction (similarity={prior['similarity']:.2f}, {prior['agreeing_count']} matches)"
+        )
+
+    # LLM fallback when local detection AND memory lookup are still unsure
     if use_llm and scale_dict.get('confidence', 0.0) < 0.6:
         llm = _llm_identify_curve(header_strings, axis_strings, existing_guess=scale_dict)
         if llm:
@@ -11329,6 +11435,7 @@ def _detect_scale_for_region(img, region, curve_name='', xs_trace=None, use_llm=
         'ocr_header': header_strings,
         'ocr_axis_labels': axis_strings,
         'llm_used': llm_used,
+        'memory_used': memory_used,
     }
 
 
@@ -11355,7 +11462,71 @@ def api_detect_scale():
         'ocr_header': res['ocr_header'],
         'ocr_axis_labels': res['ocr_axis_labels'],
         'llm_used': res['llm_used'],
+        'memory_used': res['memory_used'],
     })
+
+
+@app.route('/api/detect-depth-axis', methods=['POST'])
+def api_detect_depth_axis():
+    """Detect the depth axis from a vertical strip of the log image.
+
+    Request JSON:
+        image:       data URL
+        region:      { left_px, right_px, top_px, bottom_px } — the depth column strip
+        unit_hint:   optional 'FT' or 'M'
+
+    Response:
+        success:   bool
+        axis:      DetectedDepthAxis dict (includes residuals for visual overlay)
+    """
+    data = request.json or {}
+    img, err = _decode_image_data_url(data.get('image'))
+    if err:
+        return jsonify({'success': False, 'error': err}), 400
+
+    region = data.get('region') or {}
+    unit_hint = (data.get('unit_hint') or '').upper().strip() or None
+    if unit_hint and unit_hint not in ('FT', 'M'):
+        unit_hint = None
+
+    H, W, _ = img.shape
+    try:
+        left = max(0, int(region.get('left_px', 0)))
+        right = min(W, int(region.get('right_px', W)))
+        top = max(0, int(region.get('top_px', 0)))
+        bottom = min(H, int(region.get('bottom_px', H)))
+    except Exception:
+        return jsonify({'success': False, 'error': 'Invalid region'}), 400
+    if right <= left or bottom <= top:
+        return jsonify({'success': False, 'error': 'Empty region'}), 400
+
+    strip = img[top:bottom, left:right]
+    strip_h, strip_w, _ = strip.shape
+    if strip_h < 10 or strip_w < 5:
+        return jsonify({'success': False, 'error': 'Strip too small'}), 400
+
+    # Document-level OCR is much better for sparse vertical number columns
+    numbers = _document_ocr_numbers(strip)
+
+    # Y-coords returned are relative to the strip; add `top` to map back to full image
+    # but for the axis fit we want intra-strip coords, which is correct.
+    axis = scale_detection.detect_depth_axis(
+        ocr_numbers=numbers,
+        panel_height_px=strip_h,
+        unit_hint=unit_hint,
+    )
+
+    axis_dict = axis.to_dict()
+    # Re-express top/bottom pixels in FULL-image coords so the frontend can fill topPx/bottomPx directly
+    if axis_dict.get('top_px') is not None:
+        axis_dict['top_px_image'] = int(top + axis_dict['top_px'])
+    if axis_dict.get('bottom_px') is not None:
+        axis_dict['bottom_px_image'] = int(top + axis_dict['bottom_px'])
+    # Also shift label y coords back to full-image space
+    for lbl in axis_dict.get('labels', []):
+        lbl['y_px_image'] = int(top + lbl['y_px'])
+
+    return jsonify({'success': True, 'axis': axis_dict})
 
 
 @app.route('/api/detect-all-scales', methods=['POST'])
@@ -11403,9 +11574,73 @@ def api_detect_all_scales():
             entry['ocr_header'] = res['ocr_header']
             entry['ocr_axis_labels'] = res['ocr_axis_labels']
             entry['llm_used'] = res['llm_used']
+            entry['memory_used'] = res.get('memory_used', False)
         results.append(entry)
 
     return jsonify({'success': True, 'results': results})
+
+
+@app.route('/api/record-correction', methods=['POST'])
+def api_record_correction():
+    """Record a user correction of a previously-detected scale.
+
+    Request JSON:
+        header_ocr:  list[str] — the OCR strings the detector saw in the header
+        axis_ocr:    list[str] — axis band OCR strings
+        ai_choice:   {mnemonic, scale_type, left, right, wrapped}
+        user_choice: same shape — what the user chose/edited to
+    """
+    data = request.json or {}
+    header_ocr = data.get('header_ocr') or []
+    axis_ocr = data.get('axis_ocr') or []
+    ai_choice = data.get('ai_choice') or {}
+    user_choice = data.get('user_choice') or {}
+
+    if not isinstance(header_ocr, list) or not isinstance(axis_ocr, list):
+        return jsonify({'success': False, 'error': 'header_ocr/axis_ocr must be arrays'}), 400
+    if not isinstance(user_choice, dict) or not user_choice:
+        return jsonify({'success': False, 'error': 'user_choice required'}), 400
+
+    try:
+        uid = session.get('user_id')
+    except Exception:
+        uid = None
+
+    try:
+        correction_id = corrections_store.record_correction(
+            corrections_store.CorrectionEntry(
+                header_ocr=header_ocr,
+                axis_ocr=axis_ocr,
+                ai_choice=ai_choice,
+                user_choice=user_choice,
+                user_id=uid,
+            )
+        )
+    except Exception as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+    return jsonify({
+        'success': True,
+        'id': correction_id,
+        'total_corrections': corrections_store.count_corrections(),
+    })
+
+
+@app.route('/api/corrections-stats', methods=['GET'])
+def api_corrections_stats():
+    """Return count of stored corrections (useful for a 'trained on N examples' UI badge)."""
+    try:
+        uid = session.get('user_id')
+    except Exception:
+        uid = None
+    try:
+        return jsonify({
+            'success': True,
+            'user_total': corrections_store.count_corrections(user_id=uid) if uid else 0,
+            'global_total': corrections_store.count_corrections(),
+        })
+    except Exception as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 500
 
 
 if __name__ == '__main__':
