@@ -11466,18 +11466,84 @@ def api_detect_scale():
     })
 
 
+def _cluster_numbers_into_columns(numbers, bandwidth_px: int = 60):
+    """Group OCR numeric entries by x-position into vertical "columns".
+
+    Args:
+        numbers: list of {value, x, y, text} dicts
+        bandwidth_px: merge-distance in x; entries within this are one column
+
+    Returns:
+        list of columns, each a dict { x_center, entries: [...] }, sorted by x_center.
+    """
+    if not numbers:
+        return []
+    # Sort by x so we can do a simple linear-merge pass
+    xs_sorted = sorted(numbers, key=lambda n: int(n.get('x', 0)))
+    columns = []
+    for n in xs_sorted:
+        x = int(n.get('x', 0))
+        if columns and x - columns[-1]['x_center'] <= bandwidth_px:
+            col = columns[-1]
+            col['entries'].append(n)
+            # update center as running mean for stability
+            xs = [int(e.get('x', 0)) for e in col['entries']]
+            col['x_center'] = sum(xs) // len(xs)
+        else:
+            columns.append({'x_center': x, 'entries': [n]})
+    return columns
+
+
+def _pick_best_depth_column(columns, panel_height_px, unit_hint):
+    """Run detect_depth_axis on each column and pick the best fit.
+
+    Scoring favors: many labels, high R², depth values in plausible range.
+    Returns (best_axis, best_column_xcenter) or (None, None) if nothing plausible.
+    """
+    best = None
+    best_score = -1.0
+    best_x = None
+    for col in columns:
+        entries = col['entries']
+        if len(entries) < 2:
+            continue
+        # Skip columns where all values are tiny (likely scale labels like 0.2/20)
+        vals = [float(e.get('value', 0)) for e in entries]
+        if max(vals) < 50:
+            continue
+        axis = scale_detection.detect_depth_axis(
+            ocr_numbers=entries,
+            panel_height_px=panel_height_px,
+            unit_hint=unit_hint,
+        )
+        n_labels = len(axis.labels)
+        if n_labels < 2 or axis.top_depth is None:
+            continue
+        # Score: R² weighted by number of labels (log-scaled) and depth plausibility
+        r2 = max(0.0, axis.r_squared)
+        depth_span = abs(axis.bottom_depth - axis.top_depth) if axis.bottom_depth else 0
+        # Penalize tiny spans (could be scale labels) or absurdly large
+        span_factor = 1.0 if 50 < depth_span < 20000 else 0.3
+        score = r2 * math.log(n_labels + 1) * span_factor
+        if score > best_score:
+            best_score = score
+            best = axis
+            best_x = col['x_center']
+    return best, best_x
+
+
 @app.route('/api/detect-depth-axis', methods=['POST'])
 def api_detect_depth_axis():
-    """Detect the depth axis from a vertical strip of the log image.
+    """Detect the depth axis by auto-finding the depth column anywhere in the image.
 
     Request JSON:
         image:       data URL
-        region:      { left_px, right_px, top_px, bottom_px } — the depth column strip
+        region:      optional { left_px, right_px, top_px, bottom_px } to constrain search
         unit_hint:   optional 'FT' or 'M'
 
     Response:
         success:   bool
-        axis:      DetectedDepthAxis dict (includes residuals for visual overlay)
+        axis:      DetectedDepthAxis dict with extra x_center + image-space coords
     """
     data = request.json or {}
     img, err = _decode_image_data_url(data.get('image'))
@@ -11491,38 +11557,56 @@ def api_detect_depth_axis():
 
     H, W, _ = img.shape
     try:
-        left = max(0, int(region.get('left_px', 0)))
-        right = min(W, int(region.get('right_px', W)))
-        top = max(0, int(region.get('top_px', 0)))
-        bottom = min(H, int(region.get('bottom_px', H)))
+        left = max(0, int(region.get('left_px', 0))) if region.get('left_px') is not None else 0
+        right = min(W, int(region.get('right_px', W))) if region.get('right_px') is not None else W
+        top = max(0, int(region.get('top_px', 0))) if region.get('top_px') is not None else 0
+        bottom = min(H, int(region.get('bottom_px', H))) if region.get('bottom_px') is not None else H
     except Exception:
         return jsonify({'success': False, 'error': 'Invalid region'}), 400
     if right <= left or bottom <= top:
         return jsonify({'success': False, 'error': 'Empty region'}), 400
 
-    strip = img[top:bottom, left:right]
-    strip_h, strip_w, _ = strip.shape
-    if strip_h < 10 or strip_w < 5:
-        return jsonify({'success': False, 'error': 'Strip too small'}), 400
+    crop = img[top:bottom, left:right]
+    crop_h, crop_w, _ = crop.shape
+    if crop_h < 10 or crop_w < 5:
+        return jsonify({'success': False, 'error': 'Region too small'}), 400
 
-    # Document-level OCR is much better for sparse vertical number columns
-    numbers = _document_ocr_numbers(strip)
+    # OCR the full (optionally constrained) panel, then auto-find the depth column
+    numbers = _document_ocr_numbers(crop)
+    if not numbers:
+        return jsonify({
+            'success': True,
+            'axis': {'top_depth': None, 'bottom_depth': None, 'labels': [],
+                     'confidence': 0.0, 'reasons': ['no numbers detected in region']},
+        })
 
-    # Y-coords returned are relative to the strip; add `top` to map back to full image
-    # but for the axis fit we want intra-strip coords, which is correct.
-    axis = scale_detection.detect_depth_axis(
-        ocr_numbers=numbers,
-        panel_height_px=strip_h,
-        unit_hint=unit_hint,
-    )
+    columns = _cluster_numbers_into_columns(numbers, bandwidth_px=max(40, crop_w // 30))
+    axis, col_x_center = _pick_best_depth_column(columns, panel_height_px=crop_h, unit_hint=unit_hint)
+
+    if axis is None:
+        # Return diagnostic info to help the user adjust
+        col_summary = [
+            {'x_center': c['x_center'], 'count': len(c['entries']),
+             'sample_values': sorted({float(e['value']) for e in c['entries']})[:6]}
+            for c in columns
+        ]
+        return jsonify({
+            'success': True,
+            'axis': {
+                'top_depth': None, 'bottom_depth': None, 'labels': [],
+                'confidence': 0.0,
+                'reasons': [f'scanned {len(numbers)} numbers in {len(columns)} columns; none yielded a linear depth fit'],
+                'candidate_columns': col_summary,
+            },
+        })
 
     axis_dict = axis.to_dict()
-    # Re-express top/bottom pixels in FULL-image coords so the frontend can fill topPx/bottomPx directly
+    axis_dict['x_center'] = int(left + (col_x_center or 0))
+    # Map y coords back to full-image space for the frontend
     if axis_dict.get('top_px') is not None:
         axis_dict['top_px_image'] = int(top + axis_dict['top_px'])
     if axis_dict.get('bottom_px') is not None:
         axis_dict['bottom_px_image'] = int(top + axis_dict['bottom_px'])
-    # Also shift label y coords back to full-image space
     for lbl in axis_dict.get('labels', []):
         lbl['y_px_image'] = int(top + lbl['y_px'])
 

@@ -8696,16 +8696,16 @@
                 return;
             }
 
-            // Depth column is conventionally on the left edge. Use the first ~8% of
-            // panel width, or the panel's left bound if a panel was selected.
+            // Backend auto-finds the depth column anywhere in the region, so we
+            // search the whole panel (or whole image) rather than guessing a strip.
             let leftPx = 0;
-            let rightPx = Math.max(1, Math.floor(imageWidth * 0.08));
+            let rightPx = Math.max(1, imageWidth - 1);
             let topPx = 0;
             let bottomPx = Math.max(1, imageHeight - 1);
 
-            if (primaryRegion && Number.isFinite(Number(primaryRegion.left_px))) {
-                leftPx = Math.max(0, Number(primaryRegion.left_px) - Math.floor(imageWidth * 0.08));
-                rightPx = Math.max(leftPx + 10, Number(primaryRegion.left_px));
+            if (primaryRegion) {
+                if (Number.isFinite(Number(primaryRegion.left_px))) leftPx = Number(primaryRegion.left_px);
+                if (Number.isFinite(Number(primaryRegion.right_px))) rightPx = Number(primaryRegion.right_px);
                 if (Number.isFinite(Number(primaryRegion.top_px))) topPx = Number(primaryRegion.top_px);
                 if (Number.isFinite(Number(primaryRegion.bottom_px))) bottomPx = Number(primaryRegion.bottom_px);
             }
@@ -8735,11 +8735,19 @@
                 const confPct = Math.round(conf * 100);
 
                 if (nLabels < 2 || a.top_depth == null || a.bottom_depth == null) {
+                    const reasons = Array.isArray(a.reasons) ? a.reasons.join('; ') : '';
+                    const cols = Array.isArray(a.candidate_columns) ? a.candidate_columns : [];
                     if (statusEl) {
-                        statusEl.textContent = `Only found ${nLabels} depth label${nLabels === 1 ? '' : 's'}; try widening the left strip.`;
+                        let msg = reasons || `Only found ${nLabels} depth label${nLabels === 1 ? '' : 's'}.`;
+                        if (cols.length) {
+                            const top = cols.slice(0, 3).map(c => `x=${c.x_center} (${c.count} nums: ${c.sample_values.slice(0,4).join(', ')})`).join(' · ');
+                            msg += ` Candidates: ${top}`;
+                        }
+                        msg += ' Try selecting the panel with "Select panel" to narrow the search, or zoom out so more depth labels are visible.';
+                        statusEl.textContent = msg;
                         statusEl.style.color = '#fbbf24';
                     }
-                    showStatus('Could not fit depth axis — too few labels detected.', 'info');
+                    showStatus('Could not fit depth axis — too few labels visible. Zoom out to show more depth numbers.', 'info');
                     return;
                 }
 
