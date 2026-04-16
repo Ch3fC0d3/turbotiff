@@ -37,6 +37,7 @@ import shutil
 import string
 import sqlite3
 from app import auth_billing
+from app import mailer
 import app.config as config
 from werkzeug.security import generate_password_hash, check_password_hash
 import stripe
@@ -8165,6 +8166,14 @@ def signup():
                 trial_started_at=datetime.now(timezone.utc).isoformat(),
                 trial_ends_at=trial_end_iso,
             )
+            
+            # Send welcome email to new user
+            mailer.send_welcome(email, full_name)
+            
+            # Notify admin of new signup
+            if config.MAIL_FROM:
+                mailer.send_new_signup_admin(config.MAIL_FROM, email, full_name, company_name)
+            
             if _is_stripe_configured():
                 return redirect(url_for('create_checkout_session', plan='monthly', mode='trial'))
             flash('Account created! Your 7-day free trial is now active.', 'success')
@@ -8426,6 +8435,31 @@ def admin_list_users():
     return jsonify({
         'total_users': len(user_list),
         'users': user_list
+    })
+
+
+@app.route('/api/admin/test-email', methods=['POST'])
+@login_required()
+def admin_test_email():
+    """Send a test email to verify SMTP configuration."""
+    user = _current_user(require_access=True)
+    if not user.get('is_admin') and not session.get('is_admin'):
+        return jsonify({'error': 'Admin access required'}), 403
+    
+    to = (request.json or {}).get('to') or user.get('email')
+    ok = mailer.send_email(
+        to,
+        subject='TifLAS — SMTP test email',
+        html_body='<p>Your TifLAS email configuration is working correctly! 🎉</p>',
+        text_body='Your TifLAS email configuration is working correctly!'
+    )
+    return jsonify({
+        'success': ok,
+        'to': to,
+        'configured': bool(config.MAIL_USERNAME and config.MAIL_PASSWORD),
+        'mail_from': config.MAIL_FROM,
+        'mail_server': config.MAIL_SERVER,
+        'mail_port': config.MAIL_PORT,
     })
 
 
