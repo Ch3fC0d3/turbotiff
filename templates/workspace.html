@@ -11124,8 +11124,8 @@
         }
         
         function saveLogToAccount() {
-            if (!lastLasContent) {
-                alert('No LAS data to save. Digitize first.');
+            if (!uploadedImagePath && !uploadedImage) {
+                alert('Please upload an image first before saving.');
                 return;
             }
             
@@ -11138,12 +11138,12 @@
             btn.disabled = true;
             
             const curveCount = document.querySelectorAll('.track-section').length;
-            const topDepth = parseFloat(document.getElementById('topDepth').value) || 0;
-            const bottomDepth = parseFloat(document.getElementById('bottomDepth').value) || 0;
-            const depthUnit = document.getElementById('depthUnit').value;
+            const topDepth = parseFloat(document.getElementById('topDepth')?.value) || 0;
+            const bottomDepth = parseFloat(document.getElementById('bottomDepth')?.value) || 0;
+            const depthUnit = document.getElementById('depthUnit')?.value || 'FT';
             
             // Rebuild LAS to include manual edits
-            let finalLasContent = lastLasContent;
+            let finalLasContent = lastLasContent || '';
             if (Array.isArray(lastDigitizedDepth) && lastDigitizedDepth.length > 0 &&
                 lastDigitizedCurves && typeof lastDigitizedCurves === 'object' &&
                 lastDepthConfig) {
