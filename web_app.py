@@ -8162,7 +8162,6 @@ def signup():
                 config.AUTH_DB_PATH,
                 user_id,
                 subscription_status='trialing',
-                trial_used=1,
                 trial_started_at=datetime.now(timezone.utc).isoformat(),
                 trial_ends_at=trial_end_iso,
             )
