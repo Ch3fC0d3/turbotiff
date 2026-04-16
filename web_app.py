@@ -8400,6 +8400,36 @@ def admin_action():
     return jsonify({'success': False, 'error': 'Invalid action'})
 
 
+@app.route('/api/admin/users', methods=['GET'])
+@login_required()
+def admin_list_users():
+    """List all user accounts with trial status."""
+    user = _current_user(require_access=True)
+    if not user.get('is_admin') and not session.get('is_admin'):
+        return jsonify({'error': 'Admin access required'}), 403
+    
+    users = auth_billing.get_all_users_for_admin(config.AUTH_DB_PATH)
+    user_list = []
+    for u in users:
+        user_list.append({
+            'id': u.get('id'),
+            'email': u.get('email'),
+            'full_name': u.get('full_name'),
+            'company_name': u.get('company_name'),
+            'subscription_status': u.get('subscription_status'),
+            'plan_code': u.get('plan_code'),
+            'trial_used': u.get('trial_used'),
+            'is_admin': u.get('is_admin'),
+            'is_banned': u.get('is_banned'),
+            'created_at': u.get('created_at')
+        })
+    
+    return jsonify({
+        'total_users': len(user_list),
+        'users': user_list
+    })
+
+
 @app.route('/api/admin/diagnostics', methods=['GET'])
 @login_required()
 def admin_diagnostics():
