@@ -8400,6 +8400,75 @@ def admin_action():
     return jsonify({'success': False, 'error': 'Invalid action'})
 
 
+@app.route('/api/admin/diagnostics', methods=['GET'])
+@login_required()
+def admin_diagnostics():
+    """Diagnostic endpoint to check database and volume status."""
+    user = _current_user(require_access=True)
+    if not user.get('is_admin') and not session.get('is_admin'):
+        return jsonify({'error': 'Admin access required'}), 403
+    
+    import os
+    from pathlib import Path
+    
+    diagnostics = {
+        'database': {},
+        'volume': {},
+        'logs': {},
+        'images': {}
+    }
+    
+    # Check database path and existence
+    db_path = config.AUTH_DB_PATH
+    diagnostics['database']['path'] = db_path
+    diagnostics['database']['exists'] = os.path.exists(db_path)
+    if os.path.exists(db_path):
+        diagnostics['database']['size_bytes'] = os.path.getsize(db_path)
+        diagnostics['database']['readable'] = os.access(db_path, os.R_OK)
+        diagnostics['database']['writable'] = os.access(db_path, os.W_OK)
+    
+    # Check volume mount
+    volume_mount = os.environ.get('RAILWAY_VOLUME_MOUNT_PATH', '')
+    diagnostics['volume']['mount_path'] = volume_mount
+    diagnostics['volume']['mount_exists'] = os.path.exists(volume_mount) if volume_mount else False
+    
+    # Check data directory
+    data_dir = Path.cwd() / 'data'
+    diagnostics['volume']['data_dir'] = str(data_dir)
+    diagnostics['volume']['data_dir_exists'] = data_dir.exists()
+    
+    # Check images directory
+    images_dir = data_dir / 'images'
+    diagnostics['images']['dir'] = str(images_dir)
+    diagnostics['images']['exists'] = images_dir.exists()
+    if images_dir.exists():
+        try:
+            image_files = list(images_dir.glob('*'))
+            diagnostics['images']['count'] = len(image_files)
+            diagnostics['images']['files'] = [f.name for f in image_files[:10]]  # First 10
+        except Exception as e:
+            diagnostics['images']['error'] = str(e)
+    
+    # Check logs in database
+    try:
+        all_logs = auth_billing.get_all_logs_for_admin(config.AUTH_DB_PATH)
+        diagnostics['logs']['total_count'] = len(all_logs)
+        diagnostics['logs']['by_user'] = {}
+        for log in all_logs:
+            user_id = log.get('user_id')
+            if user_id not in diagnostics['logs']['by_user']:
+                diagnostics['logs']['by_user'][user_id] = []
+            diagnostics['logs']['by_user'][user_id].append({
+                'id': log.get('id'),
+                'name': log.get('name'),
+                'created_at': log.get('created_at')
+            })
+    except Exception as e:
+        diagnostics['logs']['error'] = str(e)
+    
+    return jsonify(diagnostics)
+
+
 @app.route('/billing/create-checkout-session', methods=['GET', 'POST'])
 def create_checkout_session():
     user = _current_user(require_access=False)
