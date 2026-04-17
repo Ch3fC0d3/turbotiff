@@ -8791,6 +8791,38 @@ def download_log(log_id):
     )
 
 
+@app.route('/api/logs/<log_id>', methods=['DELETE'])
+@login_required()
+def delete_log(log_id):
+    """Delete a saved log. Only the owner can delete their own log."""
+    user = _current_user(require_access=True)
+    if not user:
+        return jsonify({'success': False, 'error': 'Not authorized'}), 401
+
+    # Verify the log exists AND belongs to this user before deleting.
+    log_data = auth_billing.get_user_log(config.AUTH_DB_PATH, log_id, user['id'])
+    if not log_data:
+        return jsonify({'success': False, 'error': 'Log not found'}), 404
+
+    try:
+        with auth_billing.get_db(config.AUTH_DB_PATH) as conn:
+            cur = conn.execute(
+                "DELETE FROM user_logs WHERE id = ? AND user_id = ?",
+                (log_id, user['id'])
+            )
+            conn.commit()
+            deleted = cur.rowcount
+
+        if deleted < 1:
+            return jsonify({'success': False, 'error': 'Log not found'}), 404
+
+        print(f"[DELETE LOG] User {user['id']} deleted log {log_id} ({log_data.get('name')})")
+        return jsonify({'success': True, 'log_id': log_id})
+    except Exception as exc:
+        print(f"[DELETE LOG] Failed for {log_id}: {exc}")
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+
 
 @app.route('/workspace')
 @login_required()

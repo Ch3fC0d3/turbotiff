@@ -119,6 +119,9 @@
                         <a href="/api/logs/{{ log.id }}/download" class="inline-flex items-center justify-center rounded-md bg-white/75 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-white ring-1 ring-inset ring-stone-400/55 transition-colors" title="Download LAS">
                             <i data-lucide="download" class="h-4 w-4"></i>
                         </a>
+                        <button onclick="deleteLog('{{ log.id }}', {{ log.name|tojson }})" class="inline-flex items-center justify-center rounded-md bg-white/75 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 hover:text-red-800 ring-1 ring-inset ring-stone-400/55 hover:ring-red-300 transition-colors" title="Delete LAS">
+                            <i data-lucide="trash-2" class="h-4 w-4"></i>
+                        </button>
                     </div>
                 </div>
                 {% endfor %}
@@ -148,6 +151,29 @@
         function viewLog(logId) {
             // We'll pass the log ID to the viewer via localStorage or URL params
             window.location.href = `/las_viewer?log_id=${logId}`;
+        }
+
+        async function deleteLog(logId, logName) {
+            const label = logName || 'this log';
+            if (!window.confirm(`Delete "${label}"? This cannot be undone.`)) {
+                return;
+            }
+            try {
+                const res = await fetch(`/api/logs/${encodeURIComponent(logId)}`, {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' },
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok || !data.success) {
+                    alert(`Failed to delete: ${(data && data.error) || res.statusText || 'unknown error'}`);
+                    return;
+                }
+                // Refresh so the grid (and trial-limit counter) reflect the deletion.
+                window.location.reload();
+            } catch (err) {
+                console.error('Delete log error:', err);
+                alert(`Failed to delete log: ${err.message || err}`);
+            }
         }
         
         function openImage(path) {
