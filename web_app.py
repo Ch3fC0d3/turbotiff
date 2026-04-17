@@ -401,13 +401,20 @@ def _handle_unhandled_exception(exc):
     
     print(f"500 error: {err_msg}\n{tb}")
     
-    # Hide details in production
+    # Hide details in production, EXCEPT temporarily include traceback for /digitize
+    # so we can diagnose the numpy.int64 error on Railway. Remove this branch once fixed.
     if is_prod:
-        return jsonify({
+        body = {
             'success': False,
             'error': f'An internal server error occurred: {err_msg}'
-        }), 500
-        
+        }
+        try:
+            if request.path == '/digitize':
+                body['traceback'] = tb.splitlines()[-30:]
+        except Exception:
+            pass
+        return jsonify(body), 500
+
     return jsonify({
         'success': False,
         'error': err_msg,
