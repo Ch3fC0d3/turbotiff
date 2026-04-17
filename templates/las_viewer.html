@@ -1003,17 +1003,6 @@ function checkLibs() {
                     buildCurveChips();
                     document.getElementById('zoomControls').style.display = 'flex';
                     renderPlot();
-
-                    if (window.PRELOADED_IMAGE_CONTENT) {
-                        console.log('[LAS Viewer] Found PRELOADED Image data');
-                        const img = document.getElementById('uploadedImage');
-                        img.onload = () => {
-                            document.getElementById('imagePlaceholder').style.display = 'none';
-                            document.getElementById('imageContent').style.display = 'block';
-                            document.getElementById('imageControls').style.display = 'flex';
-                        };
-                        img.src = window.PRELOADED_IMAGE_CONTENT;
-                    }
                 };
                 if (window.librariesLoaded) initPreloaded();
                 else window.addEventListener('libraries-loaded', initPreloaded);
@@ -1030,15 +1019,24 @@ function checkLibs() {
             `;
         }
 
-        if (sessionImg) {
-            console.log('[LAS Viewer] Found session Image data');
+        // Load the comparison image from whichever source is available.
+        // Session data from the workspace handoff takes priority; fall back
+        // to the server-rendered PRELOADED_IMAGE_CONTENT (saved-log view
+        // from the dashboard) so the image shows regardless of which LAS
+        // source populated the right pane.
+        const imageRef = sessionImg || window.PRELOADED_IMAGE_CONTENT;
+        if (imageRef) {
+            console.log('[LAS Viewer] Loading image from', sessionImg ? 'session' : 'preloaded');
             const img = document.getElementById('uploadedImage');
             img.onload = () => {
                 document.getElementById('imagePlaceholder').style.display = 'none';
                 document.getElementById('imageContent').style.display = 'block';
                 document.getElementById('imageControls').style.display = 'flex';
             };
-            img.src = sessionImg;
+            img.onerror = () => {
+                console.warn('[LAS Viewer] Image failed to load:', imageRef);
+            };
+            img.src = imageRef;
         }
 
         if (sessionDepths) {
