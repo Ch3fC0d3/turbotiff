@@ -119,7 +119,7 @@
                         <a href="/api/logs/{{ log.id }}/download" class="inline-flex items-center justify-center rounded-md bg-white/75 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-white ring-1 ring-inset ring-stone-400/55 transition-colors" title="Download LAS">
                             <i data-lucide="download" class="h-4 w-4"></i>
                         </a>
-                        <button onclick="deleteLog('{{ log.id }}', {{ log.name|tojson }})" class="inline-flex items-center justify-center rounded-md bg-white/75 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 hover:text-red-800 ring-1 ring-inset ring-stone-400/55 hover:ring-red-300 transition-colors" title="Delete LAS">
+                        <button type="button" data-action="delete-log" data-log-id="{{ log.id }}" data-log-name="{{ log.name }}" class="inline-flex items-center justify-center rounded-md bg-white/75 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 hover:text-red-800 ring-1 ring-inset ring-stone-400/55 hover:ring-red-300 transition-colors" title="Delete LAS">
                             <i data-lucide="trash-2" class="h-4 w-4"></i>
                         </button>
                     </div>
@@ -152,6 +152,15 @@
             // We'll pass the log ID to the viewer via localStorage or URL params
             window.location.href = `/las_viewer?log_id=${logId}`;
         }
+
+        // Delegated click handler — works even when the click lands on the
+        // inner <i> icon, and avoids inline-JS quoting issues with log names.
+        document.addEventListener('click', (event) => {
+            const btn = event.target.closest('[data-action="delete-log"]');
+            if (!btn) return;
+            event.preventDefault();
+            deleteLog(btn.dataset.logId, btn.dataset.logName);
+        });
 
         async function deleteLog(logId, logName) {
             const label = logName || 'this log';
