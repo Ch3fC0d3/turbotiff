@@ -9582,6 +9582,18 @@ def digitize():
             _hint = scale_detection.classify_curve_type(c.get('name') or c.get('type') or '')
             scale_type = (_hint or {}).get('scale_type', 'linear')
 
+        # Auto-detect wrap for log scales when the user didn't check the box.
+        # detect_wrap() fires when the trace has repeated large alternating
+        # jumps (characteristic of multi-decade resistivity wrapping).
+        wrap_auto_detected = False
+        if scale_type == 'log' and not wrapped_flag:
+            try:
+                if scale_detection.detect_wrap(xs, width_px):
+                    wrapped_flag = True
+                    wrap_auto_detected = True
+            except Exception:
+                pass
+
         vals = scale_detection.pixel_to_value(
             xs=xs,
             width_px=width_px,
@@ -9590,6 +9602,13 @@ def digitize():
             scale_type=scale_type,
             wrapped=wrapped_flag,
         )
+
+        if wrap_auto_detected:
+            curve_warnings.append({
+                'curve': name,
+                'info': f"Auto-enabled wrap unwrapping for {name} (multi-decade log trace detected).",
+                'auto_wrap': True,
+            })
 
         vals_out = np.where(np.isnan(vals), null_val, vals).astype(np.float32)
         curve_data[name] = {'unit': unit, 'values': vals_out}

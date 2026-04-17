@@ -36,7 +36,17 @@ _CURVE_REGISTRY = [
     (("GR", "GAMMA", "GAMMARAY", "GAMMA RAY"),                  "GR",   "linear",   0.0,   150.0, "API"),
     (("SP", "SPONTANEOUS", "SPONTANEOUS POTENTIAL"),            "SP",   "centered", -80.0, 20.0,  "MV"),
     (("ILD", "ILM", "RILD", "RT", "RES", "RESISTIVITY",
-      "LLD", "LLS", "MSFL", "LLM", "RD", "RS", "INDUCTION"),    "RT",   "log",      0.2,   2000.0, "OHMM"),
+      "LLD", "LLS", "MSFL", "LLM", "RD", "RS", "INDUCTION",
+      # Array / dual induction resistivity at specific depths of investigation.
+      # Common vendor naming: RO/RT/AT/A-prefix with 10/20/30/60/90 (inches).
+      "RO10", "RO20", "RO30", "RO60", "RO90",
+      "RT10", "RT20", "RT30", "RT60", "RT90",
+      "AT10", "AT20", "AT30", "AT60", "AT90",
+      "AO10", "AO20", "AO30", "AO60", "AO90",
+      "A10",  "A20",  "A30",  "A60",  "A90",
+      "R10",  "R20",  "R30",  "R60",  "R90",
+      # Generic shallow/medium/deep variants
+      "RSHA", "RMED", "RDEP"),                                  "RT",   "log",      0.2,   2000.0, "OHMM"),
     (("RHOB", "DENS", "DENSITY", "RHO"),                        "RHOB", "linear",   1.95,  2.95,  "G/CC"),
     (("NPHI", "PHI", "NEUTRON", "TNPH", "NPOR"),                "NPHI", "linear",   0.45,  -0.15, "V/V"),  # note reversed: hot_side=left
     (("DT",  "DTC", "SONIC", "AC"),                             "DT",   "linear",   140.0, 40.0,  "US/F"), # reversed

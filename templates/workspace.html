@@ -9252,7 +9252,7 @@
                         const scaleSel = document.getElementById(`scaleType${i}`);
                         if (scaleSel) {
                             const t = String(typeEl.value || '').toUpperCase();
-                            if (/^(RT|RES|ILD|ILM|LLD|LLS|MSFL)$/.test(t)) scaleSel.value = 'log';
+                            if (/^(RT|RES|ILD|ILM|LLD|LLS|MSFL|RSHA|RMED|RDEP|R[OT]?\d+|AT\d+|AO?\d+)$/.test(t)) scaleSel.value = 'log';
                             else if (t === 'SP') scaleSel.value = 'centered';
                             else scaleSel.value = 'linear';
                         }
@@ -9275,7 +9275,7 @@
                     const scaleSel = document.getElementById(`scaleType${i}`);
                     if (!scaleSel) return;
                     const t = String((typeEl && typeEl.value) || '').toUpperCase();
-                    if (/^(RT|RES|ILD|ILM|LLD|LLS|MSFL)$/.test(t)) scaleSel.value = 'log';
+                    if (/^(RT|RES|ILD|ILM|LLD|LLS|MSFL|RSHA|RMED|RDEP|R[OT]?\d+|AT\d+|AO?\d+)$/.test(t)) scaleSel.value = 'log';
                     else if (t === 'SP') scaleSel.value = 'centered';
                     else scaleSel.value = 'linear';
                 })();
@@ -11232,6 +11232,23 @@
                             if (dbgLines.length) {
                                 console.log('[DEBUG black mode]', dbgLines.join(' | '));
                                 message += ` 🔍 Debug: ${dbgLines.join(' | ')}`;
+                            }
+                            // Auto-enable the "wrapped" checkbox for any curve where the
+                            // backend detected multi-decade wrap during digitization.
+                            const autoWraps = data.curve_warnings.filter(w => w.auto_wrap);
+                            if (autoWraps.length && Array.isArray(config.curves)) {
+                                for (const w of autoWraps) {
+                                    const idx = config.curves.findIndex(c =>
+                                        (c.las_mnemonic || c.name) === w.curve
+                                    );
+                                    if (idx >= 0) {
+                                        const wrapEl = document.getElementById(`wrapped${idx}`);
+                                        if (wrapEl && !wrapEl.checked) wrapEl.checked = true;
+                                    }
+                                }
+                                const names = autoWraps.map(w => w.curve).join(', ');
+                                message += ` 🔄 Auto-enabled wrap unwrapping for: ${names}.`;
+                                if (statusType === 'success') statusType = 'info';
                             }
                         }
 
