@@ -8791,6 +8791,74 @@ def download_log(log_id):
     )
 
 
+@app.route('/api/logs/<log_id>/image', methods=['GET'])
+@login_required()
+def get_log_image(log_id):
+    """Serve the original image for a saved log, regardless of how the
+    original_image_path was stored: inline data URL, /api/images/<file>
+    server path, an absolute http(s) URL, or a GCS object key.
+    """
+    user = _current_user(require_access=True)
+    if not user:
+        return "Not authorized", 401
+
+    log_data = auth_billing.get_user_log(config.AUTH_DB_PATH, log_id, user['id'])
+    if not log_data:
+        return "Log not found", 404
+
+    path = (log_data.get('original_image_path') or '').strip()
+    if not path:
+        return "No image stored for this log", 404
+
+    # 1. Inline data URL → decode and serve directly
+    if path.startswith('data:'):
+        try:
+            header, b64 = path.split(',', 1)
+            mime = header[5:].split(';', 1)[0] or 'image/jpeg'
+            raw = base64.b64decode(b64)
+            return Response(raw, mimetype=mime)
+        except Exception as exc:
+            print(f"[get_log_image] Failed to decode data URL for {log_id}: {exc}")
+            return "Image decode failed", 500
+
+    # 2. Absolute http(s) URL → redirect
+    if path.startswith('http://') or path.startswith('https://'):
+        return redirect(path)
+
+    # 3. Server-hosted /api/images/<filename> path → read from disk
+    if path.startswith('/api/images/'):
+        filename = path.rsplit('/', 1)[-1]
+        from pathlib import Path
+        images_dir = Path(config.DATA_ROOT) / 'images'
+        file_path = images_dir / filename
+        if not file_path.exists():
+            print(f"[get_log_image] Missing file on disk: {file_path}")
+            return "Image file missing", 404
+        return send_from_directory(str(images_dir), filename)
+
+    # 4. Otherwise treat as a GCS object key → stream from the bucket
+    try:
+        bucket_name = getattr(config, 'GCS_UPLOADS_BUCKET', None)
+        if not bucket_name:
+            return "Cloud storage not configured", 500
+        global credentials
+        storage_client = (
+            storage.Client(credentials=credentials) if credentials else storage.Client()
+        )
+        bucket = storage_client.bucket(bucket_name)
+        blob = bucket.blob(path)
+        if not blob.exists():
+            print(f"[get_log_image] GCS blob missing: {bucket_name}/{path}")
+            return "Image not found in cloud storage", 404
+        blob.reload()
+        mime = blob.content_type or 'application/octet-stream'
+        raw = blob.download_as_bytes()
+        return Response(raw, mimetype=mime)
+    except Exception as exc:
+        print(f"[get_log_image] GCS fetch failed for {log_id}: {exc}")
+        return "Image fetch failed", 500
+
+
 @app.route('/api/logs/<log_id>', methods=['DELETE'])
 @login_required()
 def delete_log(log_id):

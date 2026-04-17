@@ -12,7 +12,9 @@
         // Preload LAS data from database if log_id was provided
         window.PRELOADED_LAS_CONTENT = {{ log_data.las_content | tojson | safe }};
         {% if log_data.original_image_path %}
-        window.PRELOADED_IMAGE_CONTENT = {{ log_data.original_image_path | tojson | safe }};
+        // Always go through the backend resolver so data URLs, server paths,
+        // and GCS keys all resolve correctly and aren't leaked to the client.
+        window.PRELOADED_IMAGE_CONTENT = {{ ('/api/logs/' ~ log_data.id ~ '/image') | tojson | safe }};
         {% endif %}
     </script>
     {% endif %}
