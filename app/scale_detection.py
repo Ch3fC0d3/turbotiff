@@ -194,6 +194,54 @@ def classify_scale_from_labels(labels: Sequence[float]) -> ScaleClassification:
 # Scale-aware pixel → value conversion
 # ────────────────────────────────────────────────────────────────────
 
+def unwrap_log_trace(
+    xs: np.ndarray,
+    width_px: int,
+    jump_frac: float = 0.7,
+) -> np.ndarray:
+    """Assign an integer wrap index to each row of a pixel trace.
+
+    A resistivity curve on a log scale that exceeds the right-edge value (e.g.
+    > 20 ohm-m on a 0.2→20 track) is drawn by wrapping: the line exits the
+    right edge and re-enters on the left, now representing the next decade up.
+
+    This scanner walks xs top-to-bottom and increments/decrements an integer
+    wrap count whenever consecutive valid samples jump by more than
+    ``jump_frac * width`` across the track. The returned array has the same
+    shape as xs with NaN for rows where xs is NaN.
+
+    Wrap convention (for tracks where right_value > left_value):
+      - jump from near-right to near-left → wrap += 1 (next decade UP)
+      - jump from near-left to near-right → wrap -= 1 (previous decade DOWN)
+
+    Callers should ALSO receive the raw xs and apply the in-track log
+    interpolation themselves; this function only reports the wrap index.
+    """
+    xs = np.asarray(xs, dtype=np.float64)
+    w = max(1, int(width_px) - 1)
+    wraps = np.full(xs.shape, np.nan, dtype=np.float64)
+    threshold = float(w) * float(jump_frac)
+
+    current = 0
+    prev_x = None
+    for i, x in enumerate(xs):
+        if not np.isfinite(x):
+            prev_x = None
+            continue
+        if prev_x is not None:
+            dx = x - prev_x
+            if dx < -threshold:
+                # Big move leftward between adjacent rows → wrapped past right edge
+                current += 1
+            elif dx > threshold:
+                # Big move rightward → came back down a decade
+                current -= 1
+        wraps[i] = current
+        prev_x = x
+
+    return wraps
+
+
 def pixel_to_value(
     xs: np.ndarray,
     width_px: int,
@@ -210,8 +258,9 @@ def pixel_to_value(
         left_value: value at x=0
         right_value: value at x=width_px-1
         scale_type: "linear" | "log" | "centered"
-        wrapped: if True, xs that would lie outside [0, width_px-1]
-                 are interpreted as having wrapped around.
+        wrapped: if True AND scale_type=="log", detect multi-decade wraps in
+                 the trace and multiply values by (right/left)^wrap_count so
+                 a curve that wrapped once reads at the next decade.
 
     Returns a float array same shape as xs with NaN preserved.
     """
@@ -223,18 +272,14 @@ def pixel_to_value(
 
     w = max(1, int(width_px) - 1)
     x = xs[valid].copy()
-
-    if wrapped:
-        # Bring wrapped positions back inside [0, w]
-        x = np.mod(x, w + 1)
-
-    frac = np.clip(x / w, 0.0, 1.0)
+    # Clamp pixel x to the track for the in-track fraction; wrap count (if any)
+    # provides the between-decade multiplier.
+    x_clamped = np.clip(x, 0.0, float(w))
+    frac = x_clamped / w
 
     st = (scale_type or "linear").lower()
 
     if st == "log":
-        # Map proportional pixel -> proportional log10 of value
-        # Requires left/right both positive and left < right (or reversed).
         lv = float(left_value)
         rv = float(right_value)
         if lv <= 0 or rv <= 0:
@@ -243,7 +288,16 @@ def pixel_to_value(
         else:
             log_lo = math.log10(lv)
             log_hi = math.log10(rv)
-            out[valid] = np.power(10.0, log_lo + frac * (log_hi - log_lo))
+            base_vals = np.power(10.0, log_lo + frac * (log_hi - log_lo))
+            if wrapped:
+                # Compute wrap index on the ORIGINAL (ordered) xs so the
+                # row-to-row jump detection is faithful, then subset to valid.
+                wrap_full = unwrap_log_trace(xs, width_px)
+                wrap_valid = wrap_full[valid]
+                wrap_valid = np.where(np.isnan(wrap_valid), 0.0, wrap_valid)
+                decade_factor = rv / lv  # e.g. 20/0.2 = 100 for a 2-decade track
+                base_vals = base_vals * np.power(decade_factor, wrap_valid)
+            out[valid] = base_vals
 
     elif st == "centered":
         # Linear mapping, but treat the midpoint of the track as the
