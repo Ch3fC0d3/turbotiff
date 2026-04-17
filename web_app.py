@@ -401,19 +401,12 @@ def _handle_unhandled_exception(exc):
     
     print(f"500 error: {err_msg}\n{tb}")
     
-    # Hide details in production, EXCEPT temporarily include traceback for /digitize
-    # so we can diagnose the numpy.int64 error on Railway. Remove this branch once fixed.
+    # Hide details in production
     if is_prod:
-        body = {
+        return jsonify({
             'success': False,
             'error': f'An internal server error occurred: {err_msg}'
-        }
-        try:
-            if request.path == '/digitize':
-                body['traceback'] = tb.splitlines()[-30:]
-        except Exception:
-            pass
-        return jsonify(body), 500
+        }), 500
 
     return jsonify({
         'success': False,
@@ -9257,13 +9250,13 @@ def digitize():
                         # Prefer the strongest local peak that stays close to the DP path.
                         best_cand = candidates[0]
                         best_score = -1e9
-                        for c in candidates:
-                            x_cand = start + c
+                        for ci in candidates:
+                            x_cand = start + ci
                             d = abs(x_cand - x_dp)
-                            score = local_prob[c] - 0.15 * d  # strongest penalty to stay on DP path center
+                            score = local_prob[ci] - 0.15 * d  # strongest penalty to stay on DP path center
                             if score > best_score:
                                 best_score = score
-                                best_cand = c
+                                best_cand = ci
                                 
                         p_local = float(local_prob[best_cand])
 
