@@ -3107,13 +3107,26 @@
                 sessionStorage.removeItem('lasViewerDepths');
 
                 const img = document.getElementById('imagePreview');
-                // Only save if we have a valid image (data URL or blob)
-                if (img && img.src && (img.src.startsWith('data:') || img.src.startsWith('blob:'))) {
-                     try {
-                        sessionStorage.setItem('lasViewerImage', img.src);
-                     } catch (e) {
-                        console.warn('Image too large for sessionStorage');
-                     }
+                // Prefer the server-side image URL (/api/images/…) — it's tiny in
+                // sessionStorage and the viewer can fetch the full-size image via HTTP.
+                // Only fall back to inlining the data/blob URL if no server path exists.
+                let imageRef = null;
+                if (uploadedImagePath && /^https?:\/\//.test(uploadedImagePath) || (uploadedImagePath && uploadedImagePath.startsWith('/'))) {
+                    imageRef = uploadedImagePath;
+                } else if (img && img.src && (img.src.startsWith('data:') || img.src.startsWith('blob:'))) {
+                    imageRef = img.src;
+                }
+                if (imageRef) {
+                    try {
+                        sessionStorage.setItem('lasViewerImage', imageRef);
+                    } catch (e) {
+                        // Quota exceeded (typical for >5MB data URLs). Retry with the
+                        // server path if we haven't already tried it.
+                        console.warn('Image too large for sessionStorage; falling back to server path', e);
+                        if (uploadedImagePath && imageRef !== uploadedImagePath) {
+                            try { sessionStorage.setItem('lasViewerImage', uploadedImagePath); } catch (_) {}
+                        }
+                    }
                 }
                 
                 if (lastLasContent) {
