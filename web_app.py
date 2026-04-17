@@ -1816,24 +1816,24 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
     
     if mode == "green":
         # PERMISSIVE green detection again - we need to catch the faint tips
-        # We'll rely on the tracer logic to ignore grid noise
-        # Increased saturation min from 30 to 50 to reject gray vertical lines
-        lower = np.array([25, 50, 30], dtype=np.uint8)
+        # Lower saturation threshold to catch lighter greens as seen in the user's image
+        lower = np.array([25, 25, 25], dtype=np.uint8)
         upper = np.array([95, 255, 255], dtype=np.uint8)
         color_mask = cv2.inRange(hsv, lower, upper)
-        
+
         # Suppress red/orange pixels
         b, g, r = cv2.split(roi_enhanced)
         r16 = r.astype(np.int16)
         g16 = g.astype(np.int16)
         b16 = b.astype(np.int16)
-        
+
         # Only suppress clearly red pixels
         clearly_red = (r16 > g16 + 30) & (r16 > b16 + 30)
         color_mask[clearly_red] = 0
-        
+
         # Weak G-dominance check (allow if G is just slightly higher or equal)
-        g_dominant = (g16 >= r16 - 5) & (g16 >= b16 - 5)
+        # Relaxed even further to allow more light green/gray-green
+        g_dominant = (g16 >= r16 - 15) & (g16 >= b16 - 15)
         color_mask[~g_dominant] = 0
 
     elif mode == "auto":
