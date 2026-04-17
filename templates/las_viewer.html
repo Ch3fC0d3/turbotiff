@@ -509,6 +509,21 @@ document.getElementById('fileInput').addEventListener('change', async function(e
         buildCurveChips();
         document.getElementById('zoomControls').style.display = 'flex';
         renderPlot();
+
+        // After a LAS file is loaded, immediately prompt the user for the
+        // matching TIFF/image so they can compare without a second click.
+        // Skip if an image is already shown (e.g. already paired earlier).
+        const imgEl = document.getElementById('uploadedImage');
+        const alreadyHasImage = imgEl && imgEl.src && !imgEl.src.endsWith('#');
+        if (!alreadyHasImage) {
+            const imageInput = document.getElementById('imageInput');
+            if (imageInput) {
+                // Slight delay so the LAS render finishes painting before the
+                // file dialog appears; some browsers also block click() if it
+                // happens too synchronously after another input change event.
+                setTimeout(() => imageInput.click(), 100);
+            }
+        }
     } catch (err) {
         console.error('LAS parse error:', err);
         showError('Failed to parse LAS file: ' + err.message + '. Please check that it is a valid LAS 2.0 file.');
