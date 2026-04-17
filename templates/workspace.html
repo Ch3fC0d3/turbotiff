@@ -1306,7 +1306,7 @@
         <div id="introModal" class="intro-modal" onclick="event.stopPropagation()">
             <button type="button" class="intro-modal-close" onclick="closeIntroModal()" aria-label="Close">×</button>
             <h2>Welcome to TurboTIFFLAS</h2>
-            <p>This tool converts well log images (TIFF/PNG/JPG) into QuickSyn-style LAS 1.2 files. The AI suggests defaults, but you stay in control.</p>
+            <p>This tool converts well log images (TIFF/PNG/JPG/PDF) into QuickSyn-style LAS 1.2 files. The AI suggests defaults, but you stay in control.</p>
             <ol>
                 <li><strong>Upload image:</strong> Drop or choose your log in Step 1. The preview appears in Step 2.</li>
                 <li><strong>Depth setup:</strong> In Step 3, enter the top and bottom depths from the log header or scale (AI will prefill when possible), and set the corresponding top/bottom pixels so the guidelines line up with the printed depth ticks.</li>
@@ -1360,9 +1360,9 @@
             <div class="step" id="uploadStep">
                 <h2>Step 1: Upload Image</h2>
                 <div class="upload-area" id="uploadArea">
-                    <p>📁 Drag & drop your TIFF/PNG/JPG here or click to browse</p>
-                    <p class="text-sm text-slate-300 mt-2">⚠️ Max file size: 100MB</p>
-                    <input type="file" id="fileInput" accept="image/*" style="display:none">
+                    <p>📁 Drag & drop your TIFF/PNG/JPG/PDF here or click to browse</p>
+                    <div class="hint-text mt-1">⚠️ Max file size: 100MB</div>
+                    <input type="file" id="fileInput" accept="image/*,.pdf,application/pdf" style="display:none">
                 </div>
                 <div id="imageInfo" class="hidden"></div>
             </div>

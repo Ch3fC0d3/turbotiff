@@ -8982,13 +8982,63 @@ def upload_file():
     if file.filename == '':
         return jsonify({'error': 'No file selected'}), 400
     
-    # Read image
+    # Read image or PDF
     file_bytes = file.read()
-    nparr = np.frombuffer(file_bytes, np.uint8)
-    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     
+    if file.filename.lower().endswith('.pdf') or file_bytes.startswith(b'%PDF'):
+        try:
+            import fitz
+            doc = fitz.open("pdf", file_bytes)
+            if len(doc) == 0:
+                return jsonify({'error': 'PDF is empty'}), 400
+
+            # Render pages at a higher DPI (e.g. 200 DPI instead of 72)
+            zoom = 200 / 72.0
+            mat = fitz.Matrix(zoom, zoom)
+
+            page_images = []
+            max_w = 0
+
+            for page in doc:
+                pix = page.get_pixmap(matrix=mat, colorspace=fitz.csRGB, alpha=False)
+                # Convert fitz pixmap to numpy array for OpenCV
+                # Since colorspace=fitz.csRGB, pix.n will be 3 (RGB)
+                img_rgb = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, 3)
+                # Convert RGB to BGR for OpenCV
+                img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+                
+                if img_bgr.shape[1] > max_w:
+                    max_w = img_bgr.shape[1]
+                    
+                page_images.append(img_bgr)
+
+            if not page_images:
+                return jsonify({'error': 'PDF contains no renderable pages'}), 400
+
+            # Pad images to match the maximum width to avoid vconcat errors
+            padded_images = []
+            for page_img in page_images:
+                h_img, w_img = page_img.shape[:2]
+                if w_img < max_w:
+                    # Pad on the right with white pixels
+                    padded = cv2.copyMakeBorder(page_img, 0, 0, 0, max_w - w_img, cv2.BORDER_CONSTANT, value=[255, 255, 255])
+                    padded_images.append(padded)
+                else:
+                    padded_images.append(page_img)
+
+            # Stitch all pages vertically into one long log image
+            img = cv2.vconcat(padded_images)
+            doc.close()
+        except ImportError:
+            return jsonify({'error': 'PDF support requires PyMuPDF (fitz) package'}), 500
+        except Exception as e:
+            return jsonify({'error': f'Failed to process PDF: {str(e)}'}), 400
+    else:
+        nparr = np.frombuffer(file_bytes, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
     if img is None:
-        return jsonify({'error': 'Could not read image'}), 400
+        return jsonify({'error': 'Could not read image or PDF'}), 400
     
     h, w, _ = img.shape
     
