@@ -17,7 +17,7 @@
                 <p id="viewerMeta" class="subtitle">Preparing shared depth tracks.</p>
             </div>
             <div class="result-actions" style="display: flex; gap: 8px;">
-                <a class="action-link secondary" href="/directional/" style="min-width: auto; padding: 10px 16px;">Back</a>
+                <a class="action-link secondary" href="/directional" style="min-width: auto; padding: 10px 16px;">Back</a>
                 <a id="viewerDownloadCsv" class="action-link" href="#" style="min-width: auto; padding: 10px 16px;">CSV</a>
                 <a id="viewerDownloadLas" class="action-link" href="#" style="min-width: auto; padding: 10px 16px;">LAS</a>
                 <button id="viewerDownloadJpg" class="action-link" style="min-width: auto; padding: 10px 16px; border: none; font-family: inherit; cursor: pointer;">JPG</button>
@@ -62,73 +62,29 @@
     </div>
 
     <script>
-        const taskId = "{{ task_id }}";
-        
+        const taskId = {{ task_id | tojson }};
+        const viewerTitle = document.getElementById('viewerTitle');
+        const viewerMeta = document.getElementById('viewerMeta');
+        const viewerStatus = document.getElementById('viewerStatus');
+        const viewerError = document.getElementById('viewerError');
         const viewerDownloadCsv = document.getElementById('viewerDownloadCsv');
         const viewerDownloadLas = document.getElementById('viewerDownloadLas');
         const viewerDownloadJpg = document.getElementById('viewerDownloadJpg');
         const viewerDownloadPdf = document.getElementById('viewerDownloadPdf');
-        
+        const trackLegend = document.getElementById('trackLegend');
+        const logPlot = document.getElementById('logPlot');
         const layoutModeSelect = document.getElementById('layoutModeSelect');
         const depthAxisSelect = document.getElementById('depthAxisSelect');
         const depthFromInput = document.getElementById('depthFrom');
         const depthToInput = document.getElementById('depthTo');
         const depthApplyBtn = document.getElementById('depthApply');
         const depthResetBtn = document.getElementById('depthReset');
-        const trackLegend = document.getElementById('trackLegend');
-        const viewerStatus = document.getElementById('viewerStatus');
-        const viewerError = document.getElementById('viewerError');
-        const logPlot = document.getElementById('logPlot');
-        const viewerTitle = document.getElementById('viewerTitle');
-        const viewerMeta = document.getElementById('viewerMeta');
 
         let globalPayload = null;
         let trackVisibility = [];
         let trackGroups = []; // Array storing 1 or 2 for each track
         let zoomRange = null; // {min, max} in current active axis units
         let initialLoad = true;
-
-        async function loadPlot() {
-            const response = await fetch(`/directional/plot_data/${taskId}`);
-            const payload = await response.json();
-
-            viewerDownloadCsv.href = `${payload.download_url}?format=csv`;
-            viewerDownloadLas.href = `${payload.download_url}?format=las`;
-            
-            viewerDownloadJpg.onclick = () => {
-                const plotDiv = document.getElementById('logPlot');
-                Plotly.downloadImage(plotDiv, { format: 'jpeg', width: 1200, height: 1600, filename: 'converted_log' });
-            };
-            viewerDownloadPdf.onclick = () => {
-                const plotDiv = document.getElementById('logPlot');
-                Plotly.downloadImage(plotDiv, { format: 'jpeg', width: 1200, height: 1600, filename: 'converted_log' })
-                    .then(() => alert('For best PDF results, print this page (Ctrl+P) and save as PDF.'));
-            };
-
-            viewerTitle.textContent = `${payload.target_basis} Log View`;
-            viewerMeta.textContent = `${payload.curve_count} curves across ${payload.sample_count} rows`;
-
-            globalPayload = payload;
-            buildLegend(payload.tracks);
-
-            if (initialLoad) {
-                const isAlt = depthAxisSelect.value === 'alt';
-                const dMin = isAlt ? payload.alt_depth_min : payload.depth_min;
-                const dMax = isAlt ? payload.alt_depth_max : payload.depth_max;
-                
-                if (dMax - dMin > 800) {
-                    zoomRange = { min: dMin, max: dMin + 500 };
-                    depthFromInput.value = Math.floor(zoomRange.min);
-                    depthToInput.value = Math.floor(zoomRange.max);
-                }
-                initialLoad = false;
-            }
-
-            renderPlot();
-
-            viewerStatus.classList.add('hidden');
-            logPlot.classList.remove('hidden');
-        }
 
         layoutModeSelect.addEventListener('change', () => {
             if (globalPayload) {
@@ -613,7 +569,7 @@
 
         async function loadViewer() {
             try {
-                const response = await fetch(`/plot_data/${taskId}`);
+                const response = await fetch(`/directional/plot_data/${taskId}`);
                 const payload = await response.json();
 
                 if (!response.ok) throw new Error(payload.error || 'Unable to load plot data.');
