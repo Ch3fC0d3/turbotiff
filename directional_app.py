@@ -136,6 +136,9 @@ def _normalize_pdf_table(df: pd.DataFrame) -> pd.DataFrame:
     work = df.copy().dropna(axis=1, how="all").dropna(how="all").reset_index(drop=True)
     if work.empty:
         return work
+        
+    # Save the original columns of the cleaned work DF before we overwrite them
+    original_work_columns = list(work.columns)
 
     work.columns = list(range(work.shape[1]))
     header_rows = _detect_header_rows(work)
@@ -151,7 +154,7 @@ def _normalize_pdf_table(df: pd.DataFrame) -> pd.DataFrame:
             headers.append(" ".join(parts))
         work = work.iloc[header_rows:].reset_index(drop=True)
     else:
-        original_headers = [_normalize_label(col) for col in df.columns]
+        original_headers = [_normalize_label(col) for col in original_work_columns]
         if _header_score(original_headers):
             headers = original_headers
         elif not work.empty and _header_score([_clean_pdf_cell(v) for v in work.iloc[0].tolist()]) > 0:
