@@ -5546,11 +5546,11 @@
             }
 
             const deltaX = xImg - centerN.originalX;
-            const deltaY = 0;
+            const deltaY = yImg - centerN.originalY;
 
             // Check smoothing toggle
             const smoothMode = document.getElementById('smoothEditToggle')?.checked;
-
+            
             // Depth-aware Gaussian falloff: cover roughly ±5–10 ft instead of fixed point count
             const centerDepth = Number.isFinite(centerN.depthIndex) && Array.isArray(lastDigitizedDepth)
                 ? lastDigitizedDepth[centerN.depthIndex]
@@ -5563,45 +5563,54 @@
             // Reduce Y motion when smoothing is enabled to avoid stair-steps; keep X dominant.
             const yWeight = smoothMode ? 0.2 : 1.0;
 
-            // Move neighbors with true Gaussian falloff for kink-free edits
+            const depthCfg = lastDepthConfig || getDepthConfigFromInputs();
+
+            // Pass 1: Clear old indices to prevent values overwriting each other when shifting up/down
             neighbors.forEach(n => {
-                if (isDepthIndexPinned(state.curveId, n.depthIndex) && n.pointIndex !== centerIndex) {
-                    return;
+                if (isDepthIndexPinned(state.curveId, n.depthIndex) && n.pointIndex !== centerIndex) return;
+                if (n.depthIndex >= 0 && n.depthIndex < entry.values.length) {
+                    entry.values[n.depthIndex] = null;
                 }
+            });
+
+            // Pass 2: Calculate new positions and write to new depth indices
+            neighbors.forEach(n => {
+                if (isDepthIndexPinned(state.curveId, n.depthIndex) && n.pointIndex !== centerIndex) return;
+
                 const depth = (Array.isArray(lastDigitizedDepth) && n.depthIndex >= 0 && n.depthIndex < lastDigitizedDepth.length)
                     ? lastDigitizedDepth[n.depthIndex]
                     : null;
                 const depthDelta = (centerDepth != null && depth != null) ? Math.abs(depth - centerDepth) : Math.abs(n.pointIndex - centerIndex) * localSpacing;
-
+                
                 // Gaussian weight: exp(-Δdepth²/(2σ²))
                 const weight = Math.exp(-(depthDelta * depthDelta) / (2 * sigmaDepth * sigmaDepth));
-                
-                // Skip negligible weights for performance
                 if (weight < 0.01) return;
 
                 let newX = n.originalX + deltaX * weight;
-                let newY = n.originalY;
+                let newY = n.originalY + deltaY * weight * yWeight;
 
-                if (imgW > 1) {
-                    newX = Math.max(0, Math.min(imgW - 1, newX));
-                }
-                if (imgH > 1) {
-                    newY = Math.max(0, Math.min(imgH - 1, newY));
-                }
+                if (imgW > 1) newX = Math.max(0, Math.min(imgW - 1, newX));
+                if (imgH > 1) newY = Math.max(0, Math.min(imgH - 1, newY));
 
-                // Update point position (X and Y)
                 pts[n.pointIndex][0] = newX;
                 pts[n.pointIndex][1] = newY;
 
-                // Preserve the depth index mapping for this point
-                if (Number.isInteger(n.depthIndex)) {
-                    pts[n.pointIndex][2] = n.depthIndex;
+                // Map new Y position to depth index
+                const newDepth = pixelToDepthFromConfig(newY, depthCfg);
+                let newDepthIndex = n.depthIndex;
+                if (Number.isFinite(newDepth)) {
+                    const idx = findNearestDepthIndex(newDepth, lastDigitizedDepth);
+                    if (idx >= 0 && idx < entry.values.length) {
+                        newDepthIndex = idx;
+                    }
                 }
+                
+                pts[n.pointIndex][2] = newDepthIndex;
+                n.depthIndex = newDepthIndex; // Update neighbor state for future iterations in this drag
 
-                // Update LAS value (only X affects the curve value)
                 const newVal = pixelToTrackValue(newX, targetTrack);
-                if (Number.isFinite(newVal) && n.depthIndex >= 0 && n.depthIndex < entry.values.length) {
-                    entry.values[n.depthIndex] = newVal;
+                if (Number.isFinite(newVal)) {
+                    entry.values[newDepthIndex] = newVal;
                 }
             });
         }
