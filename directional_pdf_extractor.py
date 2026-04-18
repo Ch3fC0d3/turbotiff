@@ -15,19 +15,22 @@ def _ascii_safe_preview(df: pd.DataFrame, rows: int = 5) -> str:
 
 def extract_survey_from_pdf(pdf_path: str, pages_list=None, is_curve=False):
     """
-    Extracts tables from a scanned PDF using GPT-4o Vision API.
+    Extracts tables from a scanned PDF using Gemini API.
     """
-    print(f"Initializing GPT-4o Vision API for {pdf_path}...")
-    
-    api_key = os.getenv("OPENAI_API_KEY")
+    print(f"Initializing Gemini Vision API for {pdf_path}...")
+
+    api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
-        raise ValueError("OPENAI_API_KEY environment variable not set. Please add it to your .env file.")
+        raise ValueError("GEMINI_API_KEY environment variable not set. Please add it to your .env file.")
+
+    model_id = os.getenv("GEMINI_MODEL_ID", "gemini-2.5-flash")
+    model_name = model_id if model_id.startswith("models/") else f"models/{model_id}"
 
     # Load PDF
     doc = fitz.open(pdf_path)
     if pages_list is None:
         pages_list = list(range(len(doc)))
-    
+
     all_dataframes = []
 
     system_prompt = (
@@ -43,90 +46,105 @@ def extract_survey_from_pdf(pdf_path: str, pages_list=None, is_curve=False):
 
     if is_curve:
         system_prompt = (
-            "You are an expert well log curve parser. Your task is to extract tabular data from printed well logs. "
-            "The data usually contains a Depth column followed by various curve measurements (like Gamma Ray, Resistivity, Porosity, etc). "
+            "You are an expert well log curve parser. Your task is to extract tabular data from digitized well curves. "
+            "The data typically contains a Depth column and one or more curve columns (like GR, RES, DEN, NEU, etc). "
             "Return ONLY a raw, perfectly formatted CSV string. "
             "Do not include any Markdown tags like ```csv. "
-            "Include standard column headers on the first line. The first column MUST be DEPTH. "
+            "Include standard column headers on the first line. "
             "Do NOT include table titles or any text outside of the table itself. "
-            "If the page does not contain curve table data, simply return the exact word: EMPTY"
+            "If the page does not contain curve data, simply return the exact word: EMPTY"
         )
 
+    url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent?key={api_key}"
+
     for page_num in pages_list:
-        print(f"Processing Page {page_num}...")
-        page = doc[page_num]
+        if page_num < 0 or page_num >= len(doc):
+            print(f"Skipping invalid page number: {page_num}")
+            continue
+
+        page = doc.load_page(page_num)
         
-        # Render page to an image
-        # High DPI for better OCR (zoom 2)
-        matrix = fitz.Matrix(2.0, 2.0)
-        pix = page.get_pixmap(matrix=matrix)
-        
-        # Convert to base64
+        # Render page to image (DPI 150 is usually enough for OCR)
+        pix = page.get_pixmap(dpi=150)
         img_bytes = pix.tobytes("jpeg")
-        base64_image = base64.b64encode(img_bytes).decode('utf-8')
-        
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}"
-        }
-        
+        base64_image = base64.b64encode(img_bytes).decode("utf-8")
+
         payload = {
-            "model": "gpt-4o",
-            "messages": [
+            "systemInstruction": {
+                "parts": [{"text": system_prompt}]
+            },
+            "contents": [
                 {
-                    "role": "system",
-                    "content": system_prompt
-                },
-                {
-                    "role": "user",
-                    "content": [
+                    "parts": [
                         {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{base64_image}"
+                            "inlineData": {
+                                "mimeType": "image/jpeg",
+                                "data": base64_image
                             }
+                        },
+                        {
+                            "text": "Extract the table from this image as a CSV."
                         }
                     ]
                 }
-            ],
-            "max_tokens": 4096,
-            "temperature": 0.0
+            ]
         }
+
+        print(f"Processing page {page_num + 1} / {len(doc)} via Gemini...")
         
         try:
-            response = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload)
-            response.raise_for_status()
-            result_text = response.json()['choices'][0]['message']['content'].strip()
+            response = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=60)
             
-            if result_text == "EMPTY" or ("EMPTY" in result_text and len(result_text) < 10):
-                print(f"  No survey data found on page {page_num}.")
+            if response.status_code != 200:
+                print(f"Gemini API error on page {page_num + 1}: {response.status_code} - {response.text}")
+                continue
+
+            response_json = response.json()
+            
+            candidates = response_json.get("candidates", [])
+            if not candidates:
+                print(f"No candidates returned for page {page_num + 1}")
                 continue
                 
-            # Clean up potential markdown formatting if the model disobeys
-            if result_text.startswith("```csv"):
-                result_text = result_text[6:]
-            elif result_text.startswith("```"):
-                result_text = result_text[3:]
-            if result_text.endswith("```"):
-                result_text = result_text[:-3]
+            content = candidates[0].get("content", {})
+            parts = content.get("parts", [])
+            if not parts:
+                continue
                 
-            result_text = result_text.strip()
+            csv_text = parts[0].get("text", "").strip()
+
+            # Clean up markdown formatting if the model ignored instructions
+            if csv_text.startswith("```csv"):
+                csv_text = csv_text[6:]
+            if csv_text.startswith("```"):
+                csv_text = csv_text[3:]
+            if csv_text.endswith("```"):
+                csv_text = csv_text[:-3]
             
-            # Parse into pandas robustly (skip bad lines)
-            df = pd.read_csv(io.StringIO(result_text), on_bad_lines='skip')
-            
+            csv_text = csv_text.strip()
+
+            if csv_text.upper() == "EMPTY" or not csv_text:
+                print(f"Page {page_num + 1} is empty or contains no relevant data.")
+                continue
+
+            # Read the CSV text into a DataFrame
+            df = pd.read_csv(io.StringIO(csv_text))
             if not df.empty:
-                print(f"\n--- Found Table on Page {page_num} ---")
+                print(f"Successfully extracted {len(df)} rows from page {page_num + 1}")
                 print(_ascii_safe_preview(df))
                 all_dataframes.append(df)
-                
+            else:
+                print(f"DataFrame for page {page_num + 1} was empty.")
+
         except Exception as e:
-            print(f"  Error parsing page {page_num}: {e}")
+            print(f"Failed to process page {page_num + 1}: {e}")
 
     if not all_dataframes:
-        print("No tables detected by GPT-4o.")
-        
-    return all_dataframes
+        return None
+
+    # Combine all pages
+    combined_df = pd.concat(all_dataframes, ignore_index=True)
+    return combined_df
 
 if __name__ == "__main__":
     import sys
