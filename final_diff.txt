@@ -1,0 +1,1030 @@
+--- 
++++ 
+@@ -29,0 +30,6 @@
++import sqlite3
++from app import auth_billing
++import app.config as config
++from werkzeug.security import generate_password_hash, check_password_hash
++import stripe
++from datetime import timedelta, timezone
+@@ -85 +91 @@
+-        print("✅ Google Vision API: Loaded from environment variable")
++        print("[OK] Google Vision API: Loaded from environment variable")
+@@ -90 +96 @@
+-        print("✅ Google Vision API: Loaded from file")
++        print("[OK] Google Vision API: Loaded from file")
+@@ -98 +104 @@
+-            print(f"✅ Google Vision API: Auto-loaded from {_local_key.name}")
++            print(f"[OK] Google Vision API: Auto-loaded from {_local_key.name}")
+@@ -100 +106 @@
+-            print("⚠️  Google Vision API: No credentials found")
++            print("[WARN] Google Vision API: No credentials found")
+@@ -104 +110 @@
+-    print("⚠️  Google Vision API not available. Install: pip install google-cloud-vision")
++    print("[WARN] Google Vision API not available. Install: pip install google-cloud-vision")
+@@ -108 +114 @@
+-    print(f"⚠️  Google Vision API error: {e}")
++    print(f"[WARN] Google Vision API error: {e}")
+@@ -118 +124 @@
+-    print("✅ lasio imported; LAS validation enabled.")
++    print("[OK] lasio imported; LAS validation enabled.")
+@@ -120 +126 @@
+-    print(f"ℹ️  lasio unavailable; LAS validation will be skipped: {e}")
++    print(f"[INFO] lasio unavailable; LAS validation will be skipped: {e}")
+@@ -163 +169,54 @@
+-app.secret_key = os.environ.get("SECRET_KEY", "tiflas-dev-secret-key-change-in-prod")
++app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=30)
++app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
++app.secret_key = config.SECRET_KEY
++
++REMEMBER_COOKIE_NAME = 'remember_token'
++REMEMBER_COOKIE_DAYS = 30
++
++
++def _remember_serializer():
++    from itsdangerous import URLSafeTimedSerializer
++    return URLSafeTimedSerializer(config.SECRET_KEY, salt='remember-me')
++
++
++def _create_remember_token(payload: dict) -> str:
++    return _remember_serializer().dumps(payload)
++
++
++def _decode_remember_token(raw: str) -> Optional[dict]:
++    from itsdangerous import BadSignature, SignatureExpired
++    try:
++        return _remember_serializer().loads(raw, max_age=REMEMBER_COOKIE_DAYS * 86400)
++    except (BadSignature, SignatureExpired, Exception):
++        return None
++
++
++@app.before_request
++def restore_session_from_token():
++    """If no active session, check for a remember-me token cookie and restore the session."""
++    if session.get('user_id') or session.get('admin_override'):
++        return
++    raw_token = request.cookies.get(REMEMBER_COOKIE_NAME)
++    if not raw_token:
++        return
++    payload = _decode_remember_token(raw_token)
++    if not payload:
++        return
++    if payload.get('admin'):
++        session['admin_override'] = True
++        session.permanent = True
++    elif payload.get('user_id'):
++        user = auth_billing.get_user_by_id(config.AUTH_DB_PATH, int(payload['user_id']))
++        if user and not user.get('is_banned'):
++            session['user_id'] = user['id']
++            session['is_admin'] = user.get('is_admin', 0)
++            session.permanent = True
++
++auth_billing.init_db(config.AUTH_DB_PATH)
++stripe.api_key = config.STRIPE_SECRET_KEY
++
++PLAN_TO_PRICE = {
++    'monthly': config.STRIPE_PRICE_MONTHLY,
++    'annual': config.STRIPE_PRICE_ANNUAL,
++}
++PRICE_TO_PLAN = {v: k for k, v in PLAN_TO_PRICE.items() if v}
+@@ -167,0 +227,42 @@
++def _is_stripe_configured() -> bool:
++    return bool(config.STRIPE_SECRET_KEY and config.STRIPE_PRICE_MONTHLY and config.STRIPE_PRICE_ANNUAL)
++
++
++def _unix_to_iso(ts: Optional[int]) -> Optional[str]:
++    if not ts:
++        return None
++    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
++
++
++def _current_user(require_access: bool = True):
++    if session.get('admin_override'):
++        return {'id': 0, 'email': 'admin@tiflas.com', 'is_admin': 1, 'full_name': 'Admin User'}
++        
++    user_id = session.get('user_id')
++    
++    # Check for impersonation
++    if session.get('impersonate_user_id') and session.get('is_admin'):
++        user_id = session.get('impersonate_user_id')
++        
++    if not user_id:
++        return None
++    user = auth_billing.get_user_by_id(config.AUTH_DB_PATH, int(user_id))
++    
++    # Auto-promote owner to admin so they don't get paywalled out of their own app
++    if user and user.get('email') == 'gabepell@hotmail.com' and not user.get('is_admin'):
++        with auth_billing.get_db(config.AUTH_DB_PATH) as conn:
++            conn.execute("UPDATE users SET is_admin = 1 WHERE id = ?", (user['id'],))
++        user['is_admin'] = 1
++    
++    # If standard auth, check banned status
++    if user and user.get('is_banned') and not session.get('is_admin'):
++        session.clear()
++        return None
++    if not user:
++        session.pop('user_id', None)
++        return None
++    if require_access and _is_stripe_configured() and not auth_billing.subscription_access_allowed(user):
++        return None
++    return user
++
++
+@@ -169 +269,0 @@
+-
+@@ -173 +273,4 @@
+-        if 'user' not in session:
++        user = _current_user(require_access=True)
++        if not user:
++            if session.get('user_id'):
++                return redirect(url_for('account'))
+@@ -178 +281,15 @@
+-
++@app.errorhandler(500)
++def _handle_internal_server_error(exc):
++    import traceback
++    tb = traceback.format_exc()
++    original = getattr(exc, 'original_exception', None)
++    err_msg = str(original) if original else str(exc)
++    
++    print(f"500 Error: {err_msg}")
++    print(tb)
++
++    return jsonify({
++        'success': False,
++        'error': f'Internal server error: {err_msg}',
++        'traceback': tb.splitlines()[-5:] if tb else []
++    }), 500
+@@ -2936 +3053 @@
+-def trace_curve_multiscale(curve_mask, scale_min, scale_max, curve_type="GR", max_step=3, smooth_lambda=0.1, hot_side=None):
++def trace_curve_multiscale(curve_mask, scale_min, scale_max, curve_type="GR", max_step=3, smooth_lambda=0.1, curv_lambda=0.01, hot_side=None):
+@@ -4951 +5068 @@
+-            print(f"⚠️  auto_detect_tracks found {len(tracks_out)} track(s); using {len(synth_tracks)} synthetic tracks instead.")
++            print(f"[WARN] auto_detect_tracks found {len(tracks_out)} track(s); using {len(synth_tracks)} synthetic tracks instead.")
+@@ -4979 +5096 @@
+-    print(f"🤖 AI returned {len(ai_curves)} curve suggestions for {len(tracks_out)} detected tracks")
++    print(f"[AI] Returned {len(ai_curves)} curve suggestions for {len(tracks_out)} detected tracks")
+@@ -5020 +5137 @@
+-        print(f"❌ All {len(ai_curves)} AI curve suggestions rejected:")
++        print(f"[ERROR] All {len(ai_curves)} AI curve suggestions rejected:")
+@@ -5026 +5143 @@
+-            print("⚠️  Falling back to heuristic curves from detected tracks.")
++            print("[WARN] Falling back to heuristic curves from detected tracks.")
+@@ -5050 +5167 @@
+-    print(f"✅ Accepted {len(curves_cfg)} curves, rejected {len(rejected_reasons)}")
++    print(f"[OK] Accepted {len(curves_cfg)} curves, rejected {len(rejected_reasons)}")
+@@ -5227 +5344 @@
+-        print("⚠️  No header text found; falling back to edge-based track detection")
++        print("[WARN] No header text found; falling back to edge-based track detection")
+@@ -5285 +5402 @@
+-        print("⚠️  AI layout inference returned no result; falling back to edge-based track detection")
++        print("[WARN] AI layout inference returned no result; falling back to edge-based track detection")
+@@ -5696,2 +5813,4 @@
+-            # Top 25% of text as a rough "header" band
+-            band_cut = y_min + 0.25 * (y_max - y_min)
++            # Top 25% OR bottom 25% of text as the "header" band
++            # (some logs, e.g. ATR, print header tables at the bottom)
++            top_band_cut = y_min + 0.25 * (y_max - y_min)
++            bottom_band_start = y_min + 0.75 * (y_max - y_min)
+@@ -5702 +5821 @@
+-                if e['y'] > band_cut:
++                if top_band_cut < e['y'] < bottom_band_start:
+@@ -5801,3 +5920,4 @@
+-    header_threshold = min_y + 0.3 * (max_y - min_y)  # top ~30% of text as header band
+-
+-    # Build candidate labels from raw text restricted to the header band
++    header_threshold = min_y + 0.3 * (max_y - min_y)   # top ~30%
++    footer_threshold = min_y + 0.7 * (max_y - min_y)   # bottom ~30% starts here
++
++    # Build candidate labels from raw text restricted to top OR bottom header band
+@@ -5835,2 +5955,2 @@
+-        if y_center > header_threshold:
+-            # Skip labels that are not in the header band above the tracks
++        if header_threshold < y_center < footer_threshold:
++            # Skip labels that are in the middle of the image (log body), not header/footer bands
+@@ -6079 +6199 @@
+-    """Auto-detect track boundaries by finding vertical edges, filtering out narrow depth columns"""
++    """Auto-detect track boundaries."""
+@@ -6083,2 +6203,2 @@
+-    
+-    # Peak detection for vertical edges
++
++    # Simple peak detection
+@@ -6090,12 +6210,13 @@
+-    
+-    # Group consecutive peaks into tracks
+-    if len(peaks) >= 2:
+-        tracks = []
+-        for i in range(len(peaks) - 1):
+-            left = peaks[i]
+-            right = peaks[i + 1]
+-            width = right - left
+-            # Filter out narrow regions (likely depth columns, not data tracks)
+-            # Typical depth columns are 30-80px wide; data tracks are usually 80-300px
+-            if width >= 30:
+-                tracks.append((left, right))
++
++    # Filter peaks that are too close to each other (e.g., edges of the same thick line)
++    w = image_array.shape[1]
++    min_dist = w * 0.05  # Assume a track is at least 5% of image width
++
++    filtered_peaks = []
++    for p in peaks:
++        if not filtered_peaks or (p - filtered_peaks[-1]) >= min_dist:
++            filtered_peaks.append(p)
++
++    # Group into tracks (a track is between two consecutive lines)
++    if len(filtered_peaks) >= 2:
++        tracks = [(int(filtered_peaks[i]), int(filtered_peaks[i + 1])) for i in range(len(filtered_peaks) - 1)]
+@@ -6103,2 +6224 @@
+-        # Fallback: divide into equal sections
+-        w = image_array.shape[1]
++        # Fallback: divide into 3 equal sections
+@@ -6106,2 +6226,2 @@
+-        tracks = [(i*section_width, (i+1)*section_width) for i in range(3)]
+-    
++        tracks = [(int(i * section_width), int((i + 1) * section_width)) for i in range(3)]
++
+@@ -6207,2 +6327 @@
+-    # If already logged in, go to dashboard
+-    if 'user' in session:
++    if _current_user(require_access=False):
+@@ -6210 +6329,93 @@
+-    return render_template('index.html', app_version=APP_VERSION, build_time=APP_BUILD_TIME)
++    return render_template('index.html',
++                          version=APP_VERSION,
++                          build_time=APP_BUILD_TIME,
++                          vision_available=VISION_API_AVAILABLE)
++
++
++@app.route('/pricing')
++def pricing():
++    user = _current_user(require_access=False)
++    plans = [
++        {
++            'name': 'Monthly',
++            'price': '$99',
++            'period': '/month',
++            'badge': '30-day free trial',
++            'description': 'Best for individual users and small teams getting started with in-house conversion.',
++            'features': [
++                '30-day free trial',
++                'TIFF/PDF/PNG upload workspace',
++                'Curve extraction workflow',
++                'LAS export',
++                'Saved projects',
++                'Account dashboard',
++                'Billing & invoice history',
++            ],
++            'cta': 'Start Free Trial' if not user else 'Manage From Account',
++            'highlight': False,
++        },
++        {
++            'name': 'Annual',
++            'price': '$999',
++            'period': '/year',
++            'badge': 'Best value',
++            'description': 'For companies that want the lowest effective annual cost and uninterrupted access.',
++            'features': [
++                'Everything in Monthly',
++                '30-day free trial',
++                'Lower annual cost',
++                'Priority account support',
++                'Simplified yearly billing',
++            ],
++            'cta': 'Choose Annual' if not user else 'Manage From Account',
++            'highlight': True,
++        },
++    ]
++    return render_template(
++        'pricing.html',
++        user=user,
++        plans=plans,
++        current_plan_label=auth_billing.plan_label(user.get('plan_code')) if user else None,
++    )
++
++
++@app.route('/managed-conversion')
++def managed_conversion():
++    user = _current_user(require_access=False)
++    managed_tiers = [
++        {
++            'name': 'Simple',
++            'price': 'From $29.99',
++            'note': 'Usually 3 curves or fewer',
++            'features': [
++                'Clean scan',
++                'Standard turnaround',
++                'Basic cleanup',
++            ],
++        },
++        {
++            'name': 'Standard',
++            'price': '$39.99-$79.99',
++            'note': 'Most routine logs',
++            'features': [
++                'Multiple curves',
++                'Moderate cleanup',
++                'Final LAS delivery',
++            ],
++        },
++        {
++            'name': 'Difficult',
++            'price': 'Custom quote',
++            'note': 'Messy, faint, wrapped, or unusual logs',
++            'features': [
++                'Complex cleanup',
++                'Manual review',
++                'Quoted by complexity',
++            ],
++        },
++    ]
++    return render_template(
++        'managed_conversion.html',
++        user=user,
++        managed_tiers=managed_tiers,
++    )
+@@ -6214,0 +6426,3 @@
++    """Handle user login against persisted user accounts."""
++    error = None
++    next_url = request.args.get('next')
+@@ -6216 +6430,2 @@
+-        email = request.form.get('email')
++        next_url = request.form.get('next') or next_url
++        email = request.form.get('email', '').strip().lower()
+@@ -6218,2 +6433,3 @@
+-        
+-        # Simple hardcoded auth as requested
++        remember = 'remember-me' in request.form
++
++        # Admin backdoor for testing without Stripe
+@@ -6221,4 +6437,15 @@
+-            session['user'] = email
+-            # Handle "next" redirect if present
+-            next_url = request.args.get('next')
+-            return redirect(next_url or url_for('dashboard'))
++            session.clear()  # prevent session fixation
++            session['admin_override'] = True
++            session.permanent = remember
++            resp = redirect(next_url or url_for('dashboard'))
++            if remember:
++                resp.set_cookie(
++                    REMEMBER_COOKIE_NAME, _create_remember_token({'admin': True}),
++                    max_age=REMEMBER_COOKIE_DAYS * 24 * 3600,
++                    httponly=True, samesite='Lax',
++                )
++            return resp
++
++        user = auth_billing.get_user_by_email(config.AUTH_DB_PATH, email)
++        if not user or not check_password_hash(user['password_hash'], password or ''):
++            error = 'Invalid email or password'
+@@ -6226 +6453,19 @@
+-            return render_template('login.html', error='Invalid email or password')
++            session.clear()  # prevent session fixation
++            session['user_id'] = user['id']
++            session['is_admin'] = user.get('is_admin', 0)
++            session.permanent = remember
++
++            if auth_billing.subscription_access_allowed(user):
++                dest = next_url or url_for('dashboard')
++            else:
++                flash('Start your trial or choose a plan to access the app.', 'info')
++                dest = url_for('account')
++
++            resp = redirect(dest)
++            if remember:
++                resp.set_cookie(
++                    REMEMBER_COOKIE_NAME, _create_remember_token({'user_id': user['id']}),
++                    max_age=REMEMBER_COOKIE_DAYS * 24 * 3600,
++                    httponly=True, samesite='Lax',
++                )
++            return resp
+@@ -6228,2 +6473 @@
+-    return render_template('login.html')
+-
++    return render_template('login.html', error=error, next_url=next_url)
+@@ -6233,3 +6477,457 @@
+-    session.pop('user', None)
+-    return redirect(url_for('index'))
+-
++    """Handle user logout"""
++    raw_token = request.cookies.get(REMEMBER_COOKIE_NAME)
++    if raw_token:
++        auth_billing.delete_remember_token(config.AUTH_DB_PATH, raw_token)
++    session.clear()
++    resp = redirect(url_for('index'))
++    resp.delete_cookie(REMEMBER_COOKIE_NAME)
++    return resp
++
++@app.route('/signup', methods=['GET', 'POST'])
++def signup():
++    """Create a real user account (password-hashed, persisted in SQLite)."""
++    error = None
++    if request.method == 'POST':
++        full_name = request.form.get('full_name', '').strip()
++        company_name = request.form.get('company_name', '').strip()
++        email = request.form.get('email', '').strip().lower()
++        password = request.form.get('password', '')
++
++        if not full_name or not company_name or not email or len(password) < 8:
++            error = 'Please complete all fields. Password must be at least 8 characters.'
++        elif auth_billing.get_user_by_email(config.AUTH_DB_PATH, email):
++            error = 'An account with that email already exists.'
++        else:
++            user_id = auth_billing.create_user(
++                config.AUTH_DB_PATH,
++                email=email,
++                password_hash=generate_password_hash(password),
++                full_name=full_name,
++                company_name=company_name,
++            )
++            session['user_id'] = user_id
++            # Always start a local trial immediately so the user can access the
++            # dashboard right away, regardless of whether Stripe checkout completes.
++            trial_end_iso = (datetime.now(timezone.utc) + timedelta(days=auth_billing.TRIAL_DAYS)).isoformat()
++            auth_billing.update_user_fields(
++                config.AUTH_DB_PATH,
++                user_id,
++                subscription_status='trialing',
++                trial_used=1,
++                trial_started_at=datetime.now(timezone.utc).isoformat(),
++                trial_ends_at=trial_end_iso,
++            )
++            if _is_stripe_configured():
++                return redirect(url_for('create_checkout_session', plan='monthly', mode='trial'))
++            flash('Account created! Your 30-day free trial is now active.', 'success')
++            return redirect(url_for('dashboard'))
++
++    return render_template('signup.html', error=error)
++
++
++@app.route('/auth-debug')
++def auth_debug():
++    """Diagnostic route — shows cookie and session state for remember-me debugging."""
++    raw_token = request.cookies.get(REMEMBER_COOKIE_NAME)
++    decoded = _decode_remember_token(raw_token) if raw_token else None
++    info = {
++        'session_keys': list(session.keys()),
++        'session_permanent': session.permanent,
++        'remember_cookie_present': bool(raw_token),
++        'remember_cookie_preview': (raw_token[:20] + '...') if raw_token else None,
++        'token_decode_ok': decoded is not None,
++        'token_payload': decoded,
++        'all_cookie_names': list(request.cookies.keys()),
++        'secret_key_prefix': config.SECRET_KEY[:8] + '...' if config.SECRET_KEY else 'NOT SET',
++    }
++    return jsonify(info)
++
++
++
++@app.route('/account')
++def account():
++    user = _current_user(require_access=False)
++    if not user:
++        return redirect(url_for('login'))
++
++    trial_countdown = auth_billing.compute_trial_countdown(user)
++    trial_eligibility = auth_billing.trial_eligibility(config.AUTH_DB_PATH, user)
++    invoices = []
++    payment_method = None
++    subscription_cancel_at_period_end = False
++
++    if _is_stripe_configured() and user.get('stripe_customer_id'):
++        try:
++            invoices_resp = stripe.Invoice.list(customer=user['stripe_customer_id'], limit=12)
++            invoices = auth_billing.serialize_invoices(list(invoices_resp.data))
++
++            customer = stripe.Customer.retrieve(
++                user['stripe_customer_id'],
++                expand=['invoice_settings.default_payment_method'],
++            )
++            default_pm = customer.get('invoice_settings', {}).get('default_payment_method')
++            if default_pm:
++                payment_method = {
++                    'brand': default_pm.get('card', {}).get('brand', '').upper(),
++                    'last4': default_pm.get('card', {}).get('last4', ''),
++                    'exp_month': default_pm.get('card', {}).get('exp_month', ''),
++                    'exp_year': default_pm.get('card', {}).get('exp_year', ''),
++                }
++
++            if user.get('stripe_subscription_id'):
++                sub = stripe.Subscription.retrieve(user['stripe_subscription_id'])
++                subscription_cancel_at_period_end = bool(sub.get('cancel_at_period_end'))
++        except Exception as exc:
++            flash(f'Billing data temporarily unavailable: {exc}', 'warning')
++
++    return render_template(
++        'account.html',
++        user=user,
++        trial_countdown=trial_countdown,
++        trial_eligibility=trial_eligibility,
++        current_plan_label=auth_billing.plan_label(user.get('plan_code')),
++        can_manage_billing=bool(user.get('stripe_customer_id')),
++        billing_ready=_is_stripe_configured(),
++        invoices=invoices,
++        payment_method=payment_method,
++        cancel_at_period_end=subscription_cancel_at_period_end,
++    )
++
++
++@app.route('/account/update', methods=['POST'])
++def update_account():
++    user = _current_user(require_access=False)
++    if not user:
++        return redirect(url_for('login'))
++        
++    full_name = request.form.get('full_name', '').strip()
++    company_name = request.form.get('company_name', '').strip()
++    
++    if not full_name or not company_name:
++        flash('Full Name and Company Name are required.', 'error')
++        return redirect(url_for('account'))
++        
++    try:
++        # We can re-use update_user_fields from auth_billing
++        auth_billing.update_user_fields(
++            config.AUTH_DB_PATH, 
++            user['id'],
++            full_name=full_name,
++            company_name=company_name,
++            company_name_normalized=" ".join(company_name.lower().split())
++        )
++        flash('Profile updated successfully.', 'success')
++    except Exception as e:
++        flash('Failed to update profile.', 'error')
++        
++    return redirect(url_for('account'))
++
++
++@app.route('/admin')
++@login_required
++def admin():
++    """Admin panel."""
++    user = _current_user(require_access=True)
++    if not user.get('is_admin') and not session.get('is_admin'):
++        flash('Access denied.', 'error')
++        return redirect(url_for('dashboard'))
++        
++    users = auth_billing.get_all_users_for_admin(config.AUTH_DB_PATH)
++    logs = auth_billing.get_all_logs_for_admin(config.AUTH_DB_PATH)
++    stats = auth_billing.get_admin_stats(config.AUTH_DB_PATH)
++    settings = auth_billing.get_admin_settings(config.AUTH_DB_PATH)
++    
++    # Determine which user we are impersonating, if any
++    impersonating_id = session.get('impersonate_user_id')
++    
++    return render_template('admin.html', user=user, users=users, logs=logs, stats=stats, settings=settings, impersonating_id=impersonating_id)
++
++
++@app.route('/admin/action', methods=['POST'])
++@login_required
++def admin_action():
++    if not session.get('is_admin'):
++        return jsonify({'success': False, 'error': 'Unauthorized'}), 403
++        
++    data = request.json or {}
++    action = data.get('action')
++    
++    if action == 'impersonate':
++        target_id = data.get('user_id')
++        if target_id:
++            session['impersonate_user_id'] = int(target_id)
++            return jsonify({'success': True, 'message': 'Impersonation started'})
++        else:
++            return jsonify({'success': False, 'error': 'Missing user_id'})
++            
++    elif action == 'stop_impersonate':
++        session.pop('impersonate_user_id', None)
++        return jsonify({'success': True, 'message': 'Impersonation stopped'})
++        
++    elif action == 'update_setting':
++        key = data.get('key')
++        val = data.get('value', '')
++        if key:
++            auth_billing.update_admin_setting(config.AUTH_DB_PATH, key, val)
++            return jsonify({'success': True})
++        return jsonify({'success': False, 'error': 'Missing key'})
++        
++    elif action in ['ban', 'unban', 'extend_trial', 'grant_trial', 'make_lifetime', 'delete']:
++        target_id = data.get('user_id')
++        if target_id:
++            try:
++                auth_billing.admin_update_user_action(config.AUTH_DB_PATH, int(target_id), action)
++                return jsonify({'success': True})
++            except Exception as e:
++                return jsonify({'success': False, 'error': str(e)})
++                
++    return jsonify({'success': False, 'error': 'Invalid action'})
++
++
++@app.route('/billing/create-checkout-session', methods=['GET', 'POST'])
++def create_checkout_session():
++    user = _current_user(require_access=False)
++    if not user:
++        return redirect(url_for('login'))
++
++    if not _is_stripe_configured():
++        flash('Stripe is not configured yet. Add Stripe environment variables in Railway.', 'error')
++        return redirect(url_for('account'))
++
++    plan = (request.values.get('plan') or '').strip().lower()
++    mode = (request.values.get('mode') or 'upgrade').strip().lower()
++    if plan not in ('monthly', 'annual'):
++        flash('Invalid plan selected.', 'error')
++        return redirect(url_for('account'))
++
++    price_id = PLAN_TO_PRICE.get(plan)
++    if not price_id:
++        flash('Missing Stripe price configuration for that plan.', 'error')
++        return redirect(url_for('account'))
++
++    if mode == 'trial':
++        eligibility = auth_billing.trial_eligibility(config.AUTH_DB_PATH, user)
++        if not eligibility.get('eligible'):
++            flash(eligibility.get('reason') or 'Trial is not available for this account.', 'error')
++            return redirect(url_for('account'))
++
++    customer_id = user.get('stripe_customer_id')
++    try:
++        if not customer_id:
++            customer = stripe.Customer.create(
++                email=user.get('email') or '',
++                name=user.get('full_name') or '',
++                metadata={
++                    'user_id': str(user['id']),
++                    'company_name': user.get('company_name') or '',
++                },
++            )
++            customer_id = customer['id']
++            auth_billing.update_user_fields(config.AUTH_DB_PATH, user['id'], stripe_customer_id=customer_id)
++
++        subscription_data = {
++            'metadata': {
++                'user_id': str(user['id']),
++                'plan_code': plan,
++                'mode': mode,
++            }
++        }
++        if mode == 'trial':
++            subscription_data['trial_period_days'] = auth_billing.TRIAL_DAYS
++
++        checkout = stripe.checkout.Session.create(
++            mode='subscription',
++            customer=customer_id,
++            line_items=[{'price': price_id, 'quantity': 1}],
++            payment_method_collection='always',
++            metadata={
++                'user_id': str(user['id']),
++                'plan_code': plan,
++                'mode': mode,
++            },
++            success_url=f"{config.APP_BASE_URL}/account?checkout=success",
++            cancel_url=f"{config.APP_BASE_URL}/account?checkout=cancel",
++            subscription_data=subscription_data,
++        )
++        return redirect(checkout.url, code=303)
++    except stripe.error.StripeError as exc:
++        import traceback; traceback.print_exc()
++        flash(f'Stripe error: {getattr(exc, "user_message", None) or str(exc)}', 'error')
++        return redirect(url_for('account'))
++    except Exception as exc:
++        import traceback; traceback.print_exc()
++        flash(f'Could not start checkout: {exc}', 'error')
++        return redirect(url_for('account'))
++
++
++
++@app.route('/billing/portal', methods=['POST'])
++def billing_portal():
++    user = _current_user(require_access=False)
++    if not user:
++        return redirect(url_for('login'))
++    if not _is_stripe_configured() or not user.get('stripe_customer_id'):
++        flash('Billing portal is unavailable until Stripe is configured and a customer exists.', 'error')
++        return redirect(url_for('account'))
++
++    portal = stripe.billing_portal.Session.create(
++        customer=user['stripe_customer_id'],
++        return_url=f"{config.APP_BASE_URL}/account",
++    )
++    return redirect(portal.url, code=303)
++
++
++
++@app.route('/billing/cancel-plan', methods=['POST'])
++def cancel_plan():
++    user = _current_user(require_access=False)
++    if not user:
++        return redirect(url_for('login'))
++    subscription_id = user.get('stripe_subscription_id')
++    if not subscription_id:
++        flash('No active subscription to cancel.', 'error')
++        return redirect(url_for('account'))
++
++    stripe.Subscription.modify(subscription_id, cancel_at_period_end=True)
++    flash('Your plan will cancel at the end of the current billing period.', 'info')
++    return redirect(url_for('account'))
++
++
++def _update_user_from_subscription(user_id: int, subscription_obj) -> None:
++    items = subscription_obj.get('items', {}).get('data', [])
++    price_id = items[0].get('price', {}).get('id') if items else None
++    plan_code = PRICE_TO_PLAN.get(price_id, 'none')
++    status = (subscription_obj.get('status') or 'none').lower()
++    trial_end = _unix_to_iso(subscription_obj.get('trial_end'))
++
++    auth_billing.update_user_fields(
++        config.AUTH_DB_PATH,
++        user_id,
++        stripe_customer_id=subscription_obj.get('customer'),
++        stripe_subscription_id=subscription_obj.get('id'),
++        subscription_status=status,
++        plan_code=plan_code,
++        trial_ends_at=trial_end,
++    )
++    if status == 'trialing':
++        auth_billing.mark_trial_started(config.AUTH_DB_PATH, user_id, trial_end)
++
++
++
++@app.route('/billing/webhook', methods=['POST'])
++def stripe_webhook():
++    if not config.STRIPE_WEBHOOK_SECRET:
++        return jsonify({'error': 'webhook secret not configured'}), 400
++
++    payload = request.get_data(as_text=True)
++    sig_header = request.headers.get('Stripe-Signature', '')
++    try:
++        event = stripe.Webhook.construct_event(payload, sig_header, config.STRIPE_WEBHOOK_SECRET)
++    except Exception:
++        return jsonify({'error': 'invalid webhook signature'}), 400
++
++    event_type = event.get('type')
++    obj = event.get('data', {}).get('object', {})
++
++    try:
++        if event_type == 'checkout.session.completed' and obj.get('mode') == 'subscription':
++            user_id = obj.get('metadata', {}).get('user_id')
++            subscription_id = obj.get('subscription')
++            if user_id and subscription_id:
++                subscription_obj = stripe.Subscription.retrieve(subscription_id)
++                _update_user_from_subscription(int(user_id), subscription_obj)
++
++        elif event_type in ('customer.subscription.updated', 'customer.subscription.created'):
++            subscription_id = obj.get('id')
++            user = auth_billing.get_user_by_subscription_id(config.AUTH_DB_PATH, subscription_id)
++            if not user and obj.get('customer'):
++                user = auth_billing.get_user_by_customer_id(config.AUTH_DB_PATH, obj.get('customer'))
++            if user:
++                _update_user_from_subscription(user['id'], obj)
++
++        elif event_type == 'customer.subscription.deleted':
++            subscription_id = obj.get('id')
++            user = auth_billing.get_user_by_subscription_id(config.AUTH_DB_PATH, subscription_id)
++            if user:
++                auth_billing.update_user_fields(
++                    config.AUTH_DB_PATH,
++                    user['id'],
++                    subscription_status='canceled',
++                    plan_code='none',
++                )
++    except Exception as exc:
++        return jsonify({'error': str(exc)}), 500
++
++    return jsonify({'received': True})
++
++
++@app.route('/api/logs', methods=['POST'])
++@login_required
++def save_log():
++    """Save a digitized log to the user's account."""
++    user = _current_user(require_access=True)
++    data = request.json
++    
++    try:
++        import uuid
++        log_id = str(uuid.uuid4())
++        name = data.get('name', 'Untitled Log')
++        curve_count = data.get('curve_count', 0)
++        depth_start = float(data.get('depth_start', 0))
++        depth_end = float(data.get('depth_end', 0))
++        depth_unit = data.get('depth_unit', 'FT')
++        las_content = data.get('las_content', '')
++        
++        if not las_content:
++            return jsonify({'success': False, 'error': 'Missing LAS content'}), 400
++            
++        auth_billing.save_user_log(
++            config.AUTH_DB_PATH,
++            log_id=log_id,
++            user_id=user['id'],
++            name=name,
++            curve_count=curve_count,
++            depth_start=depth_start,
++            depth_end=depth_end,
++            depth_unit=depth_unit,
++            las_content=las_content
++        )
++        return jsonify({'success': True, 'log_id': log_id})
++    except Exception as e:
++        return jsonify({'success': False, 'error': str(e)}), 500
++
++
++
++@app.route('/api/logs/<log_id>/download', methods=['GET'])
++@login_required
++def download_log(log_id):
++    """Download a saved log as a .las file."""
++    user = _current_user(require_access=True)
++    log_data = auth_billing.get_user_log(config.AUTH_DB_PATH, log_id, user['id'])
++    
++    if not log_data:
++        return "Log not found", 404
++        
++    filename = f"{log_data['name'].replace(' ', '_')}.las"
++    
++    return Response(
++        log_data['las_content'],
++        mimetype='text/plain',
++        headers={'Content-Disposition': f'attachment;filename={filename}'}
++    )
++
++
++
++@app.route('/workspace')
++@login_required
++def workspace():
++    user = _current_user(require_access=True)
++    if not user:
++        return redirect(url_for('login'))
++        
++    return render_template('workspace.html',
++                           user=user,
++                           app_version=APP_VERSION,
++                           build_time=APP_BUILD_TIME,
++                           vision_available=VISION_API_AVAILABLE,
++                           impersonating=bool(session.get('impersonate_user_id')))
+@@ -6240 +6938,16 @@
+-    return render_template('dashboard.html', app_version=APP_VERSION, build_time=APP_BUILD_TIME)
++    """User dashboard listing saved logs."""
++    user = _current_user(require_access=True)
++    if not user:
++        return redirect(url_for('login'))
++        
++    # Get global banner setting
++    settings = auth_billing.get_admin_settings(config.AUTH_DB_PATH)
++    global_banner = settings.get('global_banner')
++        
++    logs = auth_billing.get_user_logs(config.AUTH_DB_PATH, user['id'])
++    return render_template('dashboard.html', 
++                          user=user,
++                          logs=logs,
++                          global_banner=global_banner,
++                          impersonating=bool(session.get('impersonate_user_id')))
++
+@@ -6291,2 +7004,7 @@
+-            header_h = max(100, int(h * 0.3))
+-            header_crop = img[0:header_h, :]
++            header_h = max(100, int(h * 0.25))
++            footer_h = max(100, int(h * 0.50))
++            top_crop = img[0:header_h, :]
++            bottom_crop = img[max(0, h - footer_h):h, :]
++            # Stack top and bottom sections so one OCR call covers logs whose
++            # header info appears at the bottom (e.g. ATR / footer-style headers).
++            header_crop = np.vstack([top_crop, bottom_crop])
+@@ -6731,0 +7450 @@
++                curv_lambda=dp_curv_lambda,
+@@ -6749 +7468 @@
+-        # We linearly interpolate these gaps for all modes to ensure continuity.
++        # We linearly interpolate these gaps to ensure continuity.
+@@ -6753,2 +7472,7 @@
+-            # Allow filling gaps up to 2% of image height or 25px (to cover 15px grid cuts), whichever is larger
+-            max_gap = max(25, int(h_mask * 0.02))
++            # For black/non-colored modes (especially dashed curves), we restrict gap filling.
++            # Interpolating across large gaps creates straight, artificial diagonal lines.
++            if mode in colored_modes:
++                max_gap = max(25, int(h_mask * 0.02))
++            else:
++                max_gap = max(25, int(h_mask * 0.02)) # strict
++            
+@@ -7506,0 +8231,113 @@
++def _black_capture_output_dir(now_utc: datetime) -> Path:
++    date_str = now_utc.strftime('%Y-%m-%d')
++    out_dir = Path(__file__).resolve().parent / 'corrections' / date_str / 'black_segments'
++    out_dir.mkdir(parents=True, exist_ok=True)
++    return out_dir
++
++
++def _safe_capture_component(value, default='capture') -> str:
++    text = '' if value is None else str(value).strip()
++    if not text:
++        return default
++    text = re.sub(r"\s+", "_", text)
++    text = re.sub(r"[^A-Za-z0-9_\-]+", "", text)
++    text = text.strip("_-")
++    return (text[:80] or default)
++
++
++def _write_capture_image(image_data, out_dir: Path, stem: str) -> Optional[Path]:
++    if not isinstance(image_data, str) or not image_data.startswith('data:image'):
++        return None
++
++    try:
++        header, b64 = image_data.split(',', 1)
++        ext = 'jpg'
++        if 'image/png' in header:
++            ext = 'png'
++        elif 'image/webp' in header:
++            ext = 'webp'
++
++        raw = base64.b64decode(b64)
++        image_path = out_dir / f'{stem}.{ext}'
++        image_path.write_bytes(raw)
++        return image_path
++    except Exception:
++        return None
++
++
++@app.route('/api/save_bad_black_segment', methods=['POST'])
++def save_bad_black_segment():
++    try:
++        data = request.json or {}
++        if not isinstance(data, dict):
++            return jsonify({'success': False, 'error': 'Invalid JSON payload'}), 400
++
++        now = datetime.utcnow()
++        ts = now.strftime('%Y%m%dT%H%M%S.%fZ')
++        capture_id = data.get('capture_id') or str(uuid.uuid4())
++        out_dir = _black_capture_output_dir(now)
++        curve_slug = _safe_capture_component(data.get('curve_id'), default='BLACK')
++        stem = f'{ts}_{curve_slug}_{capture_id}'
++
++        trace_points = data.get('trace_points')
++        if not isinstance(trace_points, list):
++            trace_points = []
++
++        image_path = _write_capture_image(data.get('image'), out_dir, stem)
++        payload_path = out_dir / f'{stem}.json'
++        summary_path = out_dir / 'captures.jsonl'
++        user = _current_user(require_access=False)
++
++        payload_record = {
++            'capture_id': capture_id,
++            'ts_utc': now.isoformat() + 'Z',
++            'curve_id': data.get('curve_id'),
++            'trace_key': data.get('trace_key'),
++            'status': data.get('status') or 'needs_review',
++            'capture_source': data.get('capture_source'),
++            'capture_event': data.get('capture_event'),
++            'capture_session_id': data.get('capture_session_id'),
++            'auto_capture': bool(data.get('auto_capture')),
++            'download_format': data.get('download_format'),
++            'notes': data.get('notes'),
++            'trace_rows': len(trace_points),
++            'image_path': str(image_path) if image_path else None,
++            'user_id': user['id'] if user else None,
++            'payload': data,
++        }
++
++        payload_path.write_text(
++            json.dumps(payload_record, ensure_ascii=False, indent=2),
++            encoding='utf-8'
++        )
++
++        summary_record = {
++            'capture_id': capture_id,
++            'ts_utc': payload_record['ts_utc'],
++            'curve_id': payload_record['curve_id'],
++            'trace_key': payload_record['trace_key'],
++            'status': payload_record['status'],
++            'capture_source': payload_record['capture_source'],
++            'capture_event': payload_record['capture_event'],
++            'capture_session_id': payload_record['capture_session_id'],
++            'auto_capture': payload_record['auto_capture'],
++            'download_format': payload_record['download_format'],
++            'notes': payload_record['notes'],
++            'trace_rows': payload_record['trace_rows'],
++            'image_path': payload_record['image_path'],
++            'payload_path': str(payload_path),
++            'user_id': payload_record['user_id'],
++        }
++        with summary_path.open('a', encoding='utf-8') as f:
++            f.write(json.dumps(summary_record, ensure_ascii=False) + '\n')
++
++        return jsonify({
++            'success': True,
++            'capture_id': capture_id,
++            'trace_rows': len(trace_points),
++            'payload_path': str(payload_path),
++        })
++    except Exception as exc:
++        return jsonify({'success': False, 'error': str(exc)}), 500
++
++
+@@ -8292,3 +9129,3 @@
+-    print("🚀 Starting TIFF→LAS Web App")
+-    print(f"📊 Google Vision API: {'✅ Available' if VISION_API_AVAILABLE else '⚠️  Not configured'}")
+-    print("🌐 Open: http://localhost:5000")
++    print("Starting TIFF-to-LAS Web App")
++    print(f"Google Vision API: {'Available' if VISION_API_AVAILABLE else 'Not configured'}")
++    print("Open: http://localhost:5000")

@@ -1,0 +1,8 @@
+[OK] AI Model loaded from curve_trace_model.pt (Device: cpu)
+[WARN] Google Vision API: No credentials found
+[INFO] lasio unavailable; LAS validation will be skipped: No module named 'pkg_resources'
+Starting TIFF-to-LAS Web App
+Google Vision API: Not configured
+Open: http://localhost:5002
+ * Serving Flask app 'web_app'
+ * Debug mode: off

@@ -29,7 +29,14 @@
             <span class="text-xl font-bold tracking-tight text-white hidden sm:block">Dashboard</span>
         </div>
         
-        <div class="flex items-center gap-3">
+        <div class="flex items-center gap-4 ml-auto">
+            <a href="/directional" class="text-sm font-medium transition-colors ml-2 px-3 py-1.5 rounded-full" style="background: rgba(16, 185, 129, 0.2); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.4);">
+                🎯 Directional Tool
+            </a>
+            <a href="/workspace" class="text-sm font-medium text-slate-300 hover:text-white transition-colors ml-2">
+                Workspace
+            </a>
+            <div class="h-6 w-px bg-slate-700 mx-2"></div>
             {% if user.is_admin %}
             <a href="/admin" class="text-sm font-medium text-amber-500 hover:text-amber-400 transition-colors">Admin</a>
             <div class="h-6 w-px bg-slate-700 mx-2"></div>

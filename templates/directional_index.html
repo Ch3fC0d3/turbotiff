@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Directional Depth Converter</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='directional_style.css') }}">
+</head>
+<body>
+    <div class="container page-shell">
+        <div class="glass-panel form-panel">
+            <h1>Depth Converter Pro</h1>
+            <p class="subtitle" style="margin-bottom: 5px;">Upload <b>CSVs</b> or <b>Scanned PDFs</b>. The app will convert the curves and can open the result in a shared-depth log viewer.</p>
+            
+            <!-- MASTER CONVERSION FORM -->
+            <form id="convertForm" style="margin-top: 25px;">
+                
+                <h3 style="margin-bottom: 10px; font-size:16px; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:5px;">1. Directional Survey</h3>
+                <div class="row">
+                    <div class="form-group half" style="flex: 2;">
+                        <label for="survey">Survey File (CSV or PDF)</label>
+                        <input type="file" id="survey" name="survey" accept=".csv,.pdf" required>
+                    </div>
+                    <div class="form-group half" style="flex: 1;">
+                        <label for="survey_pages" style="color:var(--primary);">PDF Pages (Opt)</label>
+                        <input type="text" id="survey_pages" name="survey_pages" placeholder="e.g. 1, 2">
+                    </div>
+                </div>
+                
+                <h3 style="margin-bottom: 10px; font-size:16px; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:5px;">2. Curves File</h3>
+                <div class="row">
+                    <div class="form-group half" style="flex: 2;">
+                        <label for="curve">Curves File (CSV, PDF, or LAS)</label>
+                        <input type="file" id="curve" name="curve" accept=".csv,.pdf,.las" required>
+                    </div>
+                    <div class="form-group half" style="flex: 1;">
+                        <label for="curve_pages" style="color:var(--primary);">PDF Pages (Opt)</label>
+                        <input type="text" id="curve_pages" name="curve_pages" placeholder="e.g. 3">
+                    </div>
+                </div>
+
+                <h3 style="margin-bottom: 10px; font-size:16px; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:5px;">3. Parameters</h3>
+                <div class="row">
+                    <div class="form-group half">
+                        <label for="source_basis">Source Basis</label>
+                        <select id="source_basis" name="source_basis">
+                            <option value="MD">MD</option>
+                            <option value="TVD">TVD</option>
+                        </select>
+                    </div>
+                    <div class="form-group half">
+                        <label for="target_basis">Target Basis</label>
+                        <select id="target_basis" name="target_basis">
+                            <option value="TVD">TVD</option>
+                            <option value="MD">MD</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="row">
+                    <div class="form-group half">
+                        <label for="step">Step Size</label>
+                        <input type="number" id="step" name="step" value="1.0" step="0.1" required>
+                    </div>
+                    <div class="form-group half">
+                        <label for="smooth">Smooth Window (Opt)</label>
+                        <input type="number" id="smooth" name="smooth" placeholder="e.g. 3">
+                    </div>
+                </div>
+
+                <div id="error-message" class="error hidden"></div>
+                <button type="submit" id="submitBtn">
+                    <span>Process, Convert & View Log</span>
+                </button>
+                <div id="extractTimer" style="text-align:center; font-family:monospace; margin-top:15px; color:var(--primary); font-size:16px; display:none;">
+                    AI OCR Processing... <span id="timerSeconds">0</span>s elapsed. <br>
+                    <span style="font-size: 12px; color:#a1b0b5;">Please do not close this window. We are checking the server status.</span>
+                </div>
+            </form>
+        </div>
+
+        <div id="resultPanel" class="glass-panel result-panel hidden">
+            <div class="result-header">
+                <div>
+                    <p class="section-eyebrow">Conversion Ready</p>
+                    <h2 id="resultTitle">Log output ready</h2>
+                    <p id="resultSummary" class="result-copy">Download the CSV or open the converted depth tracks in the viewer.</p>
+                </div>
+                <div class="result-actions">
+                    <a id="downloadLink" class="action-link" href="#">Download CSV</a>
+                    <a id="viewerLink" class="action-link secondary" href="#" target="_blank" rel="noopener">Open Log Viewer</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let processingTimer;
+        const resultPanel = document.getElementById('resultPanel');
+        const resultTitle = document.getElementById('resultTitle');
+        const resultSummary = document.getElementById('resultSummary');
+        const downloadLink = document.getElementById('downloadLink');
+        const viewerLink = document.getElementById('viewerLink');
+
+        function formatCompactNumber(value) {
+            if (value === null || value === undefined || Number.isNaN(Number(value))) {
+                return 'n/a';
+            }
+            return Number(value).toLocaleString(undefined, { maximumFractionDigits: 0 });
+        }
+
+        function formatDepth(value) {
+            if (value === null || value === undefined || Number.isNaN(Number(value))) {
+                return 'n/a';
+            }
+            return Number(value).toLocaleString(undefined, { maximumFractionDigits: 1 });
+        }
+
+        function triggerDownload(url) {
+            const link = document.createElement('a');
+            link.href = url;
+            link.style.display = 'none';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        document.getElementById('convertForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const btn = document.getElementById('submitBtn');
+            const errorDiv = document.getElementById('error-message');
+            const timerDiv = document.getElementById('extractTimer');
+            const timerLabel = document.getElementById('timerSeconds');
+            
+            btn.classList.add('loading');
+            errorDiv.classList.add('hidden');
+            resultPanel.classList.add('hidden');
+            timerDiv.style.display = 'block';
+            
+            let seconds = 0;
+            timerLabel.textContent = seconds;
+            processingTimer = setInterval(() => {
+                seconds++;
+                timerLabel.textContent = seconds;
+            }, 1000);
+
+            const formData = new FormData(e.target);
+
+            try {
+                // Submit the background task start
+                const startResponse = await fetch('/directional/start_conversion', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!startResponse.ok) {
+                    const data = await startResponse.json();
+                    throw new Error(data.error || 'Failed to start conversion');
+                }
+                
+                const { task_id } = await startResponse.json();
+                
+                // Polling loop
+                const pollInterval = setInterval(async () => {
+                    const statusRes = await fetch(`/status/${task_id}`);
+                    const statusData = await statusRes.json();
+                    
+                    if (statusData.status === 'done') {
+                        clearInterval(pollInterval);
+                        clearInterval(processingTimer);
+                        timerDiv.style.display = 'none';
+                        btn.classList.remove('loading');
+
+                        const downloadUrl = `/download/${task_id}`;
+                        const viewerUrl = `/viewer/${task_id}`;
+                        const targetBasis = statusData.target_basis || document.getElementById('target_basis').value.toUpperCase();
+                        const curveCount = formatCompactNumber(statusData.curve_count);
+                        const sampleCount = formatCompactNumber(statusData.sample_count);
+                        const depthMin = formatDepth(statusData.depth_min);
+                        const depthMax = formatDepth(statusData.depth_max);
+
+                        resultTitle.textContent = `${targetBasis} log ready`;
+                        resultSummary.textContent = `${curveCount} curve tracks across ${sampleCount} samples from ${depthMin} to ${depthMax} ${targetBasis}.`;
+                        downloadLink.href = downloadUrl;
+                        viewerLink.href = viewerUrl;
+                        resultPanel.classList.remove('hidden');
+                        resultPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+                        triggerDownload(downloadUrl);
+                    } else if (statusData.status === 'error') {
+                        clearInterval(pollInterval);
+                        clearInterval(processingTimer);
+                        timerDiv.style.display = 'none';
+                        btn.classList.remove('loading');
+                        
+                        errorDiv.textContent = statusData.error || 'An error occurred during conversion.';
+                        errorDiv.classList.remove('hidden');
+                    }
+                }, 3000);
+            } catch (err) {
+                errorDiv.textContent = err.message || 'Server timeout or crash! Ensure the Flask backend is still running.';
+                errorDiv.classList.remove('hidden');
+                clearInterval(processingTimer);
+                timerDiv.style.display = 'none';
+                btn.classList.remove('loading');
+            }
+        });
+    </script>
+</body>
+</html>

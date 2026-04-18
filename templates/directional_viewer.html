@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Converted Log Viewer</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='directional_style.css') }}">
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+</head>
+<body>
+    <div class="container viewer-container">
+        <div class="glass-panel viewer-hero">
+            <div>
+                <p class="section-eyebrow">Converted Log</p>
+                <h1 id="viewerTitle">Loading log viewer...</h1>
+                <p id="viewerMeta" class="subtitle">Preparing shared depth tracks.</p>
+            </div>
+            <div class="result-actions" style="display: flex; gap: 8px;">
+                <a class="action-link secondary" href="/directional/" style="min-width: auto; padding: 10px 16px;">Back</a>
+                <a id="viewerDownloadCsv" class="action-link" href="#" style="min-width: auto; padding: 10px 16px;">CSV</a>
+                <a id="viewerDownloadLas" class="action-link" href="#" style="min-width: auto; padding: 10px 16px;">LAS</a>
+                <button id="viewerDownloadJpg" class="action-link" style="min-width: auto; padding: 10px 16px; border: none; font-family: inherit; cursor: pointer;">JPG</button>
+                <button id="viewerDownloadPdf" class="action-link" style="min-width: auto; padding: 10px 16px; border: none; font-family: inherit; cursor: pointer;">PDF</button>
+            </div>
+        </div>
+
+        <div class="glass-panel viewer-panel">
+            <div class="viewer-toolbar" style="display: flex; flex-direction: column; gap: 15px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; padding-bottom: 15px; border-bottom: 1px solid rgba(255,255,255,0.1);">
+                    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                        <label for="layoutModeSelect" style="font-size: 13px; font-weight: 600; color: #ffffff;">View Layout:</label>
+                        <select id="layoutModeSelect" style="padding: 4px 8px; border-radius: 4px; border: 1px solid #d8d0c0; font-size: 13px; background: #fff; cursor: pointer; color: #1a1a2e;">
+                            <option value="classic" selected>Classic Well Log (Track 1 & 2)</option>
+                            <option value="split">Side-by-Side (Individual Tracks)</option>
+                            <option value="consolidated">Overlaid (Single Track)</option>
+                        </select>
+                        <label for="depthAxisSelect" style="font-size: 13px; font-weight: 600; color: #ffffff; margin-left: 15px;">Depth Axis:</label>
+                        <select id="depthAxisSelect" style="padding: 4px 8px; border-radius: 4px; border: 1px solid #d8d0c0; font-size: 13px; background: #fff; cursor: pointer; color: #1a1a2e;">
+                            <option value="primary" selected>Primary (TVD)</option>
+                            <option value="alt">Alternate (MD)</option>
+                        </select>
+                        <label for="depthFrom" style="font-size: 13px; font-weight: 600; color: #ffffff; margin-left: 15px;">Range:</label>
+                        <input id="depthFrom" type="number" placeholder="From" style="width: 80px; padding: 4px 8px; border-radius: 4px; border: 1px solid #d8d0c0; font-size: 13px; color: #1a1a2e;">
+                        <span style="color:#ffffff;">-</span>
+                        <input id="depthTo" type="number" placeholder="To" style="width: 80px; padding: 4px 8px; border-radius: 4px; border: 1px solid #d8d0c0; font-size: 13px; color: #1a1a2e;">
+                        <button id="depthApply" style="width: auto; margin-top: 0; padding: 4px 12px; border-radius: 4px; border: 1px solid #b5a98b; background: #f4ecdc; cursor: pointer; font-size: 13px; color: #1a1a2e; margin-left: 10px;">Zoom</button>
+                        <button id="depthReset" style="width: auto; margin-top: 0; padding: 4px 12px; border-radius: 4px; border: 1px solid #b5a98b; background: #fff; cursor: pointer; font-size: 13px; color: #1a1a2e;">Reset</button>
+                    </div>
+                    <p class="viewer-note" style="margin: 0; color: rgba(255,255,255,0.7); font-size: 12px; text-align: right;">Click legend items to toggle curves. Drag plot to zoom.</p>
+                </div>
+                <div id="trackLegend" class="track-legend"></div>
+            </div>
+
+            <div id="viewerError" class="error hidden"></div>
+            <div id="viewerStatus" class="viewer-status">Loading curve tracks...</div>
+
+            <div class="plot-scroll" style="overflow-x: auto;">
+                <div id="logPlot" class="log-plot hidden"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const taskId = {{ task_id | tojson }};
+        const viewerTitle = document.getElementById('viewerTitle');
+        const viewerMeta = document.getElementById('viewerMeta');
+        const viewerStatus = document.getElementById('viewerStatus');
+        const viewerError = document.getElementById('viewerError');
+        const viewerDownloadCsv = document.getElementById('viewerDownloadCsv');
+        const viewerDownloadLas = document.getElementById('viewerDownloadLas');
+        const viewerDownloadJpg = document.getElementById('viewerDownloadJpg');
+        const viewerDownloadPdf = document.getElementById('viewerDownloadPdf');
+        const trackLegend = document.getElementById('trackLegend');
+        const logPlot = document.getElementById('logPlot');
+        const layoutModeSelect = document.getElementById('layoutModeSelect');
+        const depthAxisSelect = document.getElementById('depthAxisSelect');
+        const depthFromInput = document.getElementById('depthFrom');
+        const depthToInput = document.getElementById('depthTo');
+        const depthApplyBtn = document.getElementById('depthApply');
+        const depthResetBtn = document.getElementById('depthReset');
+
+        let globalPayload = null;
+        let trackVisibility = [];
+        let trackGroups = []; // Array storing 1 or 2 for each track
+        let zoomRange = null; // {min, max} in current active axis units
+        let initialLoad = true;
+
+        layoutModeSelect.addEventListener('change', () => {
+            if (globalPayload) {
+                buildLegend(globalPayload.tracks);
+                renderPlot();
+            }
+        });
+        depthAxisSelect.addEventListener('change', () => {
+            zoomRange = null;
+            depthFromInput.value = '';
+            depthToInput.value = '';
+            
+            // Re-apply a smart 500-ft zoom on axis switch if it's too large
+            if (globalPayload) {
+                const isAlt = depthAxisSelect.value === 'alt';
+                const dMin = isAlt ? globalPayload.alt_depth_min : globalPayload.depth_min;
+                const dMax = isAlt ? globalPayload.alt_depth_max : globalPayload.depth_max;
+                
+                if (dMax - dMin > 800) {
+                    zoomRange = { min: dMin, max: dMin + 500 };
+                    depthFromInput.value = Math.floor(zoomRange.min);
+                    depthToInput.value = Math.floor(zoomRange.max);
+                }
+                
+                renderPlot();
+            }
+        });
+        depthApplyBtn.addEventListener('click', () => {
+            const from = parseFloat(depthFromInput.value);
+            const to = parseFloat(depthToInput.value);
+            if (Number.isFinite(from) && Number.isFinite(to) && from < to) {
+                zoomRange = { min: from, max: to };
+                if (globalPayload) renderPlot();
+            }
+        });
+        depthResetBtn.addEventListener('click', () => {
+            zoomRange = null;
+            depthFromInput.value = '';
+            depthToInput.value = '';
+            if (globalPayload) renderPlot();
+        });
+
+        function formatValue(value, digits = 2) {
+            if (!Number.isFinite(value)) return 'n/a';
+            return value.toLocaleString(undefined, {
+                minimumFractionDigits: 0,
+                maximumFractionDigits: digits,
+            });
+        }
+
+        function pickDepthTick(minDepth, maxDepth) {
+            const span = Math.abs(maxDepth - minDepth);
+            const candidates = [10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000];
+            const target = span / 12;
+            return candidates.find((value) => target <= value) || 5000;
+        }
+
+        function hexToRgba(hexColor, alpha) {
+            const clean = hexColor.replace('#', '');
+            const bigint = parseInt(clean, 16);
+            return `rgba(${(bigint >> 16) & 255}, ${(bigint >> 8) & 255}, ${bigint & 255}, ${alpha})`;
+        }
+
+        function buildLegend(tracks) {
+            trackLegend.innerHTML = '';
+            
+            if (trackVisibility.length === 0) {
+                trackVisibility = tracks.map(() => true);
+                trackGroups = tracks.map(track => {
+                    const lower = track.display_name.toLowerCase();
+                    const t1 = ['gamma', 'gr', 'sp', 'cali', 'cal', 'dtc']; // Added dtc by default
+                    for (let n of t1) {
+                        if (lower.includes(n)) return 1;
+                    }
+                    // For demo, if everything would go to T2, just split them by half
+                    return 2;
+                });
+                
+                // If there are no T1 tracks, try to balance them
+                if (!trackGroups.includes(1) && trackGroups.length > 1) {
+                    const splitIdx = Math.floor(trackGroups.length / 2);
+                    for (let i = 0; i < splitIdx; i++) trackGroups[i] = 1;
+                }
+            }
+
+            const isClassic = layoutModeSelect.value === 'classic';
+            let t1Container, t2Container;
+            
+            if (isClassic) {
+                const container = document.createElement('div');
+                container.style.display = 'flex';
+                container.style.gap = '20px';
+                container.style.width = '100%';
+                
+                const t1Col = document.createElement('div');
+                t1Col.style.flex = '1';
+                t1Col.innerHTML = '<div style="font-size:11px; font-weight:600; color:#b0bec5; margin-bottom:8px; letter-spacing:0.5px;">TRACK 1 (LEFT) <span style="font-weight:normal; font-size:10px; opacity:0.7; margin-left:6px;">Drag to move</span></div>';
+                t1Container = document.createElement('div');
+                t1Container.style.display = 'flex';
+                t1Container.style.flexWrap = 'wrap';
+                t1Container.style.gap = '8px';
+                t1Container.style.minHeight = '50px';
+                t1Container.style.padding = '10px';
+                t1Container.style.background = 'rgba(0,0,0,0.15)';
+                t1Container.style.borderRadius = '8px';
+                t1Container.style.border = '1px dashed rgba(255,255,255,0.1)';
+                t1Container.style.transition = 'all 0.2s';
+                t1Col.appendChild(t1Container);
+                
+                const t2Col = document.createElement('div');
+                t2Col.style.flex = '1';
+                t2Col.innerHTML = '<div style="font-size:11px; font-weight:600; color:#b0bec5; margin-bottom:8px; letter-spacing:0.5px;">TRACK 2 (RIGHT) <span style="font-weight:normal; font-size:10px; opacity:0.7; margin-left:6px;">Drag to move</span></div>';
+                t2Container = document.createElement('div');
+                t2Container.style.display = 'flex';
+                t2Container.style.flexWrap = 'wrap';
+                t2Container.style.gap = '8px';
+                t2Container.style.minHeight = '50px';
+                t2Container.style.padding = '10px';
+                t2Container.style.background = 'rgba(0,0,0,0.15)';
+                t2Container.style.borderRadius = '8px';
+                t2Container.style.border = '1px dashed rgba(255,255,255,0.1)';
+                t2Container.style.transition = 'all 0.2s';
+                t2Col.appendChild(t2Container);
+                
+                container.appendChild(t1Col);
+                container.appendChild(t2Col);
+                trackLegend.appendChild(container);
+
+                [t1Container, t2Container].forEach((cont, idx) => {
+                    const targetGroup = idx + 1;
+                    cont.ondragover = (e) => {
+                        e.preventDefault();
+                        cont.style.background = 'rgba(255,255,255,0.05)';
+                        cont.style.border = '1px dashed rgba(255,255,255,0.3)';
+                    };
+                    cont.ondragleave = (e) => {
+                        cont.style.background = 'rgba(0,0,0,0.15)';
+                        cont.style.border = '1px dashed rgba(255,255,255,0.1)';
+                    };
+                    cont.ondrop = (e) => {
+                        e.preventDefault();
+                        cont.style.background = 'rgba(0,0,0,0.15)';
+                        cont.style.border = '1px dashed rgba(255,255,255,0.1)';
+                        const trackIdx = parseInt(e.dataTransfer.getData('text/plain'));
+                        if (!isNaN(trackIdx) && trackGroups[trackIdx] !== targetGroup) {
+                            trackGroups[trackIdx] = targetGroup;
+                            buildLegend(tracks);
+                            renderPlot();
+                        }
+                    };
+                });
+
+            } else {
+                t1Container = document.createElement('div');
+                t1Container.style.display = 'flex';
+                t1Container.style.flexWrap = 'wrap';
+                t1Container.style.gap = '10px';
+                trackLegend.appendChild(t1Container);
+            }
+
+            tracks.forEach((track, index) => {
+                const pill = document.createElement('div');
+                pill.className = `track-pill${track.is_reference ? ' reference' : ''}`;
+                pill.style.display = 'inline-flex';
+                pill.style.alignItems = 'center';
+                pill.style.gap = '6px';
+                pill.style.transition = 'opacity 0.2s';
+                pill.style.opacity = trackVisibility[index] ? '1' : '0.4';
+                
+                if (isClassic) {
+                    pill.draggable = true;
+                    pill.ondragstart = (e) => {
+                        e.dataTransfer.setData('text/plain', index);
+                        setTimeout(() => pill.style.opacity = '0.3', 0);
+                    };
+                    pill.ondragend = (e) => {
+                        pill.style.opacity = trackVisibility[index] ? '1' : '0.4';
+                    };
+                }
+
+                const toggleArea = document.createElement('div');
+                toggleArea.style.display = 'inline-flex';
+                toggleArea.style.alignItems = 'center';
+                toggleArea.style.gap = '8px';
+                toggleArea.style.cursor = 'pointer';
+                toggleArea.onclick = () => {
+                    trackVisibility[index] = !trackVisibility[index];
+                    pill.style.opacity = trackVisibility[index] ? '1' : '0.4';
+                    renderPlot();
+                };
+
+                const swatch = document.createElement('span');
+                swatch.className = 'track-swatch';
+                swatch.style.background = track.color;
+
+                const label = document.createElement('span');
+                label.textContent = `${track.display_name} (${formatValue(track.value_min)} to ${formatValue(track.value_max)})`;
+
+                toggleArea.appendChild(swatch);
+                toggleArea.appendChild(label);
+                
+                // Add explicit move buttons for better UX
+                if (isClassic) {
+                    const moveBtn = document.createElement('div');
+                    moveBtn.innerHTML = trackGroups[index] === 1 ? '&#8594;' : '&#8592;';
+                    moveBtn.style.cursor = 'pointer';
+                    moveBtn.style.padding = '0 4px';
+                    moveBtn.style.color = 'rgba(255,255,255,0.4)';
+                    moveBtn.style.fontSize = '14px';
+                    moveBtn.title = trackGroups[index] === 1 ? 'Move to Track 2' : 'Move to Track 1';
+                    
+                    moveBtn.onmouseover = () => moveBtn.style.color = '#fff';
+                    moveBtn.onmouseout = () => moveBtn.style.color = 'rgba(255,255,255,0.4)';
+                    
+                    moveBtn.onclick = (e) => {
+                        e.stopPropagation();
+                        trackGroups[index] = trackGroups[index] === 1 ? 2 : 1;
+                        buildLegend(tracks);
+                        renderPlot();
+                    };
+                    
+                    if (trackGroups[index] === 1) {
+                        pill.appendChild(toggleArea);
+                        pill.appendChild(moveBtn);
+                        t1Container.appendChild(pill);
+                    } else {
+                        pill.appendChild(moveBtn);
+                        pill.appendChild(toggleArea);
+                        t2Container.appendChild(pill);
+                    }
+                } else {
+                    pill.appendChild(toggleArea);
+                    t1Container.appendChild(pill);
+                }
+            });
+        }
+
+        function renderPlot() {
+            if (!globalPayload) return;
+            const payload = globalPayload;
+            const tracks = payload.tracks;
+            const layoutMode = layoutModeSelect.value;
+            
+            // Depth axis selection (MD vs TVD)
+            const depthAxisMode = depthAxisSelect.value;
+            const hasAlt = payload.alt_depth_values && payload.alt_depth_values.length > 0;
+            const useAlt = depthAxisMode === 'alt' && hasAlt;
+            const activeDepthValues = useAlt ? payload.alt_depth_values : payload.depth_values;
+            const activeDepthLabel = useAlt ? payload.alt_depth_label : payload.depth_label;
+            let activeDepthMin = useAlt ? payload.alt_depth_min : payload.depth_min;
+            let activeDepthMax = useAlt ? payload.alt_depth_max : payload.depth_max;
+
+            // Apply user-selected zoom range (for focused 1:1200 style log display)
+            if (zoomRange) {
+                activeDepthMin = Math.max(activeDepthMin, zoomRange.min);
+                activeDepthMax = Math.min(activeDepthMax, zoomRange.max);
+            }
+            
+            const depthTick = pickDepthTick(activeDepthMin, activeDepthMax);
+            
+            const visibleIndices = [];
+            tracks.forEach((track, idx) => { if (trackVisibility[idx]) visibleIndices.push(idx); });
+
+            const isClassic = layoutMode === 'classic';
+            const isConsolidated = layoutMode === 'consolidated';
+            const isSplit = layoutMode === 'split';
+
+            let t1Total = 0;
+            let t2Total = 0;
+            if (isClassic) {
+                visibleIndices.forEach(idx => {
+                    trackGroups[idx] === 1 ? t1Total++ : t2Total++;
+                });
+            }
+            const maxStack = isClassic ? Math.max(t1Total, t2Total) : isConsolidated ? visibleIndices.length : 0;
+            const extraStacks = Math.max(0, maxStack - 1);
+            const yDomainEnd = (isClassic || isConsolidated) ? Math.max(0.5, 0.99 - (extraStacks * 0.04)) : 1;
+
+            const traces = [];
+            const layout = {
+                paper_bgcolor: 'rgba(0,0,0,0)',
+                plot_bgcolor: '#faf7ef',
+                margin: { l: 95, r: 24, t: 30, b: 40 },
+                showlegend: false,
+                hovermode: 'closest',
+                dragmode: 'pan',
+                height: 800, 
+                hoverlabel: { bgcolor: '#18242f', bordercolor: '#4ecca3', font: { color: '#ffffff' } },
+                annotations: [], shapes: []
+            };
+
+            const numVisible = visibleIndices.length;
+            const trackGap = 0.018;
+            const totalGap = numVisible > 1 ? trackGap * (numVisible - 1) : 0;
+            const trackWidth = numVisible > 0 ? (1 - totalGap) / numVisible : 1;
+
+            if (isSplit) {
+                logPlot.style.width = `${Math.max(1000, numVisible * 225)}px`;
+                logPlot.style.minWidth = `${Math.max(1000, numVisible * 225)}px`;
+            } else {
+                logPlot.style.width = '100%';
+                logPlot.style.minWidth = '860px';
+            }
+
+            // Setup the Y-axes based on the mode
+            if (isClassic) {
+                layout.yaxis = { // Left Track Y-axis
+                    range: [activeDepthMax, activeDepthMin], dtick: depthTick, showgrid: true, gridcolor: '#d8d0c0', 
+                    zeroline: false, showline: true, linecolor: '#5a564a', ticks: 'outside', 
+                    tickcolor: '#5a564a', tickfont: { size: 11, color: '#2c3136' },
+                    domain: [0, yDomainEnd], anchor: 'free', position: 0.38, side: 'right'
+                };
+                layout.yaxis2 = { // Right Track Y-axis
+                    matches: 'y', range: [activeDepthMax, activeDepthMin], dtick: depthTick, showgrid: true, gridcolor: '#d8d0c0', 
+                    zeroline: false, showline: true, linecolor: '#5a564a', ticks: '', 
+                    showticklabels: false, domain: [0, yDomainEnd], anchor: 'free', position: 0.42, side: 'left'
+                };
+                layout.annotations.push({
+                    xref: 'paper', yref: 'paper', x: 0.40, y: yDomainEnd + 0.01,
+                    text: `${activeDepthLabel} Depth`, showarrow: false,
+                    font: { size: 12, color: '#2c3136', weight: 'bold' }, xanchor: 'center', yanchor: 'bottom'
+                });
+            } else {
+                layout.yaxis = {
+                    title: { text: `${activeDepthLabel} Depth`, standoff: 10 },
+                    range: [activeDepthMax, activeDepthMin], dtick: depthTick, showgrid: true, gridcolor: '#d8d0c0',
+                    zeroline: false, showline: true, linecolor: '#5a564a', ticks: 'outside',
+                    tickcolor: '#5a564a', tickfont: { size: 11, color: '#2c3136' },
+                    domain: [0, yDomainEnd]
+                };
+            }
+
+            let t1Count = 0;
+            let t2Count = 0;
+
+            visibleIndices.forEach((trackIdx, renderedIndex) => {
+                const track = tracks[trackIdx];
+                let displayRange = track.range;
+                let validVals = [];
+                
+                // Pick which values array to use based on selected axis
+                const trackValues = (useAlt && Array.isArray(track.native_values) && track.native_values.length > 0)
+                    ? track.native_values
+                    : track.values;
+                
+                for(let v of trackValues) {
+                    if(v !== null && typeof v === 'number' && !isNaN(v)) validVals.push(v);
+                }
+                validVals.sort((a,b) => a-b);
+                
+                let traceValues = [...trackValues]; // Copy to mutate
+                let depthValues = [...activeDepthValues];
+
+                // Extremely aggressive robust clipping to annihilate huge OCR interpolation spikes
+                if (validVals.length > 5) {
+                    let median = validVals[Math.floor(validVals.length / 2)];
+                    // find interquartile range roughly
+                    let q1 = validVals[Math.floor(validVals.length * 0.25)];
+                    let q3 = validVals[Math.floor(validVals.length * 0.75)];
+                    let iqr = q3 - q1;
+                    if (iqr === 0) iqr = (validVals[Math.floor(validVals.length * 0.90)] - validVals[Math.floor(validVals.length * 0.10)]) || 1.0;
+                    let lowerBound = median - (iqr * 2.5);
+                    let upperBound = median + (iqr * 2.5);
+                    let cleanVals = validVals.filter(v => v >= lowerBound && v <= upperBound);
+                    if (cleanVals.length > 2) {
+                        let minClean = cleanVals[0];
+                        let maxClean = cleanVals[cleanVals.length - 1];
+                        if (maxClean > minClean) {
+                            let pad = (maxClean - minClean) * 0.05;
+                            displayRange = [minClean - pad, maxClean + pad];
+                        }
+                    }
+                    for (let i = 0; i < traceValues.length; i++) {
+                        if (traceValues[i] !== null && typeof traceValues[i] === 'number') {
+                            if (traceValues[i] < lowerBound || traceValues[i] > upperBound) traceValues[i] = null;
+                        }
+                    }
+                }
+
+                // Filter out nulls first to keep arrays perfectly parallel, then sort by depth
+                let paired = [];
+                for (let i = 0; i < traceValues.length; i++) {
+                    if (traceValues[i] !== null && typeof traceValues[i] === 'number') {
+                        paired.push({ x: traceValues[i], y: depthValues[i] });
+                    }
+                }
+                paired.sort((a, b) => a.y - b.y);
+                let finalX = paired.map(p => p.x);
+                let finalY = paired.map(p => p.y);
+
+                const traceAxis = renderedIndex === 0 ? 'x' : 'x' + (renderedIndex + 1);
+                const axisKey = renderedIndex === 0 ? 'xaxis' : 'xaxis' + (renderedIndex + 1);
+                
+                let group = isClassic ? trackGroups[trackIdx] : 1;
+                let yAxisRef = 'y';
+
+                let ax = {
+                    range: displayRange,
+                    side: 'top',
+                    showgrid: true,
+                    zeroline: false,
+                    showline: true,
+                    linecolor: track.color,
+                    ticks: 'outside',
+                    tickcolor: track.color,
+                    tickfont: { size: 11, color: track.color }
+                };
+
+                if (isSplit) {
+                    const start = renderedIndex * trackWidth + renderedIndex * trackGap;
+                    const end = start + trackWidth;
+                    ax.domain = [start, end];
+                    ax.gridcolor = '#e8e2d3';
+                    ax.mirror = true;
+                    ax.linecolor = '#5a564a';
+                    ax.tickcolor = '#5a564a';
+                    ax.tickfont = { size: 11, color: '#2c3136' };
+                } else if (isConsolidated) {
+                    ax.domain = [0, 1];
+                    ax.gridcolor = hexToRgba(track.color, renderedIndex === 0 ? 0.2 : 0.15);
+                    if (renderedIndex === 0) {
+                        ax.anchor = 'y';
+                    } else {
+                        ax.overlaying = 'x';
+                        ax.anchor = 'free';
+                        ax.position = yDomainEnd + (renderedIndex * 0.04);
+                    }
+                } else if (isClassic) {
+                    let isBaseInGroup = (group === 1 && t1Count === 0) || (group === 2 && t2Count === 0);
+                    let trackDomain = group === 1 ? [0, 0.38] : [0.42, 1]; // Hard boundary separation
+                    ax.domain = trackDomain;
+                    yAxisRef = group === 1 ? 'y' : 'y2';
+                    
+                    let overlayRef = 'x';
+                    if (group === 2) {
+                        let firstGroup2Index = visibleIndices.findIndex(i => trackGroups[i] === 2);
+                        overlayRef = firstGroup2Index > -1 ? (firstGroup2Index === 0 ? 'x' : 'x' + (firstGroup2Index + 1)) : 'x';
+                    }
+
+                    ax.gridcolor = hexToRgba(track.color, isBaseInGroup ? 0.2 : 0.15);
+                    if (isBaseInGroup) {
+                        ax.anchor = yAxisRef;
+                    } else {
+                        ax.overlaying = overlayRef;
+                        ax.anchor = 'free';
+                        ax.position = yDomainEnd + ((group === 1 ? t1Count : t2Count) * 0.04);
+                    }
+                    
+                    if (group === 1) t1Count++;
+                    if (group === 2) t2Count++;
+                }
+
+                layout[axisKey] = ax;
+
+                traces.push({
+                    type: 'scatter',
+                    mode: 'lines',
+                    x: finalX,
+                    y: finalY,
+                    xaxis: traceAxis,
+                    yaxis: yAxisRef,
+                    connectgaps: false,
+                    line: {
+                        color: track.color,
+                        width: track.is_reference ? 1.5 : 2.1,
+                        dash: track.dash,
+                        simplify: false
+                    },
+                    fill: (track.fill && isSplit) ? track.fill : 'none',
+                    fillcolor: (track.fill && isSplit) ? hexToRgba(track.color, 0.18) : undefined,
+                    hovertemplate: `${track.display_name}: %{x:.3f}<br>${activeDepthLabel}: %{y:.2f}<extra></extra>`,
+                });
+            });
+
+            Plotly.newPlot(logPlot, traces, layout, {
+                responsive: true,
+                displaylogo: false,
+                scrollZoom: true,
+                modeBarButtonsToRemove: ['zoom2d', 'pan2d', 'select2d', 'lasso2d', 'zoomIn2d', 'zoomOut2d', 'autoScale2d']
+            });
+        }
+
+        async function loadViewer() {
+            try {
+                const response = await fetch(`/plot_data/${taskId}`);
+                const payload = await response.json();
+
+                if (!response.ok) throw new Error(payload.error || 'Unable to load plot data.');
+
+                globalPayload = payload;
+                viewerTitle.textContent = payload.title;
+                viewerMeta.textContent = `${payload.curve_count} curve tracks across ${formatValue(payload.sample_count, 0)} samples from ${formatValue(payload.depth_min)} to ${formatValue(payload.depth_max)} ${payload.depth_label}.`;
+                viewerDownloadCsv.href = `${payload.download_url}?format=csv`;
+                viewerDownloadLas.href = `${payload.download_url}?format=las`;
+
+                viewerDownloadJpg.onclick = () => {
+                    Plotly.downloadImage(logPlot, {
+                        format: 'jpeg',
+                        width: logPlot.clientWidth,
+                        height: logPlot.clientHeight,
+                        filename: 'converted_log'
+                    });
+                };
+
+                viewerDownloadPdf.onclick = () => {
+                    window.print();
+                };
+
+                // Update depth axis dropdown labels based on what's available
+                const depthOptions = depthAxisSelect.options;
+                depthOptions[0].text = `Primary (${payload.depth_label})`;
+                if (payload.alt_depth_label) {
+                    depthOptions[1].text = `Native (${payload.alt_depth_label})`;
+                    depthOptions[1].disabled = false;
+                    // Default to the Native/MD axis for clean curves on horizontal wells
+                    depthAxisSelect.value = 'alt';
+                } else {
+                    depthOptions[1].text = 'Native (not available)';
+                    depthOptions[1].disabled = true;
+                }
+
+                buildLegend(payload.tracks);
+
+                // Smart initial zoom so it defaults to a clean 500ft window (1:1200 style)
+                if (initialLoad) {
+                    const isAlt = depthAxisSelect.value === 'alt';
+                    const dMin = isAlt ? payload.alt_depth_min : payload.depth_min;
+                    const dMax = isAlt ? payload.alt_depth_max : payload.depth_max;
+                    
+                    if (dMax - dMin > 800) {
+                        zoomRange = { min: dMin, max: dMin + 500 };
+                        depthFromInput.value = Math.floor(zoomRange.min);
+                        depthToInput.value = Math.floor(zoomRange.max);
+                    }
+                    initialLoad = false;
+                }
+
+                renderPlot();
+
+                viewerStatus.classList.add('hidden');
+                logPlot.classList.remove('hidden');
+            } catch (error) {
+                viewerStatus.classList.add('hidden');
+                viewerError.textContent = error.message || 'Unable to load the converted log.';
+                viewerError.classList.remove('hidden');
+            }
+        }
+
+        loadViewer();
+    </script>
+</body>
+</html>

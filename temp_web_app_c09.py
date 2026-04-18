@@ -14,36 +14,19 @@ Free hosting: Deploy to Render.com, Railway.app, or Google Cloud Run
 # Vision API is optional; initialize later after env vars are loaded.
 VISION_API_AVAILABLE = False
 vision_client = None
-LOCAL_OCR_AVAILABLE = False
-easyocr = None
-_easyocr_reader = None
 
 # Load environment variables from .env and .env.local
 from dotenv import load_dotenv
 load_dotenv()  # Load .env
 load_dotenv('.env.local', override=True)  # Load .env.local (overrides .env)
 
-from google.cloud import storage
-
-from flask import (
-    Flask, render_template, request, jsonify, make_response, 
-    send_file, Response, redirect, url_for, session, flash, send_from_directory
-)
+from flask import Flask, render_template, request, jsonify, send_file, Response, session, redirect, url_for, flash
 import math
 import os
 import random
 import re
 import shutil
 import string
-import sqlite3
-from app import auth_billing
-from app import mailer
-from app import scale_detection
-from app import corrections_store
-import app.config as config
-from werkzeug.security import generate_password_hash, check_password_hash
-import stripe
-from datetime import timedelta, timezone
 import tempfile
 import textwrap
 import time
@@ -56,7 +39,6 @@ import pandas as pd
 import json
 from io import BytesIO, StringIO
 import base64
-import zipfile
 from typing import Dict, List, Tuple, Optional
 import tempfile
 from datetime import datetime
@@ -66,13 +48,6 @@ import requests
 import openai
 from huggingface_hub import InferenceClient
 
-try:
-    from flask_talisman import Talisman
-    TALISMAN_AVAILABLE = True
-except ImportError:
-    TALISMAN_AVAILABLE = False
-    print("[WARN] flask_talisman not installed. Security headers will not be applied.")
-
 TORCH_AVAILABLE = False
 try:
     import torch
@@ -81,16 +56,6 @@ try:
 except Exception:
     torch = None
     nn = None
-
-try:
-    import easyocr as _easyocr_mod
-    easyocr = _easyocr_mod
-    LOCAL_OCR_AVAILABLE = True
-    print("[OK] EasyOCR available for local OCR fallback.")
-except Exception as e:
-    easyocr = None
-    LOCAL_OCR_AVAILABLE = False
-    print(f"[INFO] EasyOCR unavailable; local OCR fallback disabled: {e}")
 
 # Phase 1 & 2: Learning system imports
 from user_tracker import tracker
@@ -105,7 +70,6 @@ import hashlib
 ai_tracer = AITracer("curve_trace_model.pt")
 
 # Try to import Google Vision API (optional)
-credentials = None
 try:
     from google.cloud import vision
     from google.oauth2 import service_account
@@ -117,12 +81,12 @@ try:
         credentials = service_account.Credentials.from_service_account_info(creds_json)
         vision_client = vision.ImageAnnotatorClient(credentials=credentials)
         VISION_API_AVAILABLE = True
-        print("[OK] Google Vision API: Loaded from environment variable")
+        print("✅ Google Vision API: Loaded from environment variable")
     elif 'GOOGLE_APPLICATION_CREDENTIALS' in os.environ:
         # Local development: JSON file path in env var
         vision_client = vision.ImageAnnotatorClient()
         VISION_API_AVAILABLE = True
-        print("[OK] Google Vision API: Loaded from file")
+        print("✅ Google Vision API: Loaded from file")
     else:
         # Auto-detect key file in project directory
         _local_key = Path(__file__).parent / 'GOOGLE_APPLICATION_CREDENTIALS.json'
@@ -130,17 +94,17 @@ try:
             credentials = service_account.Credentials.from_service_account_file(str(_local_key))
             vision_client = vision.ImageAnnotatorClient(credentials=credentials)
             VISION_API_AVAILABLE = True
-            print(f"[OK] Google Vision API: Auto-loaded from {_local_key.name}")
+            print(f"✅ Google Vision API: Auto-loaded from {_local_key.name}")
         else:
-            print("[WARN] Google Vision API: No credentials found")
+            print("⚠️  Google Vision API: No credentials found")
             vision_client = None
             VISION_API_AVAILABLE = False
 except ImportError:
-    print("[WARN] Google Vision API not available. Install: pip install google-cloud-vision")
+    print("⚠️  Google Vision API not available. Install: pip install google-cloud-vision")
     vision_client = None
     VISION_API_AVAILABLE = False
 except Exception as e:
-    print(f"[WARN] Google Vision API error: {e}")
+    print(f"⚠️  Google Vision API error: {e}")
     vision_client = None
     VISION_API_AVAILABLE = False
 
@@ -150,9 +114,9 @@ LASIO_AVAILABLE = False
 try:
     import lasio
     LASIO_AVAILABLE = True
-    print("[OK] lasio imported; LAS validation enabled.")
+    print("✅ lasio imported; LAS validation enabled.")
 except Exception as e:
-    print(f"[INFO] lasio unavailable; LAS validation will be skipped: {e}")
+    print(f"ℹ️  lasio unavailable; LAS validation will be skipped: {e}")
 
 # Default LAS curve label mapping by type (kept in sync with frontend curveTypeDefaults)
 CURVE_TYPE_DEFAULTS = {
@@ -194,227 +158,50 @@ APP_VERSION = os.environ.get("APP_VERSION", "dev")
 APP_BUILD_TIME = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
 
 app = Flask(__name__)
-
-from directional_app import directional_bp
-app.register_blueprint(directional_bp, url_prefix='/directional')
-
-# Basic security config
-is_prod = os.environ.get("FLASK_ENV") == "production" or os.environ.get("RENDER") == "true" or os.environ.get("RAILWAY_ENVIRONMENT") is not None
 app.config['MAX_CONTENT_LENGTH'] = 2 * 1024 * 1024 * 1024  # 2GB max request size
-app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=30)
-app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-app.config['SESSION_COOKIE_SECURE'] = is_prod  # Require HTTPS for cookies in production
-app.config['SESSION_COOKIE_HTTPONLY'] = True   # Prevent JS access to session cookie
-app.secret_key = config.SECRET_KEY
-
-# Initialize Talisman for security headers if in production and installed
-if TALISMAN_AVAILABLE and is_prod:
-    csp = {
-        'default-src': [
-            '\'self\'',
-            'https://fonts.googleapis.com',
-            'https://fonts.gstatic.com',
-            'https://cdn.jsdelivr.net',
-            'https://cdnjs.cloudflare.com',
-            'https://js.stripe.com',
-        ],
-        'script-src': [
-            '\'self\'',
-            '\'unsafe-inline\'',  # Needed for some inline scripts in the app
-            '\'unsafe-eval\'',    # Needed for some charting/canvas libraries
-            'https://cdn.jsdelivr.net',
-            'https://cdnjs.cloudflare.com',
-            'https://js.stripe.com',
-        ],
-        'img-src': [
-            '\'self\'',
-            'data:',
-            'blob:',
-            'https://images.unsplash.com',
-            '*',  # Allow external images for now given the dynamic nature
-        ],
-        'style-src': [
-            '\'self\'',
-            '\'unsafe-inline\'',
-            'https://fonts.googleapis.com',
-            'https://cdn.jsdelivr.net',
-            'https://cdnjs.cloudflare.com',
-        ],
-        'frame-src': [
-            '\'self\'',
-            'https://js.stripe.com',
-            'https://hooks.stripe.com',
-        ],
-        'connect-src': [
-            '\'self\'',
-            'https://api.stripe.com',
-        ],
-    }
-    Talisman(app, 
-             content_security_policy=csp, 
-             force_https=True,
-             strict_transport_security=True,
-             session_cookie_secure=True)
-
-REMEMBER_COOKIE_NAME = 'remember_token'
-REMEMBER_COOKIE_DAYS = 30
-
-
-def _remember_serializer():
-    from itsdangerous import URLSafeTimedSerializer
-    return URLSafeTimedSerializer(config.SECRET_KEY, salt='remember-me')
-
-
-def _create_remember_token(payload: dict) -> str:
-    return _remember_serializer().dumps(payload)
-
-
-def _decode_remember_token(raw: str) -> Optional[dict]:
-    from itsdangerous import BadSignature, SignatureExpired
-    try:
-        return _remember_serializer().loads(raw, max_age=REMEMBER_COOKIE_DAYS * 86400)
-    except (BadSignature, SignatureExpired, Exception):
-        return None
-
-
-@app.before_request
-def restore_session_from_token():
-    """If no active session, check for a remember-me token cookie and restore the session."""
-    if session.get('user_id') or session.get('admin_override'):
-        return
-    raw_token = request.cookies.get(REMEMBER_COOKIE_NAME)
-    if not raw_token:
-        return
-    payload = _decode_remember_token(raw_token)
-    if not payload:
-        return
-    if payload.get('admin'):
-        session['admin_override'] = True
-        session.permanent = True
-    elif payload.get('user_id'):
-        user = auth_billing.get_user_by_id(config.AUTH_DB_PATH, int(payload['user_id']))
-        if user and not user.get('is_banned'):
-            session['user_id'] = user['id']
-            session['is_admin'] = user.get('is_admin', 0)
-            session.permanent = True
-
-auth_billing.init_db(config.AUTH_DB_PATH)
-stripe.api_key = config.STRIPE_SECRET_KEY
-
-PLAN_TO_PRICE = {
-    'monthly': config.STRIPE_PRICE_MONTHLY,
-    'annual': config.STRIPE_PRICE_ANNUAL,
-    'managed_simple': config.STRIPE_PRICE_MANAGED_SIMPLE,
-    'managed_standard': config.STRIPE_PRICE_MANAGED_STANDARD,
-    'managed_complex': config.STRIPE_PRICE_MANAGED_COMPLEX,
-}
-PRICE_TO_PLAN = {v: k for k, v in PLAN_TO_PRICE.items() if v}
+app.secret_key = os.environ.get("SECRET_KEY", "tiflas-dev-secret-key-change-in-prod")
 
 # ----------------------------
 # Auth Decorator
 # ----------------------------
-def _is_stripe_configured() -> bool:
-    return bool(config.STRIPE_SECRET_KEY and config.STRIPE_PRICE_MONTHLY and config.STRIPE_PRICE_ANNUAL)
-
-
-def _unix_to_iso(ts: Optional[int]) -> Optional[str]:
-    if not ts:
-        return None
-    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
-
-
-def _current_user(require_access: bool = True):
-    if session.get('admin_override'):
-        return {'id': 0, 'email': 'admin@tiflas.com', 'is_admin': 1, 'full_name': 'Admin User'}
-        
-    user_id = session.get('user_id')
-    
-    # Check for impersonation
-    if session.get('impersonate_user_id') and session.get('is_admin'):
-        user_id = session.get('impersonate_user_id')
-        
-    if not user_id:
-        return None
-    user = auth_billing.get_user_by_id(config.AUTH_DB_PATH, int(user_id))
-    
-    # Auto-promote owner to admin so they don't get paywalled out of their own app
-    if user and user.get('email') == 'gabepell@hotmail.com' and not user.get('is_admin'):
-        with auth_billing.get_db(config.AUTH_DB_PATH) as conn:
-            conn.execute("UPDATE users SET is_admin = 1 WHERE id = ?", (user['id'],))
-        user['is_admin'] = 1
-    
-    # If standard auth, check banned status
-    if user and user.get('is_banned') and not session.get('is_admin'):
-        session.clear()
-        return None
-    if not user:
-        session.pop('user_id', None)
-        return None
-    if require_access and _is_stripe_configured() and not auth_billing.subscription_access_allowed(user):
-        return None
-    return user
-
-
 from functools import wraps
-def login_required(require_access=True):
-    def decorator(f):
-        @wraps(f)
-        def decorated_function(*args, **kwargs):
-            user = _current_user(require_access=require_access)
-            if user is None:
-                return redirect(url_for('login', next=request.url))
-            return f(*args, **kwargs)
-        return decorated_function
-    return decorator
+
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'user' not in session:
+            return redirect(url_for('login', next=request.url))
+        return f(*args, **kwargs)
+    return decorated_function
+
+
 
 @app.errorhandler(500)
 def _handle_internal_server_error(exc):
-    import traceback
-    tb = traceback.format_exc()
-    original = getattr(exc, 'original_exception', None)
-    err_msg = str(original) if original else str(exc)
-    
-    print(f"500 Error: {err_msg}")
-    
-    # Hide details in production
-    if is_prod:
+    if request.path == '/digitize':
+        import traceback
+        original = getattr(exc, 'original_exception', None)
+        if original is not None:
+            print(f"/digitize 500 error: {original}")
+            print(traceback.format_exc())
+            err_msg = str(original)
+        else:
+            print(f"/digitize 500 error: {exc}")
+            err_msg = str(exc)
+
+        tb = traceback.format_exc()
+        tb_lines = tb.splitlines()[-25:]
+        tb_short = "\n".join(tb_lines)
+
         return jsonify({
             'success': False,
-            'error': 'An internal server error occurred.'
-        }), 500
-
-    print(tb)
-    return jsonify({
-        'success': False,
-        'error': f'Internal server error: {err_msg}',
-        'traceback': tb.splitlines()[-5:] if tb else []
-    }), 500
-
-from werkzeug.exceptions import HTTPException
-
-@app.errorhandler(Exception)
-def _handle_unhandled_exception(exc):
-    if isinstance(exc, HTTPException):
-        return exc
-    
-    import traceback
-    original = getattr(exc, 'original_exception', None)
-    err_msg = str(original) if original else str(exc)
-    tb = traceback.format_exc()
-    
-    print(f"500 error: {err_msg}\n{tb}")
-    
-    # Hide details in production
-    if is_prod:
-        return jsonify({
-            'success': False,
-            'error': f'An internal server error occurred: {err_msg}'
+            'error': err_msg,
+            'traceback': tb_short,
         }), 500
 
     return jsonify({
         'success': False,
-        'error': err_msg,
-        'traceback': tb.splitlines()[-25:],
+        'error': 'Internal server error',
     }), 500
 
 # ----------------------------
@@ -1171,10 +958,9 @@ def call_ai_auto_layout(layout_payload):
         "You are analyzing the HEADER of a raster well log. The user has "
         "cropped the top portion of a single log panel. You see short text "
         "items (curve mnemonics and scale labels) with approximate x/y "
-        "centers in pixels, and a 'full_text' block containing all recognized text.\n\n"
-        "Your job is to:\n"
-        "1. Infer the logging TRACKS present across the width of the header.\n"
-        "2. Extract generic HEADER METADATA (Well, Company, API, etc.) from the 'full_text'.\n\n"
+        "centers in pixels.\n\n"
+        "Your job is to infer the logging TRACKS present across the width of "
+        "the header and return JSON ONLY describing each track.\n\n"
         "Pixels are in the coordinate system of the provided header image, "
         "where x=0 is the left edge and x increases to the right. The overall "
         "image width in pixels is image.width_px.\n\n"
@@ -1190,19 +976,7 @@ def call_ai_auto_layout(layout_payload):
         "      \"unit\": string or null,            // e.g. \"API\", \"G/CC\", \"V/V\", \"US/F\"\n"
         "      \"hot_side\": \"left\" | \"right\" | null  // which side is higher / hot values\n"
         "    }\n"
-        "  ],\n"
-        "  \"header_metadata\": {\n"
-        "    \"well\": string or null,\n"
-        "    \"company\": string or null,\n"
-        "    \"api\": string or null,\n"
-        "    \"date\": string or null,\n"
-        "    \"field\": string or null,\n"
-        "    \"location\": string or null,\n"
-        "    \"county\": string or null,\n"
-        "    \"state\": string or null,\n"
-        "    \"province\": string or null,\n"
-        "    \"service_company\": string or null\n"
-        "  }\n"
+        "  ]\n"
         "}\n\n"
         "GUIDELINES:\n"
         "- Group header items with similar x positions into the same track.\n"
@@ -1222,8 +996,6 @@ def call_ai_auto_layout(layout_payload):
         "- Infer left_x/right_x by placing boundaries midway between adjacent "
         "curve label centers along the x-axis.\n"
         "- Ensure left_x < right_x and tracks are ordered left-to-right.\n"
-        "- For header_metadata, look for text items like 'WELL:', 'COMPANY:', 'API:', etc.\n"
-        "  and try to associate the value next to them. If not found, use null.\n"
         "- If you are unsure about scale_min/scale_max or unit, use null.\n\n"
         "Here is the input JSON you should analyze:\n\n"
     )
@@ -1397,12 +1169,12 @@ def preprocess_curve_track(roi, mode="black"):
         edge_mask[-edge_margin:] = True
 
         # Strong spines near the left/right edges (likely track borders)
-        # Use 0.90 threshold: true borders span ~100% of height; slow curves (RHOB/DTC)
-        # can occupy 40-80% of one column and must not be removed.
-        edge_spines = (col_fraction > 0.90) & edge_mask
+        edge_spines = (col_fraction > 0.5) & edge_mask
 
-        # Very strong vertical spines anywhere inside the band.
-        interior_spines = (col_fraction > 0.90) & ~edge_mask
+        # Very strong vertical spines anywhere inside the band. Requiring a
+        # higher occupancy threshold here helps avoid deleting the true curve,
+        # which rarely stays in exactly one column for most of the depth.
+        interior_spines = (col_fraction > 0.7) & ~edge_mask
 
         spine_cols = edge_spines | interior_spines
         if np.any(spine_cols):
@@ -1526,12 +1298,12 @@ def remove_grid_lines_aggressive(gray_img, aggressive=True):
     # Detect vertical lines (most common in grid)
     if aggressive:
         # Very aggressive vertical line detection
-        v_kernel_size = max(5, min(30, h // 5))  # Smaller kernel = more aggressive detection of broken lines
+        v_kernel_size = max(15, min(80, h // 3))  # Larger kernel for aggressive detection
         v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, v_kernel_size))
         v_lines = cv2.morphologyEx(result, cv2.MORPH_OPEN, v_kernel)
         
         # Detect horizontal lines
-        h_kernel_size = max(5, min(30, w // 5))
+        h_kernel_size = max(15, min(80, w // 3))
         h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (h_kernel_size, 1))
         h_lines = cv2.morphologyEx(result, cv2.MORPH_OPEN, h_kernel)
         
@@ -1539,7 +1311,7 @@ def remove_grid_lines_aggressive(gray_img, aggressive=True):
         grid_lines = cv2.bitwise_or(v_lines, h_lines)
         
         # Dilate slightly to ensure complete removal
-        dilate_kernel = np.ones((3, 3), np.uint8)  # Larger dilation to wipe out the intersection bleed
+        dilate_kernel = np.ones((2, 2), np.uint8)
         grid_lines = cv2.dilate(grid_lines, dilate_kernel, iterations=1)
         
         # Remove grid lines from original
@@ -1584,69 +1356,6 @@ def detect_if_black_and_white_log(roi_bgr):
         return False
 
 
-def compute_black_curve_residual(gray_img):
-    """Estimate dark curve ink after subtracting long straight grid lines.
-
-    Returns a tuple of float32 images in [0, 1]:
-      - residual_score: dark-ink signal with most straight grid energy removed
-      - grid_score: confidence that a pixel belongs to a long straight grid line
-    """
-    if gray_img is None or gray_img.size == 0:
-        z = np.zeros((1, 1), dtype=np.float32)
-        return z, z
-
-    h, w = gray_img.shape[:2]
-    if h < 3 or w < 3:
-        z = np.zeros((h, w), dtype=np.float32)
-        return z, z
-
-    try:
-        dark = cv2.GaussianBlur(255 - gray_img, (3, 3), 0)
-    except Exception:
-        dark = (255 - gray_img).astype(np.uint8, copy=False)
-
-    # Use grayscale morphology to model the repeated straight grid pattern.
-    # The curve itself is jagged, so it usually does not survive these long,
-    # axis-aligned openings as strongly as the grid does.
-    k_v = max(31, min(111, h // 90 if h >= 90 else h - (1 - h % 2)))
-    k_h = max(21, min(71, w // 20 if w >= 20 else w - (1 - w % 2)))
-    k_v = max(3, int(k_v))
-    k_h = max(3, int(k_h))
-
-    try:
-        v_lines = cv2.morphologyEx(
-            dark, cv2.MORPH_OPEN,
-            cv2.getStructuringElement(cv2.MORPH_RECT, (1, k_v))
-        )
-        h_lines = cv2.morphologyEx(
-            dark, cv2.MORPH_OPEN,
-            cv2.getStructuringElement(cv2.MORPH_RECT, (k_h, 1))
-        )
-        grid = cv2.max(v_lines, h_lines)
-        grid = cv2.GaussianBlur(grid, (3, 3), 0)
-        residual = cv2.subtract(dark, grid)
-    except Exception:
-        z = np.zeros((h, w), dtype=np.float32)
-        return z, z
-
-    residual_score = residual.astype(np.float32)
-    grid_score = grid.astype(np.float32)
-
-    r_max = float(residual_score.max())
-    if r_max > 0:
-        residual_score /= r_max
-    else:
-        residual_score.fill(0.0)
-
-    g_max = float(grid_score.max())
-    if g_max > 0:
-        grid_score /= g_max
-    else:
-        grid_score.fill(0.0)
-
-    return residual_score, grid_score
-
-
 def enhance_curve_roi(roi_bgr):
     """
     Apply lightweight denoise + horizontal super-resolution to a curve ROI.
@@ -1675,56 +1384,6 @@ def enhance_curve_roi(roi_bgr):
     except Exception:
         pass
     return proc, scale
-
-
-def suppress_grid_hough(gray, h_thresh_ratio=0.25, v_thresh_ratio=0.25):
-    """
-    Use Probabilistic Hough Transform to detect and remove long straight grid lines
-    while preserving jagged curve data.
-    """
-    if gray is None:
-        return gray
-        
-    h, w = gray.shape
-    # Pre-process for edge detection
-    # Use adaptive threshold to get binary edges
-    edges = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 15, 5)
-    
-    # 1. Horizontal Lines
-    min_len_h = int(w * h_thresh_ratio)
-    lines_h = cv2.HoughLinesP(edges, 1, np.pi/180, threshold=80, minLineLength=min_len_h, maxLineGap=10)
-    
-    # 2. Vertical Lines
-    min_len_v = int(h * v_thresh_ratio)
-    lines_v = cv2.HoughLinesP(edges, 1, np.pi/180, threshold=80, minLineLength=min_len_v, maxLineGap=10)
-    
-    # Mask to draw the lines to be removed
-    grid_mask = np.zeros_like(gray)
-    
-    if lines_h is not None:
-        for line in lines_h:
-            x1, y1, x2, y2 = line[0]
-            angle = abs(math.atan2(y2-y1, x2-x1) * 180 / np.pi)
-            # Strict horizontal check (+/- 2 degrees)
-            if angle < 2 or angle > 178:
-                cv2.line(grid_mask, (x1, y1), (x2, y2), 255, 2)
-                
-    if lines_v is not None:
-        for line in lines_v:
-            x1, y1, x2, y2 = line[0]
-            angle = abs(math.atan2(y2-y1, x2-x1) * 180 / np.pi)
-            # Strict vertical check (+/- 2 degrees from 90)
-            if 88 < angle < 92:
-                cv2.line(grid_mask, (x1, y1), (x2, y2), 255, 2)
-                
-    # Dilate mask slightly to clean up edge artifacts
-    grid_mask = cv2.dilate(grid_mask, np.ones((3,3), np.uint8), iterations=1)
-    
-    # Inpaint/Erase grid lines (set to white)
-    cleaned = gray.copy()
-    cleaned[grid_mask > 0] = 255
-    
-    return cleaned
 
 
 def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allowed=True):
@@ -1812,31 +1471,29 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
     # Use enhanced image for better hue detection in faded areas
     colored_modes = {"green", "red", "blue", "auto", "cyan", "magenta", "yellow", "orange", "purple"}
     detected_hue = None
-    black_residual_score = None
-    black_grid_score = None
     if mode in colored_modes:
         detected_hue = detect_dominant_curve_hue(roi_enhanced)
     
     if mode == "green":
         # PERMISSIVE green detection again - we need to catch the faint tips
-        # Lower saturation threshold to catch lighter greens as seen in the user's image
-        lower = np.array([25, 25, 25], dtype=np.uint8)
+        # We'll rely on the tracer logic to ignore grid noise
+        # Increased saturation min from 30 to 50 to reject gray vertical lines
+        lower = np.array([25, 50, 30], dtype=np.uint8)
         upper = np.array([95, 255, 255], dtype=np.uint8)
         color_mask = cv2.inRange(hsv, lower, upper)
-
+        
         # Suppress red/orange pixels
         b, g, r = cv2.split(roi_enhanced)
         r16 = r.astype(np.int16)
         g16 = g.astype(np.int16)
         b16 = b.astype(np.int16)
-
+        
         # Only suppress clearly red pixels
         clearly_red = (r16 > g16 + 30) & (r16 > b16 + 30)
         color_mask[clearly_red] = 0
-
+        
         # Weak G-dominance check (allow if G is just slightly higher or equal)
-        # Relaxed even further to allow more light green/gray-green
-        g_dominant = (g16 >= r16 - 15) & (g16 >= b16 - 15)
+        g_dominant = (g16 >= r16 - 5) & (g16 >= b16 - 5)
         color_mask[~g_dominant] = 0
 
     elif mode == "auto":
@@ -1914,7 +1571,7 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
             # Handle red's wrap-around at 0/180
             if med_h <= 20:
                 h_lo = max(0, int(med_h - band))
-                h_hi = min(30, int(med_h - band))
+                h_hi = min(30, int(med_h + band))
                 dyn_lower = np.array([h_lo, 60, 40], dtype=np.uint8)
                 dyn_upper = np.array([h_hi, 255, 255], dtype=np.uint8)
                 color_mask = cv2.inRange(hsv, dyn_lower, dyn_upper)
@@ -2109,36 +1766,16 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
         # Apply aggressive grid removal to grayscale before thresholding if B&W detected
         gray_processed = gray
         if is_bw_log:
-            # Enhanced with Hough Transform for better preservation of jagged curves
-            gray_processed = suppress_grid_hough(gray_processed)
-            # Use original morphology as backup but less aggressive
-            gray_processed = remove_grid_lines_aggressive(gray_processed, aggressive=False)
-
-        # Build a grayscale residual where long straight grid energy is
-        # subtracted out before we threshold. This helps black-on-black scans
-        # where the curve and grid share the same color, but only the grid is
-        # strongly straight and repetitive.
-        try:
-            black_residual_score, black_grid_score = compute_black_curve_residual(gray_processed)
-        except Exception:
-            black_residual_score = None
-            black_grid_score = None
+            gray_processed = remove_grid_lines_aggressive(gray, aggressive=True)
         
         color_mask = cv2.adaptiveThreshold(
-            gray_processed, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
-            cv2.THRESH_BINARY_INV, 21, 4
+            gray_processed,
+            255,
+            cv2.ADAPTIVE_THRESH_MEAN_C,
+            cv2.THRESH_BINARY_INV,
+            21,
+            10,
         )
-
-        if black_residual_score is not None and black_residual_score.size == color_mask.size:
-            try:
-                residual_u8 = np.clip(black_residual_score * 255.0, 0, 255).astype(np.uint8)
-                residual_mask = cv2.adaptiveThreshold(
-                    255 - residual_u8, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
-                    cv2.THRESH_BINARY_INV, 21, 6
-                )
-                color_mask = cv2.bitwise_or(color_mask, residual_mask)
-            except Exception:
-                pass
 
         # Suppress colored pixels (grid/track lines are often red/green/blue).
         # In black mode we want low-saturation dark ink.
@@ -2155,13 +1792,11 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
             if is_bw_log:
                 # Lighter grid removal since we already did aggressive removal
                 k_v = cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(8, min(40, h // 3))))
-                # AGGRESSIVE: Remove horizontal lines > 10px to kill grid shelves
-                k_h = cv2.getStructuringElement(cv2.MORPH_RECT, (12, 1))
+                k_h = cv2.getStructuringElement(cv2.MORPH_RECT, (max(8, min(40, w // 3)), 1))
             else:
                 # Standard grid removal for non-B&W images
                 k_v = cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(10, min(60, h // 2))))
-                # AGGRESSIVE: Remove horizontal lines > 15px to kill grid shelves even if not detected as B&W
-                k_h = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 1))
+                k_h = cv2.getStructuringElement(cv2.MORPH_RECT, (max(10, min(60, w // 2)), 1))
             
             v_lines = cv2.morphologyEx(color_mask, cv2.MORPH_OPEN, k_v)
             h_lines = cv2.morphologyEx(color_mask, cv2.MORPH_OPEN, k_h)
@@ -2172,18 +1807,6 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
     color_mask = cv2.morphologyEx(color_mask, cv2.MORPH_OPEN, kernel, 1)
     color_mask = cv2.morphologyEx(color_mask, cv2.MORPH_CLOSE, kernel, 1)
     color_score = color_mask.astype(np.float32) / 255.0
-
-    # Compute 1-pixel skeleton for black mode using ximgproc thinning.
-    # Applied AFTER grid removal so only curve pixels are thinned, not grid lines.
-    skel_thin = None
-    if mode not in colored_modes:
-        try:
-            if hasattr(cv2, 'ximgproc'):
-                skel_thin = cv2.ximgproc.thinning(
-                    color_mask, thinningType=cv2.ximgproc.THINNING_ZHANGSUEN
-                )
-        except Exception:
-            skel_thin = None
 
     # 2) Enhanced edge detection using both Canny and Sobel.
     #    Canny finds strong edges; Sobel emphasizes horizontal gradients
@@ -2211,19 +1834,15 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
     if h >= 4 and w >= 2:
         col_on_frac = (color_score > 0).mean(axis=0)
         
-        # For black mode, slow-varying curves (DTC, RHOB) can occupy one column for
-        # 40-70% of the image height — use a high threshold to only kill near-solid
-        # gridline/border columns (~90%+ occupancy). Colored modes can stay at 0.35
-        # since their color_score is already hue-gated and gridlines are unsaturated.
-        col_rail_threshold = 0.80 if mode not in colored_modes else 0.35
-        rail_cols = col_on_frac > col_rail_threshold
+        # Detect rail-like columns (on for many rows)
+        rail_cols = col_on_frac > 0.35  # Threshold for grid line detection
         if np.any(rail_cols):
             color_score[:, rail_cols] *= 0.005  # Almost eliminate vertical rails
             edge_score[:, rail_cols] *= 0.005
 
         if mode not in colored_modes:
             row_on_frac = (color_score > 0).mean(axis=1)
-            rail_rows = row_on_frac > 0.80
+            rail_rows = row_on_frac > 0.35
             if np.any(rail_rows):
                 color_score[rail_rows, :] *= 0.02
                 edge_score[rail_rows, :] *= 0.02
@@ -2299,95 +1918,7 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
         weak_edges = (edge_score > 0.05) & (edge_score < 0.3)
         edge_enhanced[weak_edges] = edge_score[weak_edges] * 1.5
         
-        # --- Vertical Derivative Boost ---
-        # Calculate Sobel Y to detect horizontal changes (edges of horizontal lines/spikes)
-        # Vertical grid rails have dy ~ 0. Wiggly curves (even steep ones) have higher dy components.
-        sobel_y = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
-        sobel_y = np.abs(sobel_y)
-        # Normalize
-        max_sy = sobel_y.max()
-        if max_sy > 0:
-            sobel_y_score = (sobel_y / max_sy).astype(np.float32)
-        else:
-            sobel_y_score = np.zeros_like(edge_score)
-
-        # --- Harris Corner Boost ---
-        # Harris response is high at "corners" (jagged peaks) and low on straight edges (grid lines).
-        # This is perfect for highlighting the high-frequency nature of GR curves.
-        # blockSize=2 (local), ksize=3 (gradients), k=0.04 (sensitivity)
-        harris = cv2.cornerHarris(gray, 2, 3, 0.04)
-        # Normalize strictly to 0-1
-        harris = np.maximum(0, harris) # Clip negatives (flat regions)
-        max_h = harris.max()
-        if max_h > 0:
-            harris_score = (harris / max_h).astype(np.float32)
-            # Dilate slightly to make the corner "dots" connect
-            harris_score = cv2.dilate(harris_score, np.ones((3,3), np.uint8))
-        else:
-            harris_score = np.zeros_like(edge_score)
-            
-        # --- Diagonal Derivative Boost ---
-        # Grid lines are 0 or 90 degrees. Curves have diagonal segments.
-        # Calculate diagonal gradients: |dx| + |dy| is a simple approx, but we can be more specific.
-        # Actually, just using the magnitude of the gradient vector (already largely covered by Canny)
-        # isn't enough. We want specifically 45/135 degree energy.
-        # Rotate 45 degrees? Easier: |dx| * |dy| is high only when BOTH are present (diagonal).
-        diag_score = (sobel_x.astype(np.float32)/255.0) * (sobel_y.astype(np.float32)/max_sy if max_sy > 0 else 0)
-        # Normalize
-        if diag_score.max() > 0:
-            diag_score /= diag_score.max()
-            
-        # Combine:
-        # - color_score (15%): Base intensity
-        # - edge_enhanced (30%): Canny + SobelX (strong edges) - reduced slightly
-        # - center_score (20%): Distance transform (center of strokes)
-        # - sobel_y_score (15%): Boost for wiggles/spikes (dy)
-        # - harris_score (10%): Boost for jagged peaks/corners
-        # - diag_score (10%): Boost for diagonal segments (non-grid orientations)
-        # Build skeleton score from ximgproc thinning (1-pixel centerline)
-        skel_score = None
-        if skel_thin is not None and skel_thin.any():
-            skel_f = cv2.GaussianBlur(skel_thin.astype(np.float32), (3, 3), 0)
-            skel_max = float(skel_f.max())
-            if skel_max > 0:
-                skel_score = skel_f / skel_max
-
-        if skel_score is not None:
-            # Skeleton gets the strongest single vote so thick black strokes
-            # stay centered, but we lean more on the residual-dark score than
-            # on raw corners to avoid snapping to grid intersections.
-            residual_score = black_residual_score if black_residual_score is not None and black_residual_score.size == color_score.size else color_score
-            prob = (
-                0.12 * color_score +
-                0.22 * residual_score +
-                0.12 * edge_enhanced +
-                0.18 * center_score +
-                0.09 * sobel_y_score +
-                0.04 * harris_score +
-                0.03 * diag_score +
-                0.20 * skel_score
-            )
-        else:
-            residual_score = black_residual_score if black_residual_score is not None and black_residual_score.size == color_score.size else color_score
-            prob = (
-                0.18 * color_score +
-                0.24 * residual_score +
-                0.18 * edge_enhanced +
-                0.22 * center_score +
-                0.10 * sobel_y_score +
-                0.04 * harris_score +
-                0.04 * diag_score
-            )
-
-        if black_grid_score is not None and black_grid_score.size == prob.size:
-            try:
-                # Penalize long straight-line evidence, but keep a floor so the
-                # curve can survive where it legitimately crosses a grid line.
-                prob *= np.clip(1.0 - 0.82 * black_grid_score, 0.10, 1.0)
-                if black_residual_score is not None and black_residual_score.size == prob.size:
-                    prob = np.maximum(prob, 0.35 * black_residual_score)
-            except Exception:
-                pass
+        prob = 0.2 * color_score + 0.5 * edge_enhanced + 0.3 * center_score
 
     # 6) Reuse the stronger grid-removal heuristics from preprocess_curve_track
     #    as a gating mask. This aggressively down-weights columns/rows that
@@ -2508,13 +2039,7 @@ def trace_curve_with_dp(
     skeleton_score = np.zeros_like(prob, dtype=np.float32)
     if np.any(bin_mask):
         try:
-            if hasattr(cv2, 'ximgproc'):
-                skel = cv2.ximgproc.thinning(
-                    bin_mask.astype(np.uint8) * 255,
-                    thinningType=cv2.ximgproc.THINNING_ZHANGSUEN
-                )
-            else:
-                skel = _morphological_skeleton((bin_mask.astype(np.uint8) * 255))
+            skel = _morphological_skeleton((bin_mask.astype(np.uint8) * 255))
             if skel is not None and skel.size == prob.size:
                 skel_f = skel.astype(np.float32) / 255.0
                 # Feather skeleton to nearby pixels so DP can stay on the ridge
@@ -2540,36 +2065,16 @@ def trace_curve_with_dp(
     if skeleton_score is not None:
         live_score = np.maximum(live_score, 0.55 * skeleton_score + 0.05 * bin_mask.astype(np.float32))
     live_score = np.clip(live_score, eps, 1.0)
-
-    # Blend in distance transform so the DP prefers the *center* of thick
-    # ink strokes over their edges.  A pixel at the stroke center gets a
-    # bonus proportional to its distance from the nearest background pixel.
-    # 70% original score + 30% centredness keeps the colour/intensity
-    # signal dominant while removing the edge-of-stroke bias.
-    if bin_mask.any():
-        _dist = cv2.distanceTransform(bin_mask.astype(np.uint8), cv2.DIST_L2, 3)
-        _d_max = _dist.max()
-        if _d_max > 0:
-            _dist_norm = (_dist / _d_max).astype(np.float32)
-            live_score = live_score * (0.7 + 0.3 * _dist_norm)
-            live_score = np.clip(live_score, eps, 1.0)
-
     cost = -np.log(live_score)
-
-    curve_type_upper = str(curve_type or "").upper()
 
     # Soft rail penalty: down-weight columns that stay on for many rows, without banning them
     if h >= 4 and w >= 2:
         col_frac = bin_mask.mean(axis=0)
-        # Lower threshold so we catch dashed or interrupted vertical grid lines.
-        # It's a soft penalty, so a truly straight curve can still power through it.
-        rail_thresh = 0.40 if curve_type_upper == 'GR' else 0.50
-        rail_mask = col_frac > rail_thresh
-        # Expand to runs of length >=2 using a 2-wide moving window (grid lines are usually 2+ px wide)
-        rail_run = np.convolve(rail_mask.astype(np.float32), np.ones(2, dtype=np.float32), mode='same') >= 1.5
+        rail_mask = col_frac > 0.25
+        # Expand to runs of length ≥3 using a 3-wide moving window
+        rail_run = np.convolve(rail_mask.astype(np.float32), np.ones(3, dtype=np.float32), mode='same') >= 2.5
+        rail_weight = 15.0  # keep modest per guidance (5–30)
         if np.any(rail_run):
-            # Increase the rail penalty so the trace actively avoids vertical grids
-            rail_weight = 12.0 if curve_type_upper == 'GR' else 8.0
             cost += (rail_weight * rail_run.astype(np.float32))[np.newaxis, :]
 
     # Use live_score for Viterbi likelihoods
@@ -2581,47 +2086,20 @@ def trace_curve_with_dp(
             dist = frac
         else:
             dist = 1.0 - frac
-        # A strong hot-side prior is useful for GR-style crest picking, but on
-        # slower black curves such as RHOB/DT it can pull the path onto a
-        # neighboring rail when the signal gets weak. Keep the directional bias
-        # for GR and effectively disable it for other curve families.
-        side_lambda = 1.0 if curve_type_upper == "GR" else 0.0
-        if side_lambda > 0.0:
-            side_penalty = side_lambda * dist
-            cost += side_penalty[np.newaxis, :]
+        side_lambda = 1.0
+        side_penalty = side_lambda * dist
+        cost += side_penalty[np.newaxis, :]
     
-    # Add plausibility penalty only when the display scale is in physical units.
-    # If scale_min/scale_max don't overlap the known physical range at all (e.g.
-    # display range 0-150 vs RHOB physical 1.5-3.5 g/cc), skip the penalty to
-    # avoid penalising every column and forcing the DP toward one edge.
+    # Add plausibility penalty (reduced from 10.0 to 2.0 to be less aggressive)
     if curve_type.upper() in plausible_ranges:
         pmin, pmax = plausible_ranges[curve_type.upper()]
-        scale_lo = min(scale_min, scale_max)
-        scale_hi = max(scale_min, scale_max)
-        # Only apply if the display range meaningfully overlaps the physical range
-        if scale_lo <= pmax and scale_hi >= pmin:
-            for x in range(w):
-                value = scale_min + (x / max(1, w - 1)) * (scale_max - scale_min)
-                if value < pmin or value > pmax:
-                    cost[:, x] += 1.0
+        for x in range(w):
+            # Map x to value
+            value = scale_min + (x / max(1, w - 1)) * (scale_max - scale_min)
+            if value < pmin or value > pmax:
+                # Penalize implausible values (but not too harshly)
+                cost[:, x] += 1.0
     
-    # Horizontal grid line suppression using morphological opening.
-    # A true grid line has many *consecutive* pixels across the row; the actual
-    # curve only spans ~1-5 pixels per row and won't survive a wide horizontal
-    # opening. This is more discriminative than a raw row-fraction threshold.
-    if h >= 4 and w >= 8:
-        # Use a slightly smaller kernel for horizontal lines so we catch broken grid rails too
-        horiz_kernel_w = max(3, w // 5)
-        horiz_kern = cv2.getStructuringElement(cv2.MORPH_RECT, (horiz_kernel_w, 1))
-        horiz_detected = cv2.morphologyEx(bin_mask.astype(np.uint8), cv2.MORPH_OPEN, horiz_kern)
-        horiz_row_frac = horiz_detected.mean(axis=1)
-        # Lower threshold so more horizontal rails get penalized
-        horiz_mask = horiz_row_frac > 0.20  # >20% of row survived wide-kernel opening → true grid line
-        if np.any(horiz_mask):
-            uniform_cost = float(-np.log(1e-5))  # Much stronger penalty
-            cost[horiz_mask, :] = uniform_cost
-            prob[horiz_mask, :] = 1e-5
-
     # Run optimized DP (Forward Pass)
     xs_fwd, conf_fwd = fast_tracer.run_viterbi(
         cost.astype(np.float32), 
@@ -2643,163 +2121,35 @@ def trace_curve_with_dp(
     # Flip results back to match original orientation
     xs_bwd = xs_bwd_flipped[::-1]
     conf_bwd = conf_bwd_flipped[::-1]
-
-    # Each directional pass already follows a smooth DP path, but the fast
-    # tracer marks low-probability rows as NaN. On black scans that creates
-    # tiny one-row dropouts right where the curve crosses grid lines, and the
-    # forward/backward merge then "zipper switches" onto the other branch.
-    # Interpolating the per-pass dropouts preserves each branch's continuity
-    # before we decide which direction to trust per span.
-    try:
-        if xs_fwd.size:
-            xs_fwd = pd.Series(xs_fwd).interpolate(
-                method='linear',
-                limit_direction='both',
-            ).to_numpy(dtype=np.float32)
-        if xs_bwd.size:
-            xs_bwd = pd.Series(xs_bwd).interpolate(
-                method='linear',
-                limit_direction='both',
-            ).to_numpy(dtype=np.float32)
-    except Exception:
-        pass
     
-    # Merge Forward and Backward results with a continuity-aware branch choice.
-    # The forward/backward passes can occasionally lock onto different rails on
-    # black scans. Picking the locally brighter branch *per row* causes visual
-    # teleportation, so resolve disagreements as contiguous spans instead.
+    # Merge Forward and Backward results
+    # Averaging the positions cancels out directional lag/hysteresis
     xs = np.full_like(xs_fwd, np.nan)
     confidence = np.zeros_like(conf_fwd)
-
-    merge_tol = 5.0
-    switch_penalty = 0.25
-    merge_smooth_lambda = max(0.02, float(smooth_lambda) * 0.05)
-
-    candidates = np.stack(
-        (xs_fwd.astype(np.float32), xs_bwd.astype(np.float32)),
-        axis=1,
-    )
-    candidate_conf = np.stack(
-        (conf_fwd.astype(np.float32), conf_bwd.astype(np.float32)),
-        axis=1,
-    )
-    candidate_valid = np.isfinite(candidates)
-
-    def _candidate_cost(y_idx, x_val, conf_val):
-        x_idx = int(min(w - 1, max(0, int(round(float(x_val))))))
-        p_here = float(prob[y_idx, x_idx])
-        # Favor high-probability pixels first, with a mild confidence tie-breaker.
-        return float(-np.log(max(eps, p_here)) - 0.15 * max(0.0, float(conf_val)))
-
-    y = 0
-    while y < h:
-        if not np.any(candidate_valid[y]):
-            y += 1
-            continue
-
-        seg_start = y
-        while y < h and np.any(candidate_valid[y]):
-            y += 1
-        seg_end = y
-        seg_len = seg_end - seg_start
-
-        merge_dp = np.full((seg_len, 2), np.inf, dtype=np.float64)
-        merge_prev = np.full((seg_len, 2), -1, dtype=np.int8)
-
-        for state in range(2):
-            if candidate_valid[seg_start, state]:
-                merge_dp[0, state] = _candidate_cost(
-                    seg_start,
-                    candidates[seg_start, state],
-                    candidate_conf[seg_start, state],
-                )
-
-        for off in range(1, seg_len):
-            yy = seg_start + off
-            for state in range(2):
-                if not candidate_valid[yy, state]:
-                    continue
-
-                x_cur = float(candidates[yy, state])
-                node_cost = _candidate_cost(yy, x_cur, candidate_conf[yy, state])
-                best_val = np.inf
-                best_prev_state = -1
-
-                for prev_state in range(2):
-                    if not candidate_valid[yy - 1, prev_state]:
-                        continue
-                    prev_val = float(merge_dp[off - 1, prev_state])
-                    if not np.isfinite(prev_val):
-                        continue
-
-                    x_prev = float(candidates[yy - 1, prev_state])
-                    dx = x_cur - x_prev
-                    transition_cost = merge_smooth_lambda * (dx * dx)
-                    if prev_state != state:
-                        transition_cost += switch_penalty
-
-                    total_cost = prev_val + node_cost + transition_cost
-                    if total_cost < best_val:
-                        best_val = total_cost
-                        best_prev_state = prev_state
-
-                if best_prev_state >= 0:
-                    merge_dp[off, state] = best_val
-                    merge_prev[off, state] = best_prev_state
-                else:
-                    merge_dp[off, state] = node_cost
-
-        states = np.full(seg_len, -1, dtype=np.int8)
-        end_state = 0
-        if not np.isfinite(merge_dp[-1, end_state]) and np.isfinite(merge_dp[-1, 1]):
-            end_state = 1
-        elif np.isfinite(merge_dp[-1, 1]) and merge_dp[-1, 1] < merge_dp[-1, 0]:
-            end_state = 1
-        states[-1] = np.int8(end_state)
-
-        for off in range(seg_len - 1, 0, -1):
-            state = int(states[off])
-            prev_state = int(merge_prev[off, state]) if state >= 0 else -1
-            if prev_state < 0:
-                if np.isfinite(merge_dp[off - 1, state]):
-                    prev_state = state
-                elif np.isfinite(merge_dp[off - 1, 1 - state]):
-                    prev_state = 1 - state
-            states[off - 1] = np.int8(prev_state)
-
-        if states[0] < 0:
-            if np.isfinite(merge_dp[0, 0]):
-                states[0] = np.int8(0)
-            elif np.isfinite(merge_dp[0, 1]):
-                states[0] = np.int8(1)
-
-        for off in range(seg_len):
-            yy = seg_start + off
-            v1 = candidates[yy, 0]
-            v2 = candidates[yy, 1]
-            valid1 = bool(candidate_valid[yy, 0])
-            valid2 = bool(candidate_valid[yy, 1])
-
-            if valid1 and valid2 and abs(float(v1) - float(v2)) <= merge_tol:
-                xs[yy] = float(v1 + v2) * 0.5
-                confidence[yy] = float(candidate_conf[yy, 0] + candidate_conf[yy, 1]) * 0.5
-                continue
-
-            state = int(states[off])
-            if state < 0 or not candidate_valid[yy, state]:
-                if valid1 and valid2:
-                    c1 = _candidate_cost(yy, v1, candidate_conf[yy, 0])
-                    c2 = _candidate_cost(yy, v2, candidate_conf[yy, 1])
-                    state = 0 if c1 <= c2 else 1
-                elif valid1:
-                    state = 0
-                elif valid2:
-                    state = 1
-                else:
-                    continue
-
-            xs[yy] = float(candidates[yy, state])
-            confidence[yy] = float(candidate_conf[yy, state])
+    
+    for y in range(h):
+        v1 = xs_fwd[y]
+        v2 = xs_bwd[y]
+        valid1 = np.isfinite(v1)
+        valid2 = np.isfinite(v2)
+        
+        if valid1 and valid2:
+            # If the two passes disagree significantly (e.g. took different paths around an obstacle),
+            # pick the one with higher local probability instead of averaging (which would land in the middle of nowhere).
+            if abs(v1 - v2) > 5:
+                p1 = prob[y, int(min(w-1, max(0, v1)))]
+                p2 = prob[y, int(min(w-1, max(0, v2)))]
+                xs[y] = v1 if p1 > p2 else v2
+            else:
+                # Otherwise, average them to center the trace on peaks
+                xs[y] = (v1 + v2) * 0.5
+            confidence[y] = (conf_fwd[y] + conf_bwd[y]) * 0.5
+        elif valid1:
+            xs[y] = v1
+            confidence[y] = conf_fwd[y]
+        elif valid2:
+            xs[y] = v2
+            confidence[y] = conf_bwd[y]
     
     return xs, confidence
 
@@ -3403,7 +2753,7 @@ def trace_curve_pixel_perfect(mask: np.ndarray, grayscale: np.ndarray = None, bg
 
     return xs, confidence
 
-def trace_curve_multiscale(curve_mask, scale_min, scale_max, curve_type="GR", max_step=3, smooth_lambda=0.1, curv_lambda=0.01, hot_side=None):
+def trace_curve_multiscale(curve_mask, scale_min, scale_max, curve_type="GR", max_step=3, smooth_lambda=0.1, hot_side=None):
     """
     Enhanced multi-scale curve tracing with 5 scales and weighted fusion.
     
@@ -3420,8 +2770,7 @@ def trace_curve_multiscale(curve_mask, scale_min, scale_max, curve_type="GR", ma
     
     # For GR curves, we want to allow very sharp peaks, so we lower the smoothing significantly.
     # For other curves (like Res), we keep it higher to avoid noise.
-    # Note: We respect the passed smooth_lambda, but ensure it's not too high for GR.
-    if curve_type.upper() == "GR" and smooth_lambda > 0.01:
+    if curve_type.upper() == "GR":
         smooth_lambda = 0.001
     
     h, w = curve_mask.shape
@@ -3478,10 +2827,10 @@ def trace_curve_multiscale(curve_mask, scale_min, scale_max, curve_type="GR", ma
         if curve_type.upper() == "GR":
             # Adjust based on jaggedness
             return {
-                "smooth_lambda": max(0.000001, smooth_lambda * scale * jaggedness_factor),
-                "max_step": max(1, int(max_step * scale * 1.2)),  # Moderate movement to prevent teleportation
+                "smooth_lambda": max(0.0001, smooth_lambda * scale * jaggedness_factor),
+                "max_step": max(1, int(max_step * scale * 2.5)),  # Allow more movement for GR
                 "rail_threshold": max(0.01, 0.1 * scale * jaggedness_factor),
-                "curv_lambda": max(0.000001, 0.001 * scale * jaggedness_factor)
+                "curv_lambda": max(0.0001, 0.001 * scale * jaggedness_factor)
             }
         else:
             return {
@@ -3576,6 +2925,8 @@ def trace_curve_multiscale(curve_mask, scale_min, scale_max, curve_type="GR", ma
         # Use raw probability map for maximum sensitivity (no blur)
         raw = prob_map
         
+        # Ultra-aggressive peak detection parameters
+        min_prominence = 0.005  # Extremely low threshold
         search_window = 2       # Very small neighborhood
         
         # Multi-scale detection with different sensitivities
@@ -3612,8 +2963,13 @@ def trace_curve_multiscale(curve_mask, scale_min, scale_max, curve_type="GR", ma
                         right_valley = np.percentile(right_region, 20)
                         prominence = row[x] - max(left_valley, right_valley)
                         
-                        # Use provided min_prominence
-                        if prominence > min_prominence:
+                        # Ultra-low threshold for GR logs
+                        if curve_type.upper() == "GR":
+                            prominence_threshold = 0.005  # Almost any peak
+                        else:
+                            prominence_threshold = 0.01
+                        
+                        if prominence > prominence_threshold:
                             # Accept even flat peaks
                             peaks.append((y, x, prominence))
         
@@ -3631,6 +2987,10 @@ def trace_curve_multiscale(curve_mask, scale_min, scale_max, curve_type="GR", ma
     
     def is_near_peak(y, peaks, window=4):
         """Check if y coordinate is near a detected peak with expanded window"""
+        return any(abs(py - y) <= window for py, px, prom in peaks)
+    
+    def is_near_peak(y, peaks, window=3):
+        """Check if y coordinate is near a detected peak"""
         return any(abs(py - y) <= window for py, px, prom in peaks)
     
     # AI-powered peak detection fallback
@@ -3753,7 +3113,7 @@ def trace_curve_multiscale(curve_mask, scale_min, scale_max, curve_type="GR", ma
         
         h, w = prob_map.shape
         xs_refined = xs.copy()
-        subpixel_conf = np.ones(h, dtype=np.float32)
+        subpixel_conf = np.zeros_like(xs)
         
         for y in range(h):
             if not np.isfinite(xs[y]):
@@ -3777,10 +3137,13 @@ def trace_curve_multiscale(curve_mask, scale_min, scale_max, curve_type="GR", ma
                 # Only apply if offset is reasonable (< 1 pixel)
                 if abs(offset) < 1.0:
                     xs_refined[y] = x + offset
+                    subpixel_conf[y] = 1.0 - abs(offset)  # Confidence decreases with offset
                 else:
                     xs_refined[y] = xs[y]
+                    subpixel_conf[y] = 0.5
             else:
                 xs_refined[y] = xs[y]
+                subpixel_conf[y] = 0.3
         
         return xs_refined, subpixel_conf
     
@@ -3789,16 +3152,11 @@ def trace_curve_multiscale(curve_mask, scale_min, scale_max, curve_type="GR", ma
         """Refine based on local curvature analysis to catch missed peaks"""
         h, w = prob_map.shape
         xs_refined = xs.copy()
-        curv_conf = np.ones(h, dtype=np.float32)
-        # Only meaningful for jagged GR logs; for smooth curves (RHOB, DTC, etc.)
-        # the ±5px snap with a 5% threshold causes hundreds of random jumps on a
-        # noisy prob_map, making the trace more erratic than it started.
-        if curve_type.upper() != "GR":
-            return xs_refined, curv_conf
+        
         # Calculate curvature using second derivative
         valid_mask = np.isfinite(xs)
         if np.sum(valid_mask) < 5:
-            return xs_refined, curv_conf
+            return xs, np.zeros(h)
         
         # Fill NaNs for curvature calculation
         xs_smooth = xs.copy()
@@ -3836,7 +3194,7 @@ def trace_curve_multiscale(curve_mask, scale_min, scale_max, curve_type="GR", ma
                 if local_max_val > current_val * 1.05:  # 5% improvement threshold (Medium Greedy)
                     xs_refined[y] = start + local_max_idx
         
-        return xs_refined, curv_conf
+        return xs_refined
 
     def ensure_peak_crests(xs, conf, prob_map, peaks, hot_side=None, y_merge_window=3):
         """Ensure each vertical GR peak cluster has at least one crest sample.
@@ -3868,7 +3226,7 @@ def trace_curve_multiscale(curve_mask, scale_min, scale_max, curve_type="GR", ma
                 continue
             # Use either provided prominence or local prob as strength
             strength = float(prom) if np.isfinite(prom) else float(prob_map[py_i, px_i])
-            if strength <= 0.005:
+            if strength <= 0.01:
                 continue
             strong_peaks.append((py_i, px_i, strength))
 
@@ -3889,40 +3247,20 @@ def trace_curve_multiscale(curve_mask, scale_min, scale_max, curve_type="GR", ma
 
         for cluster in clusters:
             # Pick a crest candidate within this vertical group.
-            # Strategy: Find the strongest peak, but prefer "tips" (hot side)
-            # if they are reasonably strong (at least 50% of the max score in the cluster).
-            
-            # 1. Find max score in cluster
-            max_s = -1.0
-            for py, px, prom in cluster:
-                s = float(prob_map[py, px])
-                if s > max_s:
-                    max_s = s
-            
-            # 2. Select best candidate among those with reasonable score
-            threshold = max(0.01, max_s * 0.5)
-            best_key = None
+            # We bias toward the hot side (right/left) while still requiring
+            # a strong probability value.
             best_py, best_px, best_score = None, None, -1.0
-            
             for py, px, prom in cluster:
                 score = float(prob_map[py, px])
-                if score < threshold:
-                    continue
-                    
-                # Bias toward the hot side for the "key" (tie-breaking or primary sort)
                 if hot_side == "right":
-                    # Prioritize right-most X, then score
                     key = (px, score)
                 elif hot_side == "left":
-                    # Prioritize left-most X (largest -px), then score
                     key = (-px, score)
                 else:
-                    # Just score
-                    key = (score, 0)
+                    key = (score,)
 
-                # Select best candidate based on direction-aware key
-                if best_key is None or key > best_key:
-                    best_key = key
+                # Simple dominance: prefer higher score, then more extreme X
+                if score > best_score:
                     best_score = score
                     best_py, best_px = py, px
 
@@ -3935,27 +3273,6 @@ def trace_curve_multiscale(curve_mask, scale_min, scale_max, curve_type="GR", ma
                 continue
 
             x_curr = xs_out[y] if np.isfinite(xs_out[y]) else None
-            
-            # TELEPORTATION GUARD:
-            # Prevent snapping to peaks far from the existing trace.
-            # If the current row has no trace, check neighbors to establish context.
-            ref_x = x_curr
-            if ref_x is None:
-                # Search neighbors for a valid reference point
-                for offset in [1, -1, 2, -2, 3, -3, 4, -4, 5, -5]:
-                    ny = y + offset
-                    if 0 <= ny < h and np.isfinite(xs_out[ny]):
-                        ref_x = xs_out[ny]
-                        break
-            
-            # If we have a reference, enforce distance limit (30px)
-            if ref_x is not None:
-                if abs(x_peak - ref_x) > 30:
-                    continue
-            else:
-                # If no reference nearby (isolated point), unsafe to snap -> skip
-                continue
-
             x_curr_int = int(round(x_curr)) if x_curr is not None else None
 
             p_peak = float(prob_map[y, x_peak])
@@ -3988,184 +3305,240 @@ def trace_curve_multiscale(curve_mask, scale_min, scale_max, curve_type="GR", ma
     confidence = np.zeros(h, dtype=np.float32)
     
     # Peak-aware fusion with curvature refinement
-    peaks = detect_local_peaks(prob, min_prominence=0.005)
+    peaks = detect_local_peaks(prob, min_prominence=0.03) if curve_type.upper() == "GR" else []
     
     for y in range(h):
         valid_indices = []
         valid_xs = []
         valid_confs = []
-        cand_scales = []  # accumulator for per-candidate scale values (renamed to avoid shadowing outer valid_scales)
+        valid_scales = []
         
-        for i, (xs_s, conf_s, scale) in enumerate(zip(all_xs, all_confs, valid_scales)):
-            if xs_s is not None and y < xs_s.size and np.isfinite(xs_s[y]):
-                x_int = int(round(xs_s[y]))
+        for i, (xs, conf, scale) in enumerate(zip(all_xs, all_confs, valid_scales)):
+            if xs is not None and y < xs.size and np.isfinite(xs[y]):
+                x_int = int(round(xs[y]))
                 if 0 <= x_int < w:
+                    # Enhanced peak-aware weighting
+                    if curve_type.upper() == "GR":
+                        if is_near_peak(y, peaks):
+                            # Aggressive peak detection near known peaks
+                            weight = conf[y] * (scale ** 2.5)  # Stronger fine scale preference
+                        else:
+                            # Standard weighting away from peaks
+                            weight = conf[y] * scale
+                    else:
+                        weight = conf[y] * scale
+                    
                     valid_indices.append(i)
-                    valid_xs.append(xs_s[y])
-                    valid_confs.append(conf_s[y])
-                    cand_scales.append(scale)
-
-        # Confidence-weighted fusion across all scales
+                    valid_xs.append(xs[y])
+                    valid_confs.append(conf[y])
+                    valid_scales.append(scale)
+        
         if valid_xs:
-            total_conf = sum(valid_confs)
-            if total_conf > 0:
-                xs_fused[y] = sum(x * c for x, c in zip(valid_xs, valid_confs)) / total_conf
-                confidence[y] = max(valid_confs)
+            # Fusion strategy
+            if curve_type.upper() == "GR":
+                # WINNER-TAKES-ALL for jagged GR peaks: pick the candidate
+                # that lands on the highest probability in the original map.
+                best_val = -1.0
+                best_x = np.nan
+
+                for x_cand in valid_xs:
+                    x_int = int(round(x_cand))
+                    if 0 <= x_int < w:
+                        val = prob[y, x_int]
+                        if val > best_val:
+                            best_val = val
+                            best_x = x_cand
+
+                if best_val > 0.0:
+                    xs_fused[y] = best_x
+                    confidence[y] = best_val
+                else:
+                    # Fallback to weighted average if everything is very weak
+                    weights = np.array(valid_confs) * np.array(valid_scales)
+                    if weights.sum() > 0:
+                        weights = weights / weights.sum()
+                        xs_fused[y] = float(np.sum(np.array(valid_xs) * weights))
+                        confidence[y] = float(np.sum(np.array(valid_confs) * weights))
             else:
-                xs_fused[y] = float(np.mean(valid_xs))
-                confidence[y] = 0.0
+                # Original weighted-average fusion for smoother curves
+                weights = np.array(valid_confs) * np.array(valid_scales)
+                if weights.sum() > 0:
+                    weights = weights / weights.sum()
+                    xs_fused[y] = float(np.sum(np.array(valid_xs) * weights))
+                    confidence[y] = float(np.sum(np.array(valid_confs) * weights))
 
-    # Push sampled points to hot-side crest tips
-    if peaks:
-        xs_fused, confidence = ensure_peak_crests(
-            xs_fused, confidence, prob, peaks, hot_side=hot_side
-        )
+    # Second pass: spike extender for GR logs.
+    # The DP path can cut corners on very sharp spikes. Here we search
+    # a wider horizontal window for a brighter pixel and snap to it.
+    if curve_type.upper() == "GR":
+        # Spike extension: search a horizontal window for a clearly brighter pixel
+        # and snap to it. This is conservative enough to avoid false snaps.
+        search_window = 15
+        for y in range(h):
+            x0 = xs_fused[y]
+            if not np.isfinite(x0):
+                continue
 
-    return xs_fused, confidence
+            x_int = int(round(x0))
+            if x_int < 0 or x_int >= w:
+                continue
+
+            current_val = prob[y, x_int]
+            x_start = max(0, x_int - search_window)
+            x_end = min(w, x_int + search_window + 1)
+            row_seg = prob[y, x_start:x_end]
+            if row_seg.size == 0:
+                continue
+
+            local_idx = int(np.argmax(row_seg))
+            local_x = x_start + local_idx
+            local_val = row_seg[local_idx]
+
+            # Only snap if the candidate is clearly better.
+            if local_x != x_int and local_val > 0.1 and local_val >= current_val * snap_threshold:
+                xs_fused[y] = float(local_x)
+                confidence[y] = float(local_val)
+
+    # Apply sub-pixel refinement for maximum accuracy
+    xs_refined, subpixel_conf = refine_subpixel_parabola(mask, xs_fused, prob)
+    
+    # Final curvature-based refinement for any remaining missed peaks
+    xs_final = curvature_based_refinement(xs_refined, prob, curve_type)
+    
+    # Update confidence with sub-pixel accuracy
+    confidence = confidence * subpixel_conf
+    
+    # Adaptive smoothing based on local curvature
+    # Skip for GR logs to preserve sharp peaks - they need to be raw to catch single-pixel spikes
+    if curve_type.upper() != "GR":
+        try:
+            from scipy.ndimage import uniform_filter1d
+            valid_mask = np.isfinite(xs_final)
+            if np.sum(valid_mask) > 5:
+                # Calculate local curvature for adaptive smoothing
+                xs_smooth = xs_final.copy()
+                xs_smooth[~valid_mask] = np.interp(np.where(~valid_mask)[0], 
+                                                  np.where(valid_mask)[0], 
+                                                  xs_final[valid_mask])
+                
+                curvature = np.gradient(np.gradient(xs_smooth))
+                curvature_magnitude = np.abs(curvature)
+                
+                # Adaptive smoothing: less smoothing in high curvature regions
+                for y in range(h):
+                    if valid_mask[y]:
+                        # Reduce smoothing near peaks
+                        curv_penalty = min(1.0, curvature_magnitude[y] / np.percentile(curvature_magnitude[valid_mask], 90))
+                        smooth_factor = max(0.1, 1.0 - curv_penalty)
+                        
+                        # Apply minimal smoothing to preserve peaks
+                        if smooth_factor > 0.1:
+                            window = max(3, int(3 + 2 * (1 - smooth_factor)))
+                            if y - window//2 >= 0 and y + window//2 < h:
+                                local_values = xs_final[max(0, y-window//2):min(h, y+window//2+1)]
+                                valid_local = np.isfinite(local_values)
+                                if np.sum(valid_local) > 0:
+                                    xs_final[y] = np.mean(local_values[valid_local])
+        except ImportError:
+            pass
+
+    # Final guarantee: ensure each GR peak cluster has at least one crest sample
+    if curve_type.upper() == "GR" and len(all_peaks) > 0:
+        xs_final, confidence = ensure_peak_crests(xs_final, confidence, prob, all_peaks, hot_side=hot_side)
+    
+    return xs_final, confidence
 
 
-def trace_curve_greedy_peaks(mask, max_jump=30, min_prob=0.02):
-    """Trace curve by greedily following the strongest peak in each row.
-
-    This tracer finds the brightest pixel in each row within a search window,
-    with NO smoothness penalty - it follows every peak and valley exactly.
-
-    Args:
-        mask: Probability map (0-255)
-        max_jump: Maximum horizontal jump between rows
-        min_prob: Minimum probability to consider
-
-    Returns:
-        Array of x-coordinates, one per row
+def refine_subpixel_parabola(mask, xs):
     """
-    if mask is None:
-        return None
-
-    h, w = mask.shape[:2]
-    prob = mask.astype(np.float32) / 255.0
-    xs = np.full(h, np.nan, dtype=np.float32)
-
-    row_max_vals = prob.max(axis=1)
-    row_max_xs = prob.argmax(axis=1).astype(np.float32)
-
-    valid_rows = row_max_vals >= min_prob
-
-    if not np.any(valid_rows):
-        return xs
-
-    start_row = int(np.argmax(row_max_vals))
-    xs[start_row] = row_max_xs[start_row]
-
-    current_x = xs[start_row]
-    for y in range(start_row + 1, h):
-        row = prob[y]
-        x0 = max(0, int(current_x) - max_jump)
-        x1 = min(w, int(current_x) + max_jump + 1)
-        window = row[x0:x1]
-        if window.max() >= min_prob:
-            best_local = np.argmax(window)
-            current_x = float(x0 + best_local)
-            xs[y] = current_x
-
-    current_x = xs[start_row]
-    for y in range(start_row - 1, -1, -1):
-        row = prob[y]
-        x0 = max(0, int(current_x) - max_jump)
-        x1 = min(w, int(current_x) + max_jump + 1)
-        window = row[x0:x1]
-        if window.max() >= min_prob:
-            best_local = np.argmax(window)
-            current_x = float(x0 + best_local)
-            xs[y] = current_x
-
-    return xs
-
-
-def refine_to_smart_edges(mask, xs, min_prob=0.005):
-    """
-    Smart refinement based on local geometry (SR Tuned):
-    - Vertical runs (width < 10px): Center on ink (CoM).
-    - Spikes/Bumps: Snap to EDGE if deviation > 3.0px.
+    Refine positions using parabolic sub-pixel interpolation.
+    Given peak pixel x, fits parabola to (x-1), x, (x+1) to find true max.
+    
+    Formula: offset = 0.5 * (left - right) / (left - 2*center + right)
     """
     if mask is None or xs is None:
         return xs
-    
+        
     h, w = mask.shape
-    prob = mask.astype(np.float32)
-    xs_smart = xs.copy()
+    prob = mask.astype(np.float32) / 255.0
+    xs_refined = xs.copy()
     
-    # 1. Compute local median
-    try:
-        s = pd.Series(xs)
-        local_med = s.rolling(window=15, center=True, min_periods=1).median().to_numpy() # Increased window for SR
-    except:
-        local_med = xs.copy()
-
     for y in range(h):
-        x = xs_smart[y]
+        x = xs_refined[y]
         if not np.isfinite(x):
             continue
             
         ix = int(round(x))
-        if ix < 0 or ix >= w:
+        if ix < 1 or ix >= w - 1:
             continue
             
-        # 2. Find connected ink chunk
-        # TELEPORTATION GUARD: Reduced from 200 to 30 to prevent snapping to distant noise
-        w_start = max(0, ix - 30)
-        w_end = min(w, ix + 31)
-        row_slice = prob[y, w_start:w_end]
+        # Get values of 3 neighbors
+        v_left = prob[y, ix - 1]
+        v_curr = prob[y, ix]
+        v_right = prob[y, ix + 1]
         
-        # Simple threshold
-        ink_indices = np.where(row_slice > min_prob * 255)[0] if prob.max() > 1.0 else np.where(row_slice > min_prob)[0]
-        if ink_indices.size == 0:
-            continue
-            
-        ink_indices_global = ink_indices + w_start
-        min_ink = ink_indices_global[0]
-        max_ink = ink_indices_global[-1]
-        ink_width = max_ink - min_ink
-        
-        # 3. Geometric Decision
-        med_val = local_med[y]
-        if not np.isfinite(med_val):
-            med_val = x
-            
-        diff = x - med_val
-        
-        # LOGIC FOR 2x SUPER-RES:
-        # Width < 14px (was 10) -> Center
-        # Deviation > 5.0px (was 3.0) -> Snap
-        
-        if ink_width < 14:
-            # Narrow Line -> Center of Mass
-            weights = row_slice[ink_indices]
-            coords = ink_indices_global
-            total_w = weights.sum()
-            if total_w > 0:
-                xs_smart[y] = (coords * weights).sum() / total_w
-            else:
-                xs_smart[y] = (min_ink + max_ink) / 2.0
-        else:
-            # Wide/Feature
-            if diff > 5.0:
-                xs_smart[y] = float(max_ink) # Snap Right
-            elif diff < -5.0:
-                xs_smart[y] = float(min_ink) # Snap Left
-            elif abs(diff) < 2.5:
-                # Stable Zone -> Center of Mass
-                weights = row_slice[ink_indices]
-                coords = ink_indices_global
-                total_w = weights.sum()
-                if total_w > 0:
-                    xs_smart[y] = (coords * weights).sum() / total_w
-                else:
-                    xs_smart[y] = (min_ink + max_ink) / 2.0
-            else:
-                # Transition Zone -> Keep current
-                xs_smart[y] = x
+        # Only fit if current is indeed a local peak (or plateau)
+        if v_curr >= v_left and v_curr >= v_right:
+            denominator = v_left - 2 * v_curr + v_right
+            # Avoid division by zero (flat region)
+            if abs(denominator) > 1e-4:
+                offset = 0.5 * (v_left - v_right) / denominator
+                # Clamp offset to [-0.5, 0.5] to prevent instability
+                offset = max(-0.5, min(0.5, offset))
+                xs_refined[y] = float(ix) + offset
+                
+    return xs_refined
 
-    return xs_smart
+
+def refine_trace_gradient_ascent(mask, xs, iterations=5):
+    """
+    Iteratively move each point to the brightest immediate neighbor.
+    This helps snap the trace to the exact peak of the ink profile.
+    
+    Args:
+        mask: Probability map (0-255)
+        xs: Trace x-coordinates
+        iterations: Number of hill-climbing steps
+        
+    Returns:
+        Refined x-coordinates
+    """
+    if mask is None or xs is None:
+        return xs
+        
+    h, w = mask.shape
+    prob = mask.astype(np.float32) / 255.0
+    xs_refined = xs.copy()
+    
+    for _ in range(iterations):
+        moved = False
+        for y in range(h):
+            x = xs_refined[y]
+            if not np.isfinite(x):
+                continue
+                
+            ix = int(round(x))
+            if ix < 1 or ix >= w - 1:
+                continue
+                
+            # Check immediate neighbors (3-pixel window)
+            p_curr = prob[y, ix]
+            p_left = prob[y, ix - 1]
+            p_right = prob[y, ix + 1]
+            
+            # Move towards brighter neighbor
+            if p_left > p_curr and p_left >= p_right:
+                xs_refined[y] = float(ix - 1)
+                moved = True
+            elif p_right > p_curr and p_right > p_left:
+                xs_refined[y] = float(ix + 1)
+                moved = True
+                
+        if not moved:
+            break
+            
+    return xs_refined
+
 
 def refine_trace_with_local_maxima(mask, xs, max_shift=6, dominance_ratio=1.1, min_prob=0.2):
     """Nudge the DP path toward obvious local maxima in the prob mask.
@@ -4292,6 +3665,179 @@ def refine_trace_with_local_maxima(mask, xs, max_shift=6, dominance_ratio=1.1, m
     return xs_ref
 
 
+def trace_curve_greedy_peaks(mask, max_jump=30, min_prob=0.05):
+    """Trace curve by greedily following the strongest peak in each row.
+    
+    This tracer finds the brightest pixel in each row within a search window,
+    with NO smoothness penalty - it follows every peak and valley exactly.
+    
+    Args:
+        mask: Probability map (0-255)
+        max_jump: Maximum horizontal jump between rows
+        min_prob: Minimum probability to consider
+    
+    Returns:
+        Array of x-coordinates, one per row
+    """
+    if mask is None:
+        return None
+    
+    h, w = mask.shape[:2]
+    prob = mask.astype(np.float32) / 255.0
+    xs = np.full(h, np.nan, dtype=np.float32)
+    
+    # For each row, just find the brightest pixel - simple and direct
+    # First pass: find brightest pixel in each row
+    row_max_vals = prob.max(axis=1)
+    row_max_xs = prob.argmax(axis=1).astype(np.float32)
+    
+    # Mark rows with sufficient signal
+    valid_rows = row_max_vals >= min_prob
+    
+    # Start from the row with the strongest signal
+    if not np.any(valid_rows):
+        return xs
+    
+    start_row = int(np.argmax(row_max_vals))
+    xs[start_row] = row_max_xs[start_row]
+    
+    # Trace downward - at each row, find brightest pixel within max_jump of previous
+    current_x = xs[start_row]
+    for y in range(start_row + 1, h):
+        row = prob[y]
+        
+        # Search in a window around current position
+        x0 = max(0, int(current_x) - max_jump)
+        x1 = min(w, int(current_x) + max_jump + 1)
+        window = row[x0:x1]
+        
+        if window.max() >= min_prob:
+            # Find brightest in window
+            best_local = np.argmax(window)
+            best_x = x0 + best_local
+            
+            # But also check if there's a much stronger peak outside the window
+            global_max_x = int(row_max_xs[y])
+            global_max_val = row[global_max_x]
+            local_max_val = window[best_local]
+            
+            # If global peak is significantly stronger (2x), jump to it
+            if global_max_val > local_max_val * 2.0:
+                best_x = global_max_x
+            
+            current_x = float(best_x)
+            xs[y] = current_x
+    
+    # Trace upward from start
+    current_x = xs[start_row]
+    for y in range(start_row - 1, -1, -1):
+        row = prob[y]
+        
+        x0 = max(0, int(current_x) - max_jump)
+        x1 = min(w, int(current_x) + max_jump + 1)
+        window = row[x0:x1]
+        
+        if window.max() >= min_prob:
+            best_local = np.argmax(window)
+            best_x = x0 + best_local
+            
+            global_max_x = int(row_max_xs[y])
+            global_max_val = row[global_max_x]
+            local_max_val = window[best_local]
+            
+            if global_max_val > local_max_val * 2.0:
+                best_x = global_max_x
+            
+            current_x = float(best_x)
+            xs[y] = current_x
+    
+    return xs
+
+
+def refine_to_smart_edges(mask, xs, min_prob=0.005):
+    """
+    Smart refinement based on local geometry (SR Tuned):
+    - Vertical runs (width < 10px): Center on ink (CoM).
+    - Spikes/Bumps: Snap to EDGE if deviation > 3.0px.
+    """
+    if mask is None or xs is None:
+        return xs
+    
+    h, w = mask.shape
+    prob = mask.astype(np.float32)
+    xs_smart = xs.copy()
+    
+    # 1. Compute local median
+    try:
+        s = pd.Series(xs)
+        local_med = s.rolling(window=15, center=True, min_periods=1).median().to_numpy() # Increased window for SR
+    except:
+        local_med = xs.copy()
+
+    for y in range(h):
+        x = xs_smart[y]
+        if not np.isfinite(x):
+            continue
+            
+        ix = int(round(x))
+        if ix < 0 or ix >= w:
+            continue
+            
+        # 2. Find connected ink chunk
+        w_start = max(0, ix - 200) # Increased search for SR
+        w_end = min(w, ix + 201)
+        row_slice = prob[y, w_start:w_end]
+        
+        # Simple threshold
+        ink_indices = np.where(row_slice > min_prob * 255)[0] if prob.max() > 1.0 else np.where(row_slice > min_prob)[0]
+        if ink_indices.size == 0:
+            continue
+            
+        ink_indices_global = ink_indices + w_start
+        min_ink = ink_indices_global[0]
+        max_ink = ink_indices_global[-1]
+        ink_width = max_ink - min_ink
+        
+        # 3. Geometric Decision
+        med_val = local_med[y]
+        if not np.isfinite(med_val):
+            med_val = x
+            
+        diff = x - med_val
+        
+        # LOGIC FOR 2x SUPER-RES:
+        # Width < 14px (was 10) -> Center
+        # Deviation > 5.0px (was 3.0) -> Snap
+        
+        if ink_width < 14:
+            # Narrow Line -> Center of Mass
+            weights = row_slice[ink_indices]
+            coords = ink_indices_global
+            total_w = weights.sum()
+            if total_w > 0:
+                xs_smart[y] = (coords * weights).sum() / total_w
+            else:
+                xs_smart[y] = (min_ink + max_ink) / 2.0
+        else:
+            # Wide/Feature
+            if diff > 5.0:
+                xs_smart[y] = float(max_ink) # Snap Right
+            elif diff < -5.0:
+                xs_smart[y] = float(min_ink) # Snap Left
+            elif abs(diff) < 2.5:
+                # Stable Zone -> Center of Mass
+                weights = row_slice[ink_indices]
+                coords = ink_indices_global
+                total_w = weights.sum()
+                if total_w > 0:
+                    xs_smart[y] = (coords * weights).sum() / total_w
+                else:
+                    xs_smart[y] = (min_ink + max_ink) / 2.0
+            else:
+                # Transition Zone -> Keep current
+                xs_smart[y] = x
+
+    return xs_smart
 
 def refine_peaks_and_valleys(mask, xs, search_radius=25, min_prob=0.1):
     """Specifically refine peaks and valleys where the curve changes direction.
@@ -4591,7 +4137,7 @@ def ensure_peaks_have_points(
     return xs_ref
 
 
-def _push_crest_hot_side(mask, xs, hot_side, curve_type=None, min_prob=0.01, max_shift=30):
+def _push_crest_hot_side(mask, xs, hot_side, curve_type=None, min_prob=0.01, max_shift=200):
     # Only apply this aggressive crest push for GR-type curves
     if curve_type is not None and str(curve_type).upper() != "GR":
         return xs
@@ -4654,7 +4200,7 @@ def _push_crest_hot_side(mask, xs, hot_side, curve_type=None, min_prob=0.01, max
     return xs_out
 
 
-def ensure_gr_peak_crests(xs, prob_map, hot_side=None, min_prob=0.002, y_merge_window=5, max_shift_frac=0.6, max_dx_pixels=None):
+def ensure_gr_peak_crests(xs, prob_map, hot_side=None, min_prob=0.002, y_merge_window=5, max_shift_frac=0.6):
     """For GR colored-mode traces, guarantee at least one crest sample per spike.
 
     This is a conservative helper that, for each vertical cluster of rows, moves
@@ -4680,11 +4226,7 @@ def ensure_gr_peak_crests(xs, prob_map, hot_side=None, min_prob=0.002, y_merge_w
 
     # Allow large moves, but not across the entire track; cap at a fraction
     # of the track width.
-    # TELEPORTATION GUARD: Cap at 30px to prevent shooting off to distant noise
-    if max_dx_pixels is not None:
-        max_dx_allowed = max(1, int(max_dx_pixels))
-    else:
-        max_dx_allowed = min(30, max(1, int(max_shift_frac * w)))
+    max_dx_allowed = max(1, int(max_shift_frac * w))
 
     # 1) Build crest candidates per row
     candidates = []  # (y, crest_x, dx)
@@ -4890,698 +4432,6 @@ def refine_to_stroke_centerline(mask, xs, threshold_ratio=0.5, window_size=None)
         alpha = 0.85
         xs_ref[y] = float((1.0 - alpha) * x_prev + alpha * x_new)
     
-    return xs_ref
-
-
-def refine_black_trace_to_dark_run_center(
-    roi_bgr,
-    xs,
-    threshold_block=21,
-    threshold_c=4,
-    search_radius=28,
-    max_shift=12.0,
-    blend=0.95,
-    hot_side=None,
-    curve_type=None,
-):
-    """Recenter a black trace onto the visible dark stroke body.
-
-    Unlike the probability-map centerline pass, this works from the ROI's
-    grayscale ink directly, which better matches thick filled black curves.
-    When the stroke gets wide, bias the target toward the chart-reading side
-    so black curves hit visible crest tips instead of sitting on the inner half
-    of the printed stroke.
-    """
-    if roi_bgr is None or xs is None:
-        return xs
-    if not hasattr(xs, "size") or xs.size < 3:
-        return xs
-
-    try:
-        gray = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
-    except Exception:
-        return xs
-
-    h, w = gray.shape[:2]
-    if h < 3 or w < 3:
-        return xs
-
-    try:
-        if detect_if_black_and_white_log(roi_bgr):
-            gray = suppress_grid_hough(gray)
-            gray = remove_grid_lines_aggressive(gray, aggressive=False)
-    except Exception:
-        pass
-
-    try:
-        dark_mask = cv2.adaptiveThreshold(
-            gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
-            cv2.THRESH_BINARY_INV, int(threshold_block), int(threshold_c)
-        )
-        dark_mask = cv2.morphologyEx(
-            dark_mask, cv2.MORPH_CLOSE,
-            cv2.getStructuringElement(cv2.MORPH_RECT, (3, 1)), 1
-        )
-    except Exception:
-        return xs
-
-    dark_score = (255.0 - gray.astype(np.float32)) / 255.0
-    residual_support = None
-    grid_support = None
-    try:
-        residual_score, grid_score = compute_black_curve_residual(gray)
-        if residual_score is not None and residual_score.shape[:2] == (h, w):
-            residual_support = cv2.GaussianBlur(
-                np.clip(residual_score, 0.0, 1.0).astype(np.float32),
-                (5, 5),
-                0,
-            )
-        if grid_score is not None and grid_score.shape[:2] == (h, w):
-            grid_support = cv2.GaussianBlur(
-                np.clip(grid_score, 0.0, 1.0).astype(np.float32),
-                (5, 5),
-                0,
-            )
-    except Exception:
-        residual_support = None
-        grid_support = None
-
-    xs_ref = xs.copy().astype(np.float32)
-    radius = max(4, int(search_radius))
-    base_max_shift = max(1.0, float(max_shift))
-    blend = float(np.clip(blend, 0.0, 1.0))
-    curve_type_upper = str(curve_type or "").upper()
-    # Keep black traces centered on the visible stroke body. The earlier
-    # hot-side bias helped crest picking in some cases, but on real scans it
-    # is the main reason the trace rides the stroke edge and nearby grid rails.
-    use_hot_bias = False
-    prev_target = None
-
-    for y in range(min(h, xs_ref.size)):
-        x_prev = xs_ref[y]
-        if not np.isfinite(x_prev):
-            prev_target = None
-            continue
-
-        x_center = int(round(float(x_prev)))
-        if x_center < 0 or x_center >= w:
-            prev_target = None
-            continue
-
-        x0 = max(0, x_center - radius)
-        x1 = min(w, x_center + radius + 1)
-        row_mask = dark_mask[y, x0:x1] > 0
-        if row_mask.size == 0 or not np.any(row_mask):
-            prev_target = None
-            continue
-
-        segs = []
-        in_seg = False
-        seg_start = 0
-        for i in range(int(row_mask.size)):
-            if bool(row_mask[i]) and not in_seg:
-                in_seg = True
-                seg_start = i
-            elif (not bool(row_mask[i])) and in_seg:
-                segs.append((int(seg_start), int(i - 1)))
-                in_seg = False
-        if in_seg:
-            segs.append((int(seg_start), int(row_mask.size) - 1))
-        if not segs:
-            continue
-
-        x_rel = float(x_prev) - float(x0)
-        chosen = None
-        best = None
-        chosen_info = None
-        for l, r in segs:
-            if l <= x_rel <= r:
-                dist = 0.0
-            elif x_rel < l:
-                dist = float(l) - x_rel
-            else:
-                dist = x_rel - float(r)
-
-            width = float(r - l + 1)
-            seg_dark = dark_score[y, x0 + l:x0 + r + 1]
-            darkness = float(seg_dark.mean()) if seg_dark.size > 0 else 0.0
-            res_peak = 0.0
-            grid_mean = 0.0
-            if residual_support is not None:
-                seg_res = residual_support[y, x0 + l:x0 + r + 1]
-                res_peak = float(seg_res.max()) if seg_res.size > 0 else 0.0
-            if grid_support is not None:
-                seg_grid = grid_support[y, x0 + l:x0 + r + 1]
-                grid_mean = float(seg_grid.mean()) if seg_grid.size > 0 else 0.0
-            score = (dist, -width, -darkness)
-            if best is None or score < best:
-                best = score
-                chosen = (l, r)
-                chosen_info = (res_peak, grid_mean)
-
-        if chosen is None:
-            prev_target = None
-            continue
-
-        l, r = chosen
-        if (
-            curve_type_upper != "GR"
-            and prev_target is not None
-            and chosen_info is not None
-        ):
-            chosen_res_peak, chosen_grid_mean = chosen_info
-            # If the nearest dark run looks overwhelmingly grid-like, do not
-            # reacquire on this row at all. For RHOB/DT-type curves, holding
-            # the incoming trace for one row is more stable than jumping onto
-            # a likely rail and then trying to recover a few rows later.
-            if chosen_grid_mean > 0.90 and chosen_res_peak < 0.08:
-                continue
-
-        seg_dark = dark_score[y, x0 + l:x0 + r + 1]
-        xs_local = np.arange(x0 + l, x0 + r + 1, dtype=np.float32)
-        weights = np.power(np.clip(seg_dark, 0.0, 1.0), 1.8)
-        if float(weights.sum()) > 1e-8:
-            x_center = float((xs_local * weights).sum() / weights.sum())
-        else:
-            x_center = float(x0 + (l + r) * 0.5)
-
-        x_target = x_center
-        local_max_shift = base_max_shift
-        local_blend = blend
-
-        if use_hot_bias:
-            run_width = float(r - l + 1)
-            hot_edge = float(x0 + r) if hot_side == "right" else float(x0 + l)
-            if curve_type_upper == "GR":
-                # GR should preserve visible right-side crest tips, but still
-                # stay anchored to the same dark run.
-                width_t = float(np.clip((run_width - 3.0) / 14.0, 0.0, 1.0))
-                bias = 0.58 + 0.38 * width_t
-                local_max_shift = max(local_max_shift, 22.0)
-                local_blend = max(local_blend, 0.98)
-            else:
-                # RHOB/DT-like strokes are slower and thicker; bias more gently
-                # but still move well past the geometric center on wide rows.
-                width_t = float(np.clip((run_width - 3.0) / 18.0, 0.0, 1.0))
-                bias = 0.48 + 0.42 * width_t
-                local_max_shift = max(local_max_shift, 22.0)
-                local_blend = max(local_blend, 0.94)
-            x_target = float(x_center + (hot_edge - x_center) * bias)
-
-        dx = x_target - float(x_prev)
-        dx = max(-local_max_shift, min(local_max_shift, dx))
-        xs_ref[y] = float((1.0 - local_blend) * float(x_prev) + local_blend * (float(x_prev) + dx))
-        prev_target = float(x_target)
-
-    return xs_ref
-
-
-def recenter_black_trace_post_dp(roi_bgr, xs):
-    """
-    A purely mathematical post-processing step to center an edge-hugging black trace.
-    It looks at the dark ink immediately around the existing trace and shifts the 
-    point to the midpoint of that contiguous ink blob.
-    """
-    if roi_bgr is None or xs is None:
-        return xs
-    if not hasattr(xs, "size") or xs.size < 3:
-        return xs
-
-    try:
-        gray = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
-        # Simple threshold for ink
-        _, ink_mask = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY_INV)
-    except Exception:
-        return xs
-
-    h, w = ink_mask.shape
-    xs_centered = xs.copy()
-    
-    for y in range(min(h, xs.size)):
-        x_current = xs[y]
-        if not np.isfinite(x_current):
-            continue
-            
-        ix = int(round(float(x_current)))
-        if ix < 0 or ix >= w:
-            continue
-            
-        # Only center if the current point is actually on ink
-        if ink_mask[y, ix] == 0:
-            # Search nearby for ink (up to 15px since thick traces can be quite far from the center)
-            found_ink = False
-            for offset in range(1, 16):
-                if ix - offset >= 0 and ink_mask[y, ix - offset] > 0:
-                    ix = ix - offset
-                    found_ink = True
-                    break
-                if ix + offset < w and ink_mask[y, ix + offset] > 0:
-                    ix = ix + offset
-                    found_ink = True
-                    break
-            if not found_ink:
-                continue
-                
-        # We are on ink. Find the left and right boundaries of this continuous ink blob.
-        left_bound = ix
-        while left_bound > 0 and ink_mask[y, left_bound - 1] > 0:
-            left_bound -= 1
-            
-        right_bound = ix
-        while right_bound < w - 1 and ink_mask[y, right_bound + 1] > 0:
-            right_bound += 1
-            
-        blob_width = right_bound - left_bound + 1
-        
-        # If the blob is reasonably thick but not obviously a massive grid intersection, center it
-        if 3 <= blob_width <= 40:
-            # Shift towards the center, but don't move more than 15 pixels to avoid wild jumps
-            target_center = float(left_bound + right_bound) / 2.0
-            max_shift = 15.0
-            dx = target_center - x_current
-            dx = max(-max_shift, min(max_shift, dx))
-            xs_centered[y] = x_current + dx
-        elif blob_width > 40:
-            # It's a grid intersection. Don't center on the whole track.
-            # Mark as NaN so we can interpolate through it
-            xs_centered[y] = np.nan
-            
-    # Apply interpolation to fill the grid intersection gaps
-    try:
-        import pandas as pd
-        s = pd.Series(xs_centered)
-        s = s.interpolate(method='linear', limit_direction='both', limit=20)
-        xs_centered = s.to_numpy()
-        
-        # Apply a rolling median to remove jagged 1-pixel snaps, then a light mean
-        s2 = pd.Series(xs_centered)
-        s2 = s2.rolling(window=5, center=True, min_periods=1).median()
-        s2 = s2.rolling(window=3, center=True, min_periods=1).mean()
-        xs_centered = s2.to_numpy()
-    except Exception:
-        pass
-        
-    return xs_centered
-
-
-def suppress_black_grid_lock_runs(roi_bgr, xs, curve_type=None):
-    """Remove suspicious black-mode lock-ons to grid-like columns.
-
-    If the trace sits on the same x-column for several rows while the residual
-    model says that location is mostly grid and not curve ink, blank that short
-    span and let interpolation reconnect the surrounding curve.
-
-    Also catch the common "rail jitter" case where the trace wiggles a couple of
-    pixels around one vertical grid column for several rows. That pattern looks
-    continuous to a simple dx<=1 detector, but it is still visually locked to a
-    grid rail instead of following the printed curve body.
-    """
-    if roi_bgr is None or xs is None:
-        return xs
-    if not hasattr(xs, "size") or xs.size < 3:
-        return xs
-
-    try:
-        gray = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
-    except Exception:
-        return xs
-
-    try:
-        if detect_if_black_and_white_log(roi_bgr):
-            gray = suppress_grid_hough(gray)
-            gray = remove_grid_lines_aggressive(gray, aggressive=False)
-    except Exception:
-        pass
-
-    try:
-        residual_score, grid_score = compute_black_curve_residual(gray)
-    except Exception:
-        return xs
-
-    if residual_score is None or grid_score is None:
-        return xs
-    if residual_score.shape[:2] != gray.shape[:2] or grid_score.shape[:2] != gray.shape[:2]:
-        return xs
-
-    xs_ref = xs.copy().astype(np.float32)
-    h, w = gray.shape[:2]
-    valid = np.isfinite(xs_ref)
-    if not np.any(valid):
-        return xs_ref
-
-    curve_type_upper = str(curve_type or "").upper()
-    residual_thr = 0.10 if curve_type_upper == "GR" else 0.08
-    min_len = 8 if curve_type_upper == "GR" else 6
-    bad = np.zeros(xs_ref.size, dtype=bool)
-    rvals = np.full(xs_ref.size, np.nan, dtype=np.float32)
-    gvals = np.full(xs_ref.size, np.nan, dtype=np.float32)
-
-    for y in range(min(h, xs_ref.size)):
-        if not valid[y]:
-            continue
-        ix = int(np.clip(round(float(xs_ref[y])), 0, w - 1))
-        rvals[y] = float(residual_score[y, ix])
-        gvals[y] = float(grid_score[y, ix])
-
-    for y in range(1, min(h, xs_ref.size) - 1):
-        if not valid[y - 1] or not valid[y] or not valid[y + 1]:
-            continue
-        rv = float(rvals[y])
-        gv = float(gvals[y])
-        dx_prev = abs(float(xs_ref[y] - xs_ref[y - 1]))
-        dx_next = abs(float(xs_ref[y + 1] - xs_ref[y]))
-        if rv < residual_thr and gv > 0.90 and dx_prev <= 1.0 and dx_next <= 1.0:
-            bad[y] = True
-
-    # A rail lock often jitters by 1-3 px while staying pinned to the same
-    # vertical grid column. Mark those short near-vertical windows too.
-    band_radius = 3 if curve_type_upper == "GR" else 2
-    max_band_span = 3.5 if curve_type_upper == "GR" else 3.0
-    mean_residual_thr = 0.10 if curve_type_upper == "GR" else 0.08
-    mean_grid_thr = 0.90 if curve_type_upper == "GR" else 0.88
-    for y in range(band_radius, min(h, xs_ref.size) - band_radius):
-        sl = slice(y - band_radius, y + band_radius + 1)
-        if not np.all(valid[sl]):
-            continue
-        window_x = xs_ref[sl]
-        if float(np.nanmax(window_x) - np.nanmin(window_x)) > max_band_span:
-            continue
-        if (
-            float(np.nanmean(rvals[sl])) < mean_residual_thr
-            and float(np.nanmean(gvals[sl])) > mean_grid_thr
-        ):
-            bad[sl] = True
-
-    spans = []
-    in_span = False
-    seg_start = 0
-    for i, flag in enumerate(bad):
-        if bool(flag) and not in_span:
-            in_span = True
-            seg_start = i
-        elif (not bool(flag)) and in_span:
-            spans.append((int(seg_start), int(i - 1)))
-            in_span = False
-    if in_span:
-        spans.append((int(seg_start), int(xs_ref.size - 1)))
-
-    spans = [(s, e) for (s, e) in spans if (e - s + 1) >= min_len]
-    if not spans:
-        return xs_ref
-
-    for s, e in spans:
-        xs_ref[s:e + 1] = np.nan
-
-    try:
-        xs_ref = pd.Series(xs_ref).interpolate(
-            method='linear',
-            limit_direction='both',
-            limit=max(25, int(xs_ref.size * 0.03)),
-            limit_area=None,
-        ).to_numpy(dtype=np.float32)
-    except Exception:
-        pass
-
-    return xs_ref
-
-
-def refine_black_trace_to_hot_side_crests(roi_bgr, xs, hot_side=None, threshold_block=21, threshold_c=4, search_radius=22, min_run_width=6.0, max_shift=14.0, blend=0.9, curve_type=None):
-    """Snap black traces toward visible crest tips on the chart-reading side.
-
-    This is conservative: it only moves rows where the local black stroke is
-    wide enough to indicate a crest/shoulder and the current trace is still
-    sitting on the wrong side of that run.
-    """
-    if roi_bgr is None or xs is None:
-        return xs
-    if hot_side not in ("left", "right"):
-        return xs
-    if not hasattr(xs, "size") or xs.size < 3:
-        return xs
-
-    try:
-        gray = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
-    except Exception:
-        return xs
-
-    h, w = gray.shape[:2]
-    if h < 3 or w < 3:
-        return xs
-
-    curve_type_upper = str(curve_type or "").upper()
-    is_gr_curve = curve_type_upper == "GR"
-
-    try:
-        if detect_if_black_and_white_log(roi_bgr):
-            gray = suppress_grid_hough(gray)
-            gray = remove_grid_lines_aggressive(gray, aggressive=False)
-    except Exception:
-        pass
-
-    residual_support = None
-    residual_binary = None
-    edge_mask = None
-    try:
-        residual_score, grid_score = compute_black_curve_residual(gray)
-        if residual_score is not None and residual_score.shape[:2] == (h, w):
-            residual_support = cv2.GaussianBlur(
-                residual_score.astype(np.float32), (5, 5), 0
-            )
-            residual_support = np.clip(residual_support, 0.0, 1.0)
-            residual_binary = (residual_support >= (0.18 if is_gr_curve else 0.12)).astype(np.uint8) * 255
-            residual_binary = cv2.morphologyEx(
-                residual_binary,
-                cv2.MORPH_CLOSE,
-                cv2.getStructuringElement(cv2.MORPH_RECT, (5 if is_gr_curve else 9, 1)),
-                1,
-            )
-            residual_binary = cv2.morphologyEx(
-                residual_binary,
-                cv2.MORPH_OPEN,
-                cv2.getStructuringElement(cv2.MORPH_RECT, (2, 1)),
-                1,
-            )
-    except Exception:
-        residual_support = None
-        residual_binary = None
-        edge_mask = None
-
-    try:
-        dark_mask = cv2.adaptiveThreshold(
-            gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
-            cv2.THRESH_BINARY_INV, int(threshold_block), int(threshold_c)
-        )
-        dark_mask = cv2.morphologyEx(
-            dark_mask, cv2.MORPH_CLOSE,
-            cv2.getStructuringElement(cv2.MORPH_RECT, (3, 1)), 1
-        )
-    except Exception:
-        return xs
-
-    try:
-        if grid_score is not None and grid_score.shape[:2] == (h, w):
-            edge_mask = ((dark_mask > 0) & (grid_score < 0.85)).astype(np.uint8) * 255
-            edge_mask = cv2.morphologyEx(
-                edge_mask,
-                cv2.MORPH_CLOSE,
-                cv2.getStructuringElement(cv2.MORPH_RECT, (7, 1)),
-                1,
-            )
-            edge_mask = cv2.morphologyEx(
-                edge_mask,
-                cv2.MORPH_OPEN,
-                cv2.getStructuringElement(cv2.MORPH_RECT, (2, 1)),
-                1,
-            )
-    except Exception:
-        edge_mask = None
-
-    xs_ref = xs.copy().astype(np.float32)
-    radius = max(4, int(search_radius))
-    max_shift = max(1.0, float(max_shift))
-    min_run_width = max(1.0, float(min_run_width))
-    blend = float(np.clip(blend, 0.0, 1.0))
-    if not is_gr_curve:
-        max_shift = max(max_shift, 22.0)
-        blend = max(blend, 0.98)
-    back_radius = max(6 if is_gr_curve else 10, int(round(radius * 0.35)))
-    hot_radius = max(radius + (8 if is_gr_curve else 28), 28 if is_gr_curve else 55)
-    residual_min_strength = 0.18 if is_gr_curve else 0.14
-    residual_peak_frac = 0.72 if is_gr_curve else 0.65
-    min_extension = 5.0 if is_gr_curve else 4.0
-
-    def _collect_segments(mask_1d):
-        segs = []
-        in_seg = False
-        seg_start = 0
-        for i in range(int(mask_1d.size)):
-            if bool(mask_1d[i]) and not in_seg:
-                in_seg = True
-                seg_start = i
-            elif (not bool(mask_1d[i])) and in_seg:
-                segs.append((int(seg_start), int(i - 1)))
-                in_seg = False
-        if in_seg:
-            segs.append((int(seg_start), int(mask_1d.size) - 1))
-        return segs
-
-    def _merge_segments(segs, max_gap=0):
-        if not segs:
-            return []
-        merged = [list(segs[0])]
-        for l, r in segs[1:]:
-            if int(l) - int(merged[-1][1]) - 1 <= int(max_gap):
-                merged[-1][1] = int(r)
-            else:
-                merged.append([int(l), int(r)])
-        return [(int(l), int(r)) for (l, r) in merged]
-
-    prev_hot_x = None
-
-    for y in range(min(h, xs_ref.size)):
-        x_prev = xs_ref[y]
-        if not np.isfinite(x_prev):
-            prev_hot_x = None
-            continue
-
-        x_center = int(round(float(x_prev)))
-        if x_center < 0 or x_center >= w:
-            prev_hot_x = None
-            continue
-
-        moved = False
-
-        if not is_gr_curve and edge_mask is not None:
-            anchor_x = float(x_prev)
-            if prev_hot_x is not None and np.isfinite(prev_hot_x):
-                anchor_x = float(prev_hot_x)
-            anchor_center = int(round(anchor_x))
-            if anchor_center < 0 or anchor_center >= w:
-                anchor_center = x_center
-            if hot_side == "right":
-                x0 = max(0, anchor_center - max(back_radius, 14))
-                x1 = min(w, anchor_center + max(hot_radius, 64) + 1)
-            else:
-                x0 = max(0, anchor_center - max(hot_radius, 64))
-                x1 = min(w, anchor_center + max(back_radius, 14) + 1)
-            row_binary = edge_mask[y, x0:x1] > 0
-            if row_binary.size >= 4 and np.any(row_binary):
-                segs = []
-                for l, r in _collect_segments(row_binary):
-                    if float(r - l + 1) >= max(3.0, min_run_width - 1.0):
-                        segs.append((l, r))
-                segs = _merge_segments(segs, max_gap=5)
-                if segs:
-                    x_rel = anchor_x - float(x0)
-                    chosen = None
-                    min_width = max(8.0, min_run_width + 2.0)
-                    min_peak = 0.22
-                    max_gap = 20.0
-                    if hot_side == "right":
-                        cand_iter = reversed(segs)
-                    else:
-                        cand_iter = iter(segs)
-
-                    for l, r in cand_iter:
-                        width = float(r - l + 1)
-                        if width < min_width:
-                            continue
-                        peak = 0.0
-                        if residual_support is not None:
-                            seg = residual_support[y, x0 + l:x0 + r + 1]
-                            peak = float(seg.max()) if seg.size > 0 else 0.0
-                        if peak < min_peak:
-                            continue
-                        if hot_side == "right":
-                            gap = max(0.0, float(l) - x_rel)
-                        else:
-                            gap = max(0.0, x_rel - float(r))
-                        if gap <= max_gap:
-                            chosen = (l, r)
-                            break
-
-                    if chosen is None:
-                        best = None
-                        for l, r in segs:
-                            if hot_side == "right":
-                                hot_edge = float(x0 + r)
-                                dist = 0.0 if l <= x_rel <= r else (float(l) - x_rel if x_rel < l else x_rel - float(r))
-                            else:
-                                hot_edge = float(x0 + l)
-                                dist = 0.0 if l <= x_rel <= r else (x_rel - float(r) if x_rel > r else float(l) - x_rel)
-                            width = float(r - l + 1)
-                            score = (max(0.0, dist), -width, abs(hot_edge - float(x_prev)))
-                            if best is None or score < best:
-                                best = score
-                                chosen = (l, r)
-                    if chosen is not None:
-                        l, r = chosen
-                        x_target = float(x0 + r) if hot_side == "right" else float(x0 + l)
-                        dx = x_target - float(x_prev)
-                        dx = max(-18.0, min(18.0, dx))
-                        if abs(dx) >= 0.5:
-                            xs_ref[y] = float((1.0 - blend) * float(x_prev) + blend * (float(x_prev) + dx))
-                            moved = True
-
-        if moved:
-            prev_hot_x = float(xs_ref[y])
-            continue
-
-        if not is_gr_curve:
-            prev_hot_x = float(xs_ref[y])
-            continue
-
-        x0 = max(0, x_center - radius)
-        x1 = min(w, x_center + radius + 1)
-        row_mask = dark_mask[y, x0:x1] > 0
-        if row_mask.size == 0 or not np.any(row_mask):
-            continue
-
-        segs = _collect_segments(row_mask)
-        if not segs:
-            continue
-
-        x_rel = float(x_prev) - float(x0)
-        chosen = None
-        best = None
-        for l, r in segs:
-            if l <= x_rel <= r:
-                dist = 0.0
-            elif x_rel < l:
-                dist = float(l) - x_rel
-            else:
-                dist = x_rel - float(r)
-            width = float(r - l + 1)
-            score = (dist, -width)
-            if best is None or score < best:
-                best = score
-                chosen = (l, r)
-
-        if chosen is None:
-            continue
-
-        l, r = chosen
-        run_width = float(r - l)
-        if run_width < min_run_width:
-            continue
-
-        frac = (float(x_prev) - float(x0 + l)) / max(1.0, run_width)
-        if hot_side == "right":
-            keep_frac = 0.58 if is_gr_curve else 0.66
-            if frac >= keep_frac:
-                continue
-            x_target = float(x0 + r)
-        else:
-            keep_frac = 0.42 if is_gr_curve else 0.34
-            if frac <= keep_frac:
-                continue
-            x_target = float(x0 + l)
-
-        dx = x_target - float(x_prev)
-        dx = max(-max_shift, min(max_shift, dx))
-        xs_ref[y] = float((1.0 - blend) * float(x_prev) + blend * (float(x_prev) + dx))
-        prev_hot_x = float(xs_ref[y])
-
     return xs_ref
 
 
@@ -5845,155 +4695,14 @@ def downsample_for_ocr(image_bytes, max_height=2000):
     _, buffer = cv2.imencode('.jpg', resized, [cv2.IMWRITE_JPEG_QUALITY, 85])
     return buffer.tobytes()
 
-
-def _get_easyocr_reader():
-    global _easyocr_reader
-    if not LOCAL_OCR_AVAILABLE or easyocr is None:
-        return None
-    if _easyocr_reader is None:
-        use_gpu = bool(TORCH_AVAILABLE and torch is not None and torch.cuda.is_available())
-        try:
-            import contextlib
-            with contextlib.redirect_stdout(StringIO()), contextlib.redirect_stderr(StringIO()):
-                _easyocr_reader = easyocr.Reader(['en'], gpu=use_gpu)
-            print(f"[OK] EasyOCR reader initialized ({'GPU' if use_gpu else 'CPU'}).")
-        except Exception as exc:
-            print(f"[WARN] EasyOCR initialization failed: {exc}")
-            _easyocr_reader = False
-    return _easyocr_reader if _easyocr_reader is not False else None
-
-
-def _detect_text_easyocr(image_bytes):
-    reader = _get_easyocr_reader()
-    if reader is None:
-        return {'raw': [], 'numbers': [], 'suggestions': {}}
-
-    try:
-        image_bytes = downsample_for_ocr(image_bytes, max_height=2200)
-        nparr = np.frombuffer(image_bytes, np.uint8)
-        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        if img is None or img.size == 0:
-            return {'raw': [], 'numbers': [], 'suggestions': {}}
-
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        gray = cv2.GaussianBlur(gray, (3, 3), 0)
-        gray = cv2.adaptiveThreshold(
-            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 11
-        )
-        ocr_img = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
-        if max(ocr_img.shape[:2]) < 1800:
-            ocr_img = cv2.resize(ocr_img, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
-
-        results = reader.readtext(
-            ocr_img,
-            detail=1,
-            paragraph=False,
-            text_threshold=0.5,
-            low_text=0.25,
-            link_threshold=0.3,
-        )
-
-        raw_text = []
-        numeric_entries = []
-        line_items = []
-        scale_x = img.shape[1] / float(ocr_img.shape[1]) if ocr_img.shape[1] else 1.0
-        scale_y = img.shape[0] / float(ocr_img.shape[0]) if ocr_img.shape[0] else 1.0
-
-        for entry in results or []:
-            if not isinstance(entry, (list, tuple)) or len(entry) < 2:
-                continue
-            bbox = entry[0]
-            text = str(entry[1] or '').strip()
-            if not text:
-                continue
-
-            verts = []
-            xs = []
-            ys = []
-            for pt in bbox:
-                try:
-                    x = int(round(float(pt[0]) * scale_x))
-                    y = int(round(float(pt[1]) * scale_y))
-                except Exception:
-                    continue
-                verts.append({'x': x, 'y': y})
-                xs.append(x)
-                ys.append(y)
-            if not verts:
-                continue
-
-            raw_text.append({
-                'text': text,
-                'vertices': verts,
-            })
-
-            if xs and ys:
-                x_center = float(sum(xs)) / len(xs)
-                y_center = float(sum(ys)) / len(ys)
-                line_items.append((y_center, x_center, text))
-
-            numbers = re.findall(r'-?\d*\.?\d+', text)
-            if numbers and verts:
-                x0 = verts[0]['x']
-                y0 = verts[0]['y']
-                for num in numbers:
-                    try:
-                        numeric_entries.append({
-                            'value': float(num),
-                            'text': text,
-                            'x': x0,
-                            'y': y0,
-                        })
-                    except ValueError:
-                        continue
-
-        full_text = ""
-        if line_items:
-            line_items.sort(key=lambda t: (t[0], t[1]))
-            lines = []
-            current_line = []
-            current_y = None
-            y_tol = max(10.0, img.shape[0] * 0.01)
-            for y, x, text in line_items:
-                if current_y is None or abs(y - current_y) <= y_tol:
-                    if current_y is None:
-                        current_y = y
-                    current_line.append((x, text))
-                else:
-                    current_line.sort(key=lambda t: t[0])
-                    lines.append(' '.join(t[1] for t in current_line if t[1]).strip())
-                    current_line = [(x, text)]
-                    current_y = y
-            if current_line:
-                current_line.sort(key=lambda t: t[0])
-                lines.append(' '.join(t[1] for t in current_line if t[1]).strip())
-            full_text = '\n'.join(line for line in lines if line)
-
-        suggestions = build_ocr_suggestions(numeric_entries)
-        suggestions = attach_curve_label_hints(suggestions, raw_text)
-
-        return {
-            'raw': raw_text,
-            'numbers': numeric_entries,
-            'suggestions': suggestions,
-            'full_text': full_text
-        }
-    except Exception as e:
-        print(f"EasyOCR error: {e}")
-        return {'raw': [], 'numbers': [], 'suggestions': {}}
-
 def detect_text_vision_api(image_bytes):
-    """Use Google Vision API or local OCR fallback to detect text in image"""
+    """Use Google Vision API to detect text in image"""
     if not VISION_API_AVAILABLE or vision_client is None:
-        return _detect_text_easyocr(image_bytes)
+        return {'raw': [], 'numbers': [], 'suggestions': {}}
 
     try:
         image = vision.Image(content=image_bytes)
         response = vision_client.text_detection(image=image)
-
-        full_text = ""
-        if response.text_annotations:
-            full_text = response.text_annotations[0].description
 
         raw_text = []
         numeric_entries = []
@@ -6028,12 +4737,11 @@ def detect_text_vision_api(image_bytes):
         return {
             'raw': raw_text,
             'numbers': numeric_entries,
-            'suggestions': suggestions,
-            'full_text': full_text
+            'suggestions': suggestions
         }
     except Exception as e:
         print(f"Vision API error: {e}")
-        return _detect_text_easyocr(image_bytes)
+        return {'raw': [], 'numbers': [], 'suggestions': {}}
 
 
 @app.route('/reanalyze_panel', methods=['POST'])
@@ -6373,7 +5081,7 @@ def propose_curves():
                 'right_px': rx_f,
             })
         if synth_tracks:
-            print(f"[WARN] auto_detect_tracks found {len(tracks_out)} track(s); using {len(synth_tracks)} synthetic tracks instead.")
+            print(f"⚠️  auto_detect_tracks found {len(tracks_out)} track(s); using {len(synth_tracks)} synthetic tracks instead.")
             tracks_out = synth_tracks
 
     if not tracks_out:
@@ -6401,7 +5109,7 @@ def propose_curves():
         return jsonify({'success': False, 'error': 'AI curve suggestion failed or returned no result.'}), 500
 
     ai_curves = ai_result.get('curves') or []
-    print(f"[AI] Returned {len(ai_curves)} curve suggestions for {len(tracks_out)} detected tracks")
+    print(f"🤖 AI returned {len(ai_curves)} curve suggestions for {len(tracks_out)} detected tracks")
 
     curves_cfg = []
     rejected_reasons = []
@@ -6442,13 +5150,13 @@ def propose_curves():
         })
 
     if not curves_cfg:
-        print(f"[ERROR] All {len(ai_curves)} AI curve suggestions rejected:")
+        print(f"❌ All {len(ai_curves)} AI curve suggestions rejected:")
         for reason in rejected_reasons:
             print(f"   - {reason}")
 
         # Fallback: if we have detected tracks, synthesize simple curves so the UI can proceed
         if tracks_out:
-            print("[WARN] Falling back to heuristic curves from detected tracks.")
+            print("⚠️  Falling back to heuristic curves from detected tracks.")
             for idx, t in enumerate(tracks_out[:6]):
                 try:
                     abs_left = float(left) + float(t.get('left_px', 0.0))
@@ -6472,7 +5180,7 @@ def propose_curves():
         if not curves_cfg:
             return jsonify({'success': False, 'error': 'AI returned no usable curve suggestions.'}), 400
 
-    print(f"[OK] Accepted {len(curves_cfg)} curves, rejected {len(rejected_reasons)}")
+    print(f"✅ Accepted {len(curves_cfg)} curves, rejected {len(rejected_reasons)}")
 
     return jsonify({
         'success': True,
@@ -6538,14 +5246,12 @@ def auto_layout_tracks():
 
     detected_text = detect_text_vision_api(header_bytes)
     raw_text = detected_text.get('raw', []) or []
-    full_text_blob = detected_text.get('full_text', '')
 
-    def _extract_header_metadata(raw_entries, full_text=''):
+    def _extract_header_metadata(raw_entries):
         if not isinstance(raw_entries, list) or not raw_entries:
-            raw_entries = []
+            return None
         try:
             items_local = []
-            entry_items = []
             for entry in raw_entries:
                 if not isinstance(entry, dict):
                     continue
@@ -6557,184 +5263,60 @@ def auto_layout_tracks():
                 xs_local = [v.get('x') for v in verts if isinstance(v, dict) and 'x' in v]
                 if not ys_local or not xs_local:
                     continue
-                left_local = float(min(xs_local))
-                right_local = float(max(xs_local))
-                top_local = float(min(ys_local))
-                bottom_local = float(max(ys_local))
                 y = float(sum(ys_local)) / len(ys_local)
                 x = float(sum(xs_local)) / len(xs_local)
                 items_local.append((y, x, text))
-                entry_items.append({
-                    'text': text,
-                    'left': left_local,
-                    'right': right_local,
-                    'top': top_local,
-                    'bottom': bottom_local,
-                    'x': x,
-                    'y': y,
-                    'width': max(1.0, right_local - left_local),
-                    'height': max(1.0, bottom_local - top_local),
-                })
-            lines = []
-            if items_local:
-                items_local.sort(key=lambda t: (t[0], t[1]))
+            if not items_local:
+                return None
+            items_local.sort(key=lambda t: (t[0], t[1]))
 
-                y_tol = 8.0
-                current_y = None
-                current_tokens = []
-                for y, x, text in items_local:
-                    if current_y is None or abs(y - current_y) <= y_tol:
-                        if current_y is None:
-                            current_y = y
-                        current_tokens.append((x, text))
-                    else:
-                        current_tokens.sort(key=lambda t: t[0])
-                        lines.append(' '.join(t[1] for t in current_tokens if t[1]).strip())
+            lines = []
+            y_tol = 8.0
+            current_y = None
+            current_tokens = []
+            for y, x, text in items_local:
+                if current_y is None or abs(y - current_y) <= y_tol:
+                    if current_y is None:
                         current_y = y
-                        current_tokens = [(x, text)]
-                if current_tokens:
+                    current_tokens.append((x, text))
+                else:
                     current_tokens.sort(key=lambda t: t[0])
                     lines.append(' '.join(t[1] for t in current_tokens if t[1]).strip())
-
-            if isinstance(full_text, str) and full_text.strip():
-                for raw_line in full_text.splitlines():
-                    line = raw_line.strip()
-                    if line and line not in lines:
-                        lines.append(line)
-
-            if not lines:
-                return None
+                    current_y = y
+                    current_tokens = [(x, text)]
+            if current_tokens:
+                current_tokens.sort(key=lambda t: t[0])
+                lines.append(' '.join(t[1] for t in current_tokens if t[1]).strip())
 
             import re
-            next_label_re = re.compile(
-                r"\b(?:COMPANY|WELL|FIELD|LOCATION|COUNTY|STATE|PROV(?:INCE)?|SERVICE\s+COMPANY|DATE|API|UWI)\b",
-                flags=re.IGNORECASE,
-            )
-            next_label_with_delim_re = re.compile(
-                r"\b(?:COMPANY|WELL|FIELD|LOCATION|COUNTY|STATE|PROV(?:INCE)?|SERVICE\s+COMPANY|DATE|API|UWI)\b(?=\s*[:=])",
-                flags=re.IGNORECASE,
-            )
 
             def pick_after(label_re, s):
                 m = re.search(label_re, s, flags=re.IGNORECASE)
                 if not m:
                     return None
                 tail = s[m.end():].strip(" :-\t")
-                if not tail:
-                    return None
-                next_match = next_label_with_delim_re.search(tail)
-                if next_match and next_match.start() > 0:
-                    tail = tail[:next_match.start()].strip(" :-\t")
                 return tail.strip() if tail else None
 
-            def clean_value_text(text):
-                value = str(text or '').strip()
-                value = re.sub(r"^[\s:._,\-=/\\|]+", "", value)
-                value = re.sub(r"[\s:._,\-=/\\|]+$", "", value)
-                value = re.sub(r"\s{2,}", " ", value)
-                return value.strip()
-
-            def looks_like_another_label(text, current_pattern):
-                raw = str(text or '').strip()
-                if not raw:
-                    return False
-                if re.search(current_pattern, raw, flags=re.IGNORECASE):
-                    return False
-                return bool(next_label_re.search(raw))
-
-            def is_label_anchor(text, label_pattern):
-                raw = str(text or '').strip()
-                if not raw:
-                    return False
-                return bool(re.match(rf"^\W*(?:{label_pattern})(?:\W|$)", raw, flags=re.IGNORECASE))
-
-            label_specs = (
-                ('comp', r"\bCOMPANY\b"),
-                ('well', r"\bWELL\b"),
-                ('fld', r"\bFIELD\b"),
-                ('loc', r"\bLOCATION\b"),
-                ('county', r"\bCOUNTY\b"),
-                ('state', r"\bSTATE\b"),
-                ('prov', r"\bPROV(?:INCE)?\b"),
-                ('srvc', r"\bSERVICE\s+COMPANY\b"),
-                ('date', r"\bDATE\b"),
-                ('api', r"\bAPI\b"),
-                ('uwi', r"\bUWI\b"),
-            )
-
-            median_height = float(np.median([item['height'] for item in entry_items])) if entry_items else 14.0
-
-            def spatial_pick_value(label_pattern):
-                if not entry_items:
-                    return None
-
-                best_value = None
-                best_score = None
-                for label_entry in entry_items:
-                    label_text = label_entry['text']
-                    if not is_label_anchor(label_text, label_pattern):
-                        continue
-
-                    inline_value = clean_value_text(pick_after(label_pattern, label_text))
-                    if inline_value:
-                        score = (3, len(inline_value), -int(label_entry['left']))
-                        if best_score is None or score > best_score:
-                            best_score = score
-                            best_value = inline_value
-
-                    row_tol = max(14.0, median_height * 0.9, label_entry['height'] * 0.8)
-                    max_dx = max(180.0, panel_w * 0.45)
-                    max_gap = max(26.0, median_height * 2.5)
-
-                    candidates = [
-                        other for other in entry_items
-                        if other is not label_entry
-                        and other['left'] >= label_entry['right'] - 4.0
-                        and abs(other['y'] - label_entry['y']) <= row_tol
-                        and (other['left'] - label_entry['right']) <= max_dx
-                    ]
-                    candidates.sort(key=lambda item: item['left'])
-
-                    parts = []
-                    prev_right = label_entry['right']
-                    first_dx = None
-                    for cand in candidates:
-                        gap = cand['left'] - prev_right
-                        if gap > max_gap and parts:
-                            break
-                        if first_dx is None:
-                            first_dx = max(0.0, cand['left'] - label_entry['right'])
-                        if looks_like_another_label(cand['text'], label_pattern):
-                            if parts:
-                                break
-                            continue
-                        parts.append(cand['text'])
-                        prev_right = cand['right']
-
-                    spatial_value = clean_value_text(' '.join(parts))
-                    if spatial_value:
-                        score = (2, len(spatial_value), -int(first_dx or 0), -int(label_entry['left']))
-                        if best_score is None or score > best_score:
-                            best_score = score
-                            best_value = spatial_value
-
-                return best_value or None
-
             md = {}
-            for key, pat in label_specs:
-                if key in md:
-                    continue
-                val = spatial_pick_value(pat)
-                if val:
-                    md[key] = val
-
             for s in lines:
                 if not s:
                     continue
-                for key, pat in label_specs:
+                for key, pat in (
+                    ('comp', r"\bCOMPANY\b"),
+                    ('well', r"\bWELL\b"),
+                    ('fld', r"\bFIELD\b"),
+                    ('loc', r"\bLOCATION\b"),
+                    ('county', r"\bCOUNTY\b"),
+                    ('state', r"\bSTATE\b"),
+                    ('prov', r"\bPROV(?:INCE)?\b"),
+                    ('srvc', r"\bSERVICE\s+COMPANY\b"),
+                    ('date', r"\bDATE\b"),
+                    ('api', r"\bAPI\b"),
+                    ('uwi', r"\bUWI\b"),
+                ):
                     if key in md:
                         continue
-                    val = clean_value_text(pick_after(pat, s))
+                    val = pick_after(pat, s)
                     if val:
                         md[key] = val
 
@@ -6751,7 +5333,7 @@ def auto_layout_tracks():
         except Exception:
             return None
 
-    header_metadata = _extract_header_metadata(raw_text, full_text_blob) if treat_region_as_header else None
+    header_metadata = _extract_header_metadata(raw_text) if treat_region_as_header else None
 
     items = []
     for entry in raw_text:
@@ -6772,8 +5354,8 @@ def auto_layout_tracks():
         })
 
     # If no header text found, fall back to edge-based track detection
-    if not items and not full_text_blob:
-        print("[WARN] No header text found; falling back to edge-based track detection")
+    if not items:
+        print("⚠️  No header text found; falling back to edge-based track detection")
         try:
             local_tracks = auto_detect_tracks(panel)
             tracks_out = []
@@ -6796,13 +5378,10 @@ def auto_layout_tracks():
                 })
         except Exception as exc:
             import traceback
-            tb = traceback.format_exc()[-1500:]
-            if is_prod:
-                tb = None
             return jsonify({
                 'success': False,
                 'error': f'Edge fallback failed: {str(exc)}',
-                'traceback': tb
+                'traceback': traceback.format_exc()[-1500:]
             }), 500
         
         if not tracks_out:
@@ -6812,7 +5391,6 @@ def auto_layout_tracks():
             'success': True,
             'tracks': tracks_out,
             'raw_layout': {'tracks': [], 'fallback': 'edge_detection'},
-            'header_metadata': header_metadata,
         })
 
     layout_payload = {
@@ -6821,20 +5399,20 @@ def auto_layout_tracks():
             'height_px': header_h,
         },
         'items': items,
-        'full_text': full_text_blob,
     }
 
     layout = call_ai_auto_layout(layout_payload)
     if not layout:
+        # If no AI providers are configured, give an actionable error.
         has_provider = bool((GEMINI_API_KEY and GEMINI_MODEL_ID) or (OPENAI_API_KEY and OPENAI_MODEL_ID) or (HF_API_TOKEN and HF_MODEL_ID))
-
-        # Fall back to edge-based track detection on the panel, even when no AI
-        # provider is configured. Header capture can still be useful with OCR-
-        # extracted metadata plus geometric track boxes.
         if not has_provider:
-            print("[WARN] AI layout detection is not configured; falling back to edge-based track detection")
-        else:
-            print("[WARN] AI layout inference returned no result; falling back to edge-based track detection")
+            return jsonify({
+                'success': False,
+                'error': 'AI layout detection is not configured. Set GEMINI_API_KEY (or OPENAI_API_KEY / HF_API_TOKEN) in the server environment.'
+            }), 500
+
+        # Otherwise fall back to edge-based track detection on the panel.
+        print("⚠️  AI layout inference returned no result; falling back to edge-based track detection")
         try:
             local_tracks = auto_detect_tracks(panel)
             tracks_out = []
@@ -6858,13 +5436,10 @@ def auto_layout_tracks():
                 })
         except Exception as exc:
             import traceback
-            tb = traceback.format_exc()[-1500:]
-            if is_prod:
-                tb = None
             return jsonify({
                 'success': False,
                 'error': f'AI layout returned no result, and edge fallback failed: {str(exc)}',
-                'traceback': tb
+                'traceback': traceback.format_exc()[-1500:]
             }), 500
 
         if tracks_out:
@@ -6873,22 +5448,9 @@ def auto_layout_tracks():
                 'tracks': tracks_out,
                 'raw_layout': {
                     'tracks': [],
-                    'fallback': 'edge_detection_no_ai_provider' if not has_provider else 'edge_detection_after_ai_failure',
+                    'fallback': 'edge_detection_after_ai_failure',
                     'ocr_items': len(items),
                 },
-                'header_metadata': header_metadata,
-            })
-
-        if treat_region_as_header and header_metadata:
-            return jsonify({
-                'success': True,
-                'tracks': [],
-                'raw_layout': {
-                    'tracks': [],
-                    'fallback': 'metadata_only_after_ai_failure',
-                    'ocr_items': len(items),
-                },
-                'header_metadata': header_metadata,
             })
 
         return jsonify({
@@ -6897,25 +5459,6 @@ def auto_layout_tracks():
         }), 500
 
     raw_tracks = layout.get('tracks') or []
-    
-    # Merge AI-extracted metadata (often better than regex)
-    ai_meta = layout.get('header_metadata')
-    if ai_meta and isinstance(ai_meta, dict):
-        if header_metadata is None:
-            header_metadata = {}
-        for k, v in ai_meta.items():
-            if v and isinstance(v, str) and v.strip():
-                val = v.strip()
-                # Map AI keys to internal keys where they differ
-                if k == 'company': header_metadata['comp'] = val
-                elif k == 'field': header_metadata['fld'] = val
-                elif k == 'location': header_metadata['loc'] = val
-                elif k == 'province': header_metadata['prov'] = val
-                elif k == 'service_company': header_metadata['srvc'] = val
-                else:
-                    # well, api, date, county, state, etc. match or are new
-                    header_metadata[k] = val
-
     tracks_out = []
     for t in raw_tracks:
         try:
@@ -6943,13 +5486,6 @@ def auto_layout_tracks():
         tracks_out.append(track_out)
 
     if not tracks_out:
-        if treat_region_as_header and header_metadata:
-            return jsonify({
-                'success': True,
-                'tracks': [],
-                'raw_layout': layout,
-                'header_metadata': header_metadata,
-            })
         return jsonify({'success': False, 'error': 'AI layout returned no usable tracks.'}), 400
 
     return jsonify({
@@ -7268,15 +5804,13 @@ def build_ocr_suggestions(numeric_entries):
         if y_vals_all:
             y_min = min(y_vals_all)
             y_max = max(y_vals_all)
-            # Top 25% OR bottom 25% of text as the "header" band
-            # (some logs, e.g. ATR, print header tables at the bottom)
-            top_band_cut = y_min + 0.25 * (y_max - y_min)
-            bottom_band_start = y_min + 0.75 * (y_max - y_min)
+            # Top 25% of text as a rough "header" band
+            band_cut = y_min + 0.25 * (y_max - y_min)
 
             header_depth_vals_strict = []  # require explicit "ft" (not us/ft)
             header_depth_vals_loose = []   # any plausible depth magnitude
             for e in sorted_entries:
-                if top_band_cut < e['y'] < bottom_band_start:
+                if e['y'] > band_cut:
                     continue
                 text_l = str(e.get('text', '')).lower()
                 val = e.get('value')
@@ -7375,10 +5909,9 @@ def attach_curve_label_hints(suggestions, raw_text):
 
     min_y = min(y_centers_all)
     max_y = max(y_centers_all)
-    header_threshold = min_y + 0.3 * (max_y - min_y)   # top ~30%
-    footer_threshold = min_y + 0.7 * (max_y - min_y)   # bottom ~30% starts here
+    header_threshold = min_y + 0.3 * (max_y - min_y)  # top ~30% of text as header band
 
-    # Build candidate labels from raw text restricted to top OR bottom header band
+    # Build candidate labels from raw text restricted to the header band
     candidates = []
     for entry in raw_text:
         text = (entry.get('text') or '').strip()
@@ -7410,8 +5943,8 @@ def attach_curve_label_hints(suggestions, raw_text):
             continue
 
         y_center = float(sum(ys)) / len(ys)
-        if header_threshold < y_center < footer_threshold:
-            # Skip labels that are in the middle of the image (log body), not header/footer bands
+        if y_center > header_threshold:
+            # Skip labels that are not in the header band above the tracks
             continue
 
         x_center = float(sum(xs)) / len(xs)
@@ -7654,35 +6187,35 @@ def compute_depth_warnings(depth_cfg, image_height):
 
 
 def auto_detect_tracks(image_array):
-    """Auto-detect track boundaries."""
+    """Auto-detect track boundaries by finding vertical edges, filtering out narrow depth columns"""
     gray = cv2.cvtColor(image_array, cv2.COLOR_BGR2GRAY)
     edges = cv2.Canny(gray, 50, 150)
     vertical_sum = np.sum(edges, axis=0)
-
-    # Simple peak detection
+    
+    # Peak detection for vertical edges
     threshold = np.max(vertical_sum) * 0.3
     peaks = []
     for i in range(1, len(vertical_sum)-1):
         if vertical_sum[i] > threshold and vertical_sum[i] > vertical_sum[i-1] and vertical_sum[i] > vertical_sum[i+1]:
             peaks.append(i)
-
-    # Filter peaks that are too close to each other (e.g., edges of the same thick line)
-    w = image_array.shape[1]
-    min_dist = w * 0.05  # Assume a track is at least 5% of image width
-
-    filtered_peaks = []
-    for p in peaks:
-        if not filtered_peaks or (p - filtered_peaks[-1]) >= min_dist:
-            filtered_peaks.append(p)
-
-    # Group into tracks (a track is between two consecutive lines)
-    if len(filtered_peaks) >= 2:
-        tracks = [(int(filtered_peaks[i]), int(filtered_peaks[i + 1])) for i in range(len(filtered_peaks) - 1)]
+    
+    # Group consecutive peaks into tracks
+    if len(peaks) >= 2:
+        tracks = []
+        for i in range(len(peaks) - 1):
+            left = peaks[i]
+            right = peaks[i + 1]
+            width = right - left
+            # Filter out narrow regions (likely depth columns, not data tracks)
+            # Typical depth columns are 30-80px wide; data tracks are usually 80-300px
+            if width >= 30:
+                tracks.append((left, right))
     else:
-        # Fallback: divide into 3 equal sections
+        # Fallback: divide into equal sections
+        w = image_array.shape[1]
         section_width = w // 3
-        tracks = [(int(i * section_width), int((i + 1) * section_width)) for i in range(3)]
-
+        tracks = [(i*section_width, (i+1)*section_width) for i in range(3)]
+    
     return tracks
 
 
@@ -7782,1198 +6315,46 @@ def select_primary_track_region(tracks, image_width):
 # ----------------------------
 @app.route('/')
 def index():
-    if _current_user(require_access=False):
+    # If already logged in, go to dashboard
+    if 'user' in session:
         return redirect(url_for('dashboard'))
-    return render_template('index.html',
-                          version=APP_VERSION,
-                          build_time=APP_BUILD_TIME,
-                          vision_available=VISION_API_AVAILABLE)
-
-
-@app.route('/pricing')
-def pricing():
-    user = _current_user(require_access=False)
-    self_service = {
-        'eyebrow': 'In-house workflow',
-        'title': 'Self-Service',
-        'description': 'Use TifLAS in-house to upload logs, extract curves, review results, and export LAS files yourself.',
-        'price_lines': [
-            '7-day free trial',
-            'Includes up to 3 free logs',
-            '$99/month',
-            '$999/year',
-        ],
-        'features': [
-            'TIFF, PNG, and PDF upload',
-            'Curve extraction workflow',
-            'Review and correction tools',
-            'LAS export',
-            'Saved projects',
-            'Account dashboard',
-        ],
-        'cta': 'Start Free Trial' if not user else 'Open Member Account',
-        'href': '/signup' if not user else '/account',
-    }
-    managed_processing = {
-        'eyebrow': 'Done-for-you option',
-        'title': 'Full-Service Conversion',
-        'description': 'Send us your logs and we’ll process them for you with review, correction, and final QA built into the workflow.',
-        'price_lines': [
-            '$0.99 per 100 curve-feet',
-            '$29.99 minimum per log',
-        ],
-        'notes': [
-            'Poor scans, overlapping traces, wraps, and heavy cleanup may require additional review.',
-            'Pricing scales with extracted curve volume',
-            'Best for teams that want finished output',
-            'Human review stays in the loop',
-            'Quoted separately for highly difficult logs',
-        ],
-        'cta': 'Request a Quote',
-        'href': '/managed-conversion',
-    }
-    return render_template(
-        'pricing.html',
-        user=user,
-        self_service=self_service,
-        managed_processing=managed_processing,
-        current_plan_label=auth_billing.plan_label(user.get('plan_code')) if user else None,
-    )
-
-
-@app.route('/api/managed-jobs/upload-url', methods=['POST'])
-def generate_upload_url():
-    """Generate a presigned URL to securely upload a file directly to Google Cloud Storage."""
-    data = request.json
-    filename = data.get('filename')
-    content_type = data.get('contentType')
-    
-    if not content_type:
-        content_type = 'application/octet-stream'
-        
-    if not filename:
-        return jsonify({'success': False, 'error': 'Missing filename'}), 400
-
-    # Ensure Vision API/Cloud credentials exist to use GCS
-    if not VISION_API_AVAILABLE:
-        return jsonify({'success': False, 'error': 'Cloud storage is not configured.'}), 500
-
-    try:
-        # Create a storage client using the exact same credentials loaded for Vision OCR
-        global credentials
-        if credentials:
-            storage_client = storage.Client(credentials=credentials)
-        else:
-            storage_client = storage.Client()
-        
-        bucket_name = config.GCS_UPLOADS_BUCKET
-        bucket = storage_client.bucket(bucket_name)
-        
-        # Generate a unique path for the file: uploads/{uuid}/{filename}
-        file_uuid = str(uuid.uuid4())
-        safe_filename = filename.replace(" ", "_")
-        blob_path = f"uploads/{file_uuid}/{safe_filename}"
-        
-        blob = bucket.blob(blob_path)
-        
-        # Generate a presigned URL valid for 30 minutes for a PUT request
-        url = blob.generate_signed_url(
-            version="v4",
-            expiration=timedelta(minutes=30),
-            method="PUT",
-            content_type=content_type,
-        )
-        
-        return jsonify({
-            'success': True, 
-            'uploadUrl': url, 
-            'fileKey': blob_path
-        })
-    except Exception as e:
-        print(f"Failed to generate presigned URL: {e}")
-        return jsonify({'success': False, 'error': 'Failed to generate upload URL.'}), 500
-
-
-@app.route('/api/managed-jobs/checkout', methods=['POST'])
-def create_managed_job_checkout():
-    """Create a Stripe Checkout Session in setup mode for a managed job."""
-    if not _is_stripe_configured():
-        return jsonify({'success': False, 'error': 'Stripe is not configured'}), 500
-
-    data = request.json
-    if not data:
-        return jsonify({'success': False, 'error': 'Invalid payload'}), 400
-
-    email = data.get('email', '').strip()
-    if not email:
-        return jsonify({'success': False, 'error': 'Email is required'}), 400
-
-    # 1. Create or find Stripe Customer
-    try:
-        customers = stripe.Customer.list(email=email, limit=1).data
-        if customers:
-            customer_id = customers[0].id
-        else:
-            new_customer = stripe.Customer.create(
-                email=email,
-                name=data.get('contactName', ''),
-                metadata={'company_name': data.get('companyName', '')}
-            )
-            customer_id = new_customer.id
-    except stripe.error.StripeError as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-    # 2. Create managed job record in DB
-    job_id = str(uuid.uuid4())
-    user = _current_user(require_access=False)
-    user_id = user['id'] if user else None
-
-    # Generate a quick estimate using the user's data to save it in DB
-    try:
-        with auth_billing.get_db(config.AUTH_DB_PATH) as conn:
-            conn.execute("""
-                INSERT INTO managed_jobs (
-                    id, user_id, stripe_customer_id, company_name, contact_name, email,
-                    project_name, well_name, estimated_depth_feet, estimated_curve_count,
-                    estimated_complexity, estimated_turnaround, estimated_units,
-                    estimated_amount, notes, status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)
-            """, (
-                job_id, user_id, customer_id,
-                data.get('companyName'), data.get('contactName'), email,
-                data.get('projectName'), data.get('wellName'),
-                float(data.get('depthFeet') or 0),
-                int(data.get('curveCount') or 0),
-                data.get('complexity'), data.get('turnaround'),
-                float(data.get('estimatedUnits') or 0),
-                float(data.get('estimatedTotal') or 0),
-                f"{data.get('notes', '')}\n\nFiles: {json.dumps(data.get('files', []))}", # Append filekeys temporarily to notes to save DB migrations
-                datetime.now(timezone.utc).isoformat(),
-                datetime.now(timezone.utc).isoformat()
-            ))
-    except Exception as e:
-        return jsonify({'success': False, 'error': f"DB Error: {e}"}), 500
-
-    # 3. Create Stripe Checkout Session in setup mode
-    try:
-        session = stripe.checkout.Session.create(
-            mode='setup',
-            customer=customer_id,
-            payment_method_types=['card'],
-            success_url=f"{config.APP_BASE_URL}/submit-job/success?job_id={job_id}&session_id={{CHECKOUT_SESSION_ID}}",
-            cancel_url=f"{config.APP_BASE_URL}/submit-job",
-            metadata={
-                'job_id': job_id,
-                'job_type': 'managed_conversion'
-            }
-        )
-        
-        # Update DB with session ID
-        with auth_billing.get_db(config.AUTH_DB_PATH) as conn:
-            conn.execute("UPDATE managed_jobs SET stripe_checkout_session_id = ? WHERE id = ?", (session.id, job_id))
-
-        return jsonify({'success': True, 'checkoutUrl': session.url})
-    except stripe.error.StripeError as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-
-@app.route('/submit-job/success', methods=['GET'])
-def managed_job_success():
-    """Handle successful return from Stripe setup checkout."""
-    job_id = request.args.get('job_id')
-    session_id = request.args.get('session_id')
-    
-    if not job_id or not session_id:
-        flash('Missing job or session ID', 'error')
-        return redirect(url_for('submit_job'))
-
-    try:
-        checkout_session = stripe.checkout.Session.retrieve(session_id)
-        if checkout_session.setup_intent:
-            setup_intent = stripe.SetupIntent.retrieve(checkout_session.setup_intent)
-            payment_method_id = setup_intent.payment_method
-            
-            with auth_billing.get_db(config.AUTH_DB_PATH) as conn:
-                conn.execute("""
-                    UPDATE managed_jobs 
-                    SET stripe_payment_method_id = ?, 
-                        status = 'payment_method_saved',
-                        updated_at = ?
-                    WHERE id = ? AND stripe_checkout_session_id = ?
-                """, (
-                    payment_method_id, 
-                    datetime.now(timezone.utc).isoformat(),
-                    job_id, 
-                    session_id
-                ))
-    except Exception as e:
-        print(f"Error completing managed job checkout: {e}")
-        flash('Error verifying your payment method.', 'error')
-
-    return render_template('submit_job_success.html', job_id=job_id)
-
-
-@app.route('/submit-job')
-def submit_job():
-    """React-based managed job submission flow."""
-    user = _current_user(require_access=False)
-    return render_template('submit_job.html', user=user, stripe_ready=_is_stripe_configured())
-
-
-@app.route('/managed-conversion')
-def managed_conversion():
-    user = _current_user(require_access=False)
-    managed_tiers = [
-        {
-            'name': 'Simple',
-            'price': 'From $29.99',
-            'note': 'Usually 3 curves or fewer',
-            'features': [
-                'Clean scan',
-                'Standard turnaround',
-                'Basic cleanup',
-            ],
-        },
-        {
-            'name': 'Standard',
-            'price': '$39.99-$79.99',
-            'note': 'Most routine logs',
-            'features': [
-                'Multiple curves',
-                'Moderate cleanup',
-                'Final LAS delivery',
-            ],
-        },
-        {
-            'name': 'Difficult',
-            'price': 'Custom quote',
-            'note': 'Messy, faint, wrapped, or unusual logs',
-            'features': [
-                'Complex cleanup',
-                'Manual review',
-                'Quoted by complexity',
-            ],
-        },
-    ]
-    return render_template(
-        'managed_conversion.html',
-        user=user,
-        managed_tiers=managed_tiers,
-    )
+    return render_template('index.html', app_version=APP_VERSION, build_time=APP_BUILD_TIME)
 
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-    """Handle user login against persisted user accounts."""
-    error = None
-    next_url = request.args.get('next')
     if request.method == 'POST':
-        next_url = request.form.get('next') or next_url
-        email = request.form.get('email', '').strip().lower()
+        email = request.form.get('email')
         password = request.form.get('password')
-        remember = 'remember-me' in request.form
-
-        # Admin backdoor for testing without Stripe
+        
+        # Simple hardcoded auth as requested
         if email == 'admin@tiflas.com' and password == 'password':
-            session.clear()  # prevent session fixation
-            session['admin_override'] = True
-            session.permanent = remember
-            resp = redirect(next_url or url_for('dashboard'))
-            if remember:
-                resp.set_cookie(
-                    REMEMBER_COOKIE_NAME, _create_remember_token({'admin': True}),
-                    max_age=REMEMBER_COOKIE_DAYS * 24 * 3600,
-                    httponly=True, samesite='Lax',
-                )
-            return resp
-
-        user = auth_billing.get_user_by_email(config.AUTH_DB_PATH, email)
-        if not user or not check_password_hash(user['password_hash'], password or ''):
-            error = 'Invalid email or password'
+            session['user'] = email
+            # Handle "next" redirect if present
+            next_url = request.args.get('next')
+            return redirect(next_url or url_for('dashboard'))
         else:
-            session.clear()  # prevent session fixation
-            session['user_id'] = user['id']
-            session['is_admin'] = user.get('is_admin', 0)
-            session.permanent = remember
-
-            if auth_billing.subscription_access_allowed(user):
-                dest = next_url or url_for('dashboard')
-            else:
-                flash('Start your trial or choose a plan to access the app.', 'info')
-                dest = url_for('account')
-
-            resp = redirect(dest)
-            if remember:
-                resp.set_cookie(
-                    REMEMBER_COOKIE_NAME, _create_remember_token({'user_id': user['id']}),
-                    max_age=REMEMBER_COOKIE_DAYS * 24 * 3600,
-                    httponly=True, samesite='Lax',
-                )
-            return resp
+            return render_template('login.html', error='Invalid email or password')
             
-    return render_template('login.html', error=error, next_url=next_url)
+    return render_template('login.html')
+
 
 @app.route('/logout')
 def logout():
-    """Handle user logout"""
-    raw_token = request.cookies.get(REMEMBER_COOKIE_NAME)
-    if raw_token:
-        auth_billing.delete_remember_token(config.AUTH_DB_PATH, raw_token)
-    session.clear()
-    resp = redirect(url_for('index'))
-    resp.delete_cookie(REMEMBER_COOKIE_NAME)
-    return resp
+    session.pop('user', None)
+    return redirect(url_for('index'))
 
-@app.route('/signup', methods=['GET', 'POST'])
-def signup():
-    """Create a real user account (password-hashed, persisted in SQLite)."""
-    error = None
-    managed_mode = request.args.get('managed') == 'true'
-    
-    if request.method == 'POST':
-        full_name = request.form.get('full_name', '').strip()
-        company_name = request.form.get('company_name', '').strip()
-        email = request.form.get('email', '').strip().lower()
-        password = request.form.get('password', '')
-
-        if not full_name or not company_name or not email or len(password) < 8:
-            error = 'Please complete all fields. Password must be at least 8 characters.'
-        elif auth_billing.get_user_by_email(config.AUTH_DB_PATH, email):
-            error = 'An account with that email already exists.'
-        else:
-            user_id = auth_billing.create_user(
-                config.AUTH_DB_PATH,
-                email=email,
-                password_hash=generate_password_hash(password),
-                full_name=full_name,
-                company_name=company_name,
-            )
-            session['user_id'] = user_id
-            
-            if managed_mode:
-                # Managed jobs users skip the trial and subscription flow.
-                # Give them a 'managed_only' plan to differentiate them.
-                auth_billing.update_user_fields(
-                    config.AUTH_DB_PATH,
-                    user_id,
-                    subscription_status='managed_only',
-                    plan_code='managed_only'
-                )
-                flash('Account created! Welcome to the managed jobs dashboard.', 'success')
-                return redirect(url_for('dashboard'))
-            
-            # Regular self-serve path: start trial immediately
-            trial_end_iso = (datetime.now(timezone.utc) + timedelta(days=auth_billing.TRIAL_DAYS)).isoformat()
-            auth_billing.update_user_fields(
-                config.AUTH_DB_PATH,
-                user_id,
-                subscription_status='trialing',
-                trial_started_at=datetime.now(timezone.utc).isoformat(),
-                trial_ends_at=trial_end_iso,
-            )
-            
-            # Send welcome email to new user
-            mailer.send_welcome(email, full_name)
-            
-            # Notify admin of new signup
-            if config.MAIL_FROM:
-                mailer.send_new_signup_admin(config.MAIL_FROM, email, full_name, company_name)
-            
-            if _is_stripe_configured():
-                return redirect(url_for('create_checkout_session', plan='monthly', mode='trial'))
-            flash('Account created! Your 7-day free trial is now active.', 'success')
-            return redirect(url_for('dashboard'))
-
-    return render_template('signup.html', error=error, managed_mode=managed_mode)
-
-
-@app.route('/auth-debug')
-def auth_debug():
-    """Diagnostic route — shows cookie and session state for remember-me debugging."""
-    raw_token = request.cookies.get(REMEMBER_COOKIE_NAME)
-    decoded = _decode_remember_token(raw_token) if raw_token else None
-    info = {
-        'session_keys': list(session.keys()),
-        'session_permanent': session.permanent,
-        'remember_cookie_present': bool(raw_token),
-        'remember_cookie_preview': (raw_token[:20] + '...') if raw_token else None,
-        'token_decode_ok': decoded is not None,
-        'token_payload': decoded,
-        'all_cookie_names': list(request.cookies.keys()),
-        'secret_key_prefix': config.SECRET_KEY[:8] + '...' if config.SECRET_KEY else 'NOT SET',
-    }
-    return jsonify(info)
-
-
-
-@app.route('/account')
-def account():
-    user = _current_user(require_access=False)
-    if not user:
-        return redirect(url_for('login'))
-
-    trial_countdown = auth_billing.compute_trial_countdown(user)
-    trial_eligibility = auth_billing.trial_eligibility(config.AUTH_DB_PATH, user)
-    invoices = []
-    payment_method = None
-    subscription_cancel_at_period_end = False
-
-    if _is_stripe_configured() and user.get('stripe_customer_id'):
-        try:
-            invoices_resp = stripe.Invoice.list(customer=user['stripe_customer_id'], limit=12)
-            invoices = auth_billing.serialize_invoices(list(invoices_resp.data))
-
-            customer = stripe.Customer.retrieve(
-                user['stripe_customer_id'],
-                expand=['invoice_settings.default_payment_method'],
-            )
-            default_pm = customer.get('invoice_settings', {}).get('default_payment_method')
-            if default_pm:
-                payment_method = {
-                    'brand': default_pm.get('card', {}).get('brand', '').upper(),
-                    'last4': default_pm.get('card', {}).get('last4', ''),
-                    'exp_month': default_pm.get('card', {}).get('exp_month', ''),
-                    'exp_year': default_pm.get('card', {}).get('exp_year', ''),
-                }
-
-            if user.get('stripe_subscription_id'):
-                sub = stripe.Subscription.retrieve(user['stripe_subscription_id'])
-                subscription_cancel_at_period_end = bool(sub.get('cancel_at_period_end'))
-        except Exception as exc:
-            flash(f'Billing data temporarily unavailable: {exc}', 'warning')
-
-    return render_template(
-        'account.html',
-        user=user,
-        trial_countdown=trial_countdown,
-        trial_eligibility=trial_eligibility,
-        current_plan_label=auth_billing.plan_label(user.get('plan_code')),
-        can_manage_billing=bool(user.get('stripe_customer_id')),
-        billing_ready=_is_stripe_configured(),
-        invoices=invoices,
-        payment_method=payment_method,
-        cancel_at_period_end=subscription_cancel_at_period_end,
-    )
-
-
-@app.route('/account/update', methods=['POST'])
-def update_account():
-    user = _current_user(require_access=False)
-    if not user:
-        return redirect(url_for('login'))
-        
-    full_name = request.form.get('full_name', '').strip()
-    company_name = request.form.get('company_name', '').strip()
-    
-    if not full_name or not company_name:
-        flash('Full Name and Company Name are required.', 'error')
-        return redirect(url_for('account'))
-        
-    try:
-        # We can re-use update_user_fields from auth_billing
-        auth_billing.update_user_fields(
-            config.AUTH_DB_PATH, 
-            user['id'],
-            full_name=full_name,
-            company_name=company_name,
-            company_name_normalized=" ".join(company_name.lower().split())
-        )
-        flash('Profile updated successfully.', 'success')
-    except Exception as e:
-        flash('Failed to update profile.', 'error')
-        
-    return redirect(url_for('account'))
-
-
-@app.route('/admin')
-@login_required()
-def admin():
-    """Admin panel."""
-    user = _current_user(require_access=True)
-    if not user.get('is_admin') and not session.get('is_admin'):
-        flash('Access denied.', 'error')
-        return redirect(url_for('dashboard'))
-        
-    users = auth_billing.get_all_users_for_admin(config.AUTH_DB_PATH)
-    logs = auth_billing.get_all_logs_for_admin(config.AUTH_DB_PATH)
-    managed_jobs = auth_billing.get_all_managed_jobs_for_admin(config.AUTH_DB_PATH)
-    stats = auth_billing.get_admin_stats(config.AUTH_DB_PATH)
-    settings = auth_billing.get_admin_settings(config.AUTH_DB_PATH)
-    
-    # Determine which user we are impersonating, if any
-    impersonating_id = session.get('impersonate_user_id')
-    
-    return render_template('admin.html', user=user, users=users, logs=logs, managed_jobs=managed_jobs, stats=stats, settings=settings, impersonating_id=impersonating_id)
-
-
-@app.route('/api/admin/managed-jobs/charge', methods=['POST'])
-@login_required()
-def charge_managed_job():
-    if not session.get('is_admin'):
-        return jsonify({'success': False, 'error': 'Unauthorized'}), 403
-        
-    data = request.json or {}
-    job_id = data.get('job_id')
-    amount_dollars = data.get('amount')
-    
-    if not job_id or amount_dollars is None:
-        return jsonify({'success': False, 'error': 'Missing job_id or amount'}), 400
-        
-    try:
-        amount_cents = int(float(amount_dollars) * 100)
-        if amount_cents <= 0:
-            return jsonify({'success': False, 'error': 'Invalid amount'}), 400
-            
-        # Fetch the job
-        with auth_billing.get_db(config.AUTH_DB_PATH) as conn:
-            job = conn.execute("SELECT * FROM managed_jobs WHERE id = ?", (job_id,)).fetchone()
-            
-        if not job:
-            return jsonify({'success': False, 'error': 'Job not found'}), 404
-            
-        job = dict(job)
-        if job.get('status') == 'paid':
-            return jsonify({'success': False, 'error': 'Job is already paid'}), 400
-            
-        payment_method_id = job.get('stripe_payment_method_id')
-        customer_id = job.get('stripe_customer_id')
-        
-        if not payment_method_id or not customer_id:
-            return jsonify({'success': False, 'error': 'No saved payment method found for this job'}), 400
-            
-        # Charge the card via Stripe PaymentIntent off-session
-        intent = stripe.PaymentIntent.create(
-            amount=amount_cents,
-            currency='usd',
-            customer=customer_id,
-            payment_method=payment_method_id,
-            off_session=True,
-            confirm=True,
-            description=f"TifLAS Managed Conversion: {job.get('well_name', 'Well')} - Job ID {job_id[:8]}",
-            metadata={'job_id': job_id}
-        )
-        
-        if intent.status == 'succeeded':
-            # Update DB
-            with auth_billing.get_db(config.AUTH_DB_PATH) as conn:
-                conn.execute("""
-                    UPDATE managed_jobs 
-                    SET status = 'paid', actual_amount = ?, updated_at = ?
-                    WHERE id = ?
-                """, (float(amount_dollars), datetime.now(timezone.utc).isoformat(), job_id))
-            return jsonify({'success': True, 'charge_id': intent.id})
-        else:
-            return jsonify({'success': False, 'error': f"Charge failed with status: {intent.status}"}), 400
-            
-    except stripe.error.CardError as e:
-        err = e.error
-        return jsonify({'success': False, 'error': f"Card error: {err.message}"}), 400
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-
-@app.route('/admin/action', methods=['POST'])
-@login_required()
-def admin_action():
-    if not session.get('is_admin'):
-        return jsonify({'success': False, 'error': 'Unauthorized'}), 403
-        
-    data = request.json or {}
-    action = data.get('action')
-    
-    if action == 'impersonate':
-        target_id = data.get('user_id')
-        if target_id:
-            session['impersonate_user_id'] = int(target_id)
-            return jsonify({'success': True, 'message': 'Impersonation started'})
-        else:
-            return jsonify({'success': False, 'error': 'Missing user_id'})
-            
-    elif action == 'stop_impersonate':
-        session.pop('impersonate_user_id', None)
-        return jsonify({'success': True, 'message': 'Impersonation stopped'})
-        
-    elif action == 'update_setting':
-        key = data.get('key')
-        val = data.get('value', '')
-        if key:
-            auth_billing.update_admin_setting(config.AUTH_DB_PATH, key, val)
-            return jsonify({'success': True})
-        return jsonify({'success': False, 'error': 'Missing key'})
-        
-    elif action in ['ban', 'unban', 'extend_trial', 'grant_trial', 'make_lifetime', 'delete']:
-        target_id = data.get('user_id')
-        if target_id:
-            try:
-                auth_billing.admin_update_user_action(config.AUTH_DB_PATH, int(target_id), action)
-                return jsonify({'success': True})
-            except Exception as e:
-                return jsonify({'success': False, 'error': str(e)})
-                
-    return jsonify({'success': False, 'error': 'Invalid action'})
-
-
-@app.route('/api/admin/users', methods=['GET'])
-@login_required()
-def admin_list_users():
-    """List all user accounts with trial status."""
-    user = _current_user(require_access=True)
-    if not user.get('is_admin') and not session.get('is_admin'):
-        return jsonify({'error': 'Admin access required'}), 403
-    
-    users = auth_billing.get_all_users_for_admin(config.AUTH_DB_PATH)
-    user_list = []
-    for u in users:
-        user_list.append({
-            'id': u.get('id'),
-            'email': u.get('email'),
-            'full_name': u.get('full_name'),
-            'company_name': u.get('company_name'),
-            'subscription_status': u.get('subscription_status'),
-            'plan_code': u.get('plan_code'),
-            'trial_used': u.get('trial_used'),
-            'is_admin': u.get('is_admin'),
-            'is_banned': u.get('is_banned'),
-            'created_at': u.get('created_at')
-        })
-    
-    return jsonify({
-        'total_users': len(user_list),
-        'users': user_list
-    })
-
-
-@app.route('/api/admin/test-email', methods=['POST'])
-@login_required()
-def admin_test_email():
-    """Send a test email to verify SMTP configuration."""
-    user = _current_user(require_access=True)
-    if not user.get('is_admin') and not session.get('is_admin'):
-        return jsonify({'error': 'Admin access required'}), 403
-    
-    to = (request.json or {}).get('to') or user.get('email')
-    ok = mailer.send_email(
-        to,
-        subject='TifLAS — SMTP test email',
-        html_body='<p>Your TifLAS email configuration is working correctly! 🎉</p>',
-        text_body='Your TifLAS email configuration is working correctly!'
-    )
-    return jsonify({
-        'success': ok,
-        'to': to,
-        'configured': bool(config.MAIL_USERNAME and config.MAIL_PASSWORD),
-        'mail_from': config.MAIL_FROM,
-        'mail_server': config.MAIL_SERVER,
-        'mail_port': config.MAIL_PORT,
-    })
-
-
-@app.route('/api/admin/diagnostics', methods=['GET'])
-@login_required()
-def admin_diagnostics():
-    """Diagnostic endpoint to check database and volume status."""
-    user = _current_user(require_access=True)
-    if not user.get('is_admin') and not session.get('is_admin'):
-        return jsonify({'error': 'Admin access required'}), 403
-    
-    import os
-    from pathlib import Path
-    
-    diagnostics = {
-        'database': {},
-        'volume': {},
-        'logs': {},
-        'images': {}
-    }
-    
-    # Check database path and existence
-    db_path = config.AUTH_DB_PATH
-    diagnostics['database']['path'] = db_path
-    diagnostics['database']['exists'] = os.path.exists(db_path)
-    if os.path.exists(db_path):
-        diagnostics['database']['size_bytes'] = os.path.getsize(db_path)
-        diagnostics['database']['readable'] = os.access(db_path, os.R_OK)
-        diagnostics['database']['writable'] = os.access(db_path, os.W_OK)
-    
-    # Check volume mount
-    volume_mount = os.environ.get('RAILWAY_VOLUME_MOUNT_PATH', '')
-    diagnostics['volume']['mount_path'] = volume_mount
-    diagnostics['volume']['mount_exists'] = os.path.exists(volume_mount) if volume_mount else False
-    
-    # Check data directory
-    data_dir = Path.cwd() / 'data'
-    diagnostics['volume']['data_dir'] = str(data_dir)
-    diagnostics['volume']['data_dir_exists'] = data_dir.exists()
-    
-    # Check images directory
-    images_dir = data_dir / 'images'
-    diagnostics['images']['dir'] = str(images_dir)
-    diagnostics['images']['exists'] = images_dir.exists()
-    if images_dir.exists():
-        try:
-            image_files = list(images_dir.glob('*'))
-            diagnostics['images']['count'] = len(image_files)
-            diagnostics['images']['files'] = [f.name for f in image_files[:10]]  # First 10
-        except Exception as e:
-            diagnostics['images']['error'] = str(e)
-    
-    # Check logs in database
-    try:
-        all_logs = auth_billing.get_all_logs_for_admin(config.AUTH_DB_PATH)
-        diagnostics['logs']['total_count'] = len(all_logs)
-        diagnostics['logs']['by_user'] = {}
-        for log in all_logs:
-            user_id = log.get('user_id')
-            if user_id not in diagnostics['logs']['by_user']:
-                diagnostics['logs']['by_user'][user_id] = []
-            diagnostics['logs']['by_user'][user_id].append({
-                'id': log.get('id'),
-                'name': log.get('name'),
-                'created_at': log.get('created_at')
-            })
-    except Exception as e:
-        diagnostics['logs']['error'] = str(e)
-    
-    return jsonify(diagnostics)
-
-
-@app.route('/billing/create-checkout-session', methods=['GET', 'POST'])
-def create_checkout_session():
-    user = _current_user(require_access=False)
-    if not user:
-        return redirect(url_for('login'))
-
-    if not _is_stripe_configured():
-        flash('Stripe is not configured yet. Add Stripe environment variables in Railway.', 'error')
-        return redirect(url_for('account'))
-
-    plan = (request.values.get('plan') or '').strip().lower()
-    mode = (request.values.get('mode') or 'upgrade').strip().lower()
-    if plan not in ('monthly', 'annual', 'managed_simple', 'managed_standard', 'managed_complex'):
-        flash('Invalid plan selected.', 'error')
-        return redirect(url_for('account'))
-
-    price_id = PLAN_TO_PRICE.get(plan)
-    if not price_id:
-        flash('Missing Stripe price configuration for that plan.', 'error')
-        return redirect(url_for('account'))
-
-    if mode == 'trial':
-        eligibility = auth_billing.trial_eligibility(config.AUTH_DB_PATH, user)
-        if not eligibility.get('eligible'):
-            flash(eligibility.get('reason') or 'Trial is not available for this account.', 'error')
-            return redirect(url_for('account'))
-
-    customer_id = user.get('stripe_customer_id')
-    try:
-        if not customer_id:
-            customer = stripe.Customer.create(
-                email=user.get('email') or '',
-                name=user.get('full_name') or '',
-                metadata={
-                    'user_id': str(user['id']),
-                    'company_name': user.get('company_name') or '',
-                },
-            )
-            customer_id = customer['id']
-            auth_billing.update_user_fields(config.AUTH_DB_PATH, user['id'], stripe_customer_id=customer_id)
-
-        if mode == 'managed':
-            # One-time payment for managed service
-            checkout = stripe.checkout.Session.create(
-                mode='payment',
-                customer=customer_id,
-                line_items=[{'price': price_id, 'quantity': 1}],
-                metadata={
-                    'user_id': str(user['id']),
-                    'plan_code': plan,
-                    'mode': mode,
-                },
-                success_url=f"{config.APP_BASE_URL}/managed-conversion",
-                cancel_url=f"{config.APP_BASE_URL}/managed-conversion",
-            )
-        else:
-            # Recurring subscription (monthly, annual, trial)
-            subscription_data = {
-                'metadata': {
-                    'user_id': str(user['id']),
-                    'plan_code': plan,
-                    'mode': mode,
-                }
-            }
-            if mode == 'trial':
-                subscription_data['trial_period_days'] = auth_billing.TRIAL_DAYS
-    
-            checkout = stripe.checkout.Session.create(
-                mode='subscription',
-                customer=customer_id,
-                line_items=[{'price': price_id, 'quantity': 1}],
-                payment_method_collection='always',
-                allow_promotion_codes=True,
-                metadata={
-                    'user_id': str(user['id']),
-                    'plan_code': plan,
-                    'mode': mode,
-                },
-                subscription_data=subscription_data,
-                success_url=f"{config.APP_BASE_URL}/account?checkout=success",
-                cancel_url=f"{config.APP_BASE_URL}/account?checkout=cancel",
-            )
-        return redirect(checkout.url, code=303)
-    except stripe.error.StripeError as exc:
-        import traceback; traceback.print_exc()
-        flash(f'Stripe error: {getattr(exc, "user_message", None) or str(exc)}', 'error')
-        return redirect(url_for('account'))
-    except Exception as exc:
-        import traceback; traceback.print_exc()
-        flash(f'Could not start checkout: {exc}', 'error')
-        return redirect(url_for('account'))
-
-
-
-@app.route('/billing/portal', methods=['POST'])
-def billing_portal():
-    user = _current_user(require_access=False)
-    if not user:
-        return redirect(url_for('login'))
-    if not _is_stripe_configured() or not user.get('stripe_customer_id'):
-        flash('Billing portal is unavailable until Stripe is configured and a customer exists.', 'error')
-        return redirect(url_for('account'))
-
-    portal = stripe.billing_portal.Session.create(
-        customer=user['stripe_customer_id'],
-        return_url=f"{config.APP_BASE_URL}/account",
-    )
-    return redirect(portal.url, code=303)
-
-
-
-@app.route('/billing/cancel-plan', methods=['POST'])
-def cancel_plan():
-    user = _current_user(require_access=False)
-    if not user:
-        return redirect(url_for('login'))
-    subscription_id = user.get('stripe_subscription_id')
-    if not subscription_id:
-        flash('No active subscription to cancel.', 'error')
-        return redirect(url_for('account'))
-
-    stripe.Subscription.modify(subscription_id, cancel_at_period_end=True)
-    flash('Your plan will cancel at the end of the current billing period.', 'info')
-    return redirect(url_for('account'))
-
-
-def _update_user_from_subscription(user_id: int, subscription_obj) -> None:
-    items = subscription_obj.get('items', {}).get('data', [])
-    price_id = items[0].get('price', {}).get('id') if items else None
-    plan_code = PRICE_TO_PLAN.get(price_id, 'none')
-    status = (subscription_obj.get('status') or 'none').lower()
-    trial_end = _unix_to_iso(subscription_obj.get('trial_end'))
-
-    auth_billing.update_user_fields(
-        config.AUTH_DB_PATH,
-        user_id,
-        stripe_customer_id=subscription_obj.get('customer'),
-        stripe_subscription_id=subscription_obj.get('id'),
-        subscription_status=status,
-        plan_code=plan_code,
-        trial_ends_at=trial_end,
-    )
-    if status == 'trialing':
-        auth_billing.mark_trial_started(config.AUTH_DB_PATH, user_id, trial_end)
-
-
-
-@app.route('/billing/webhook', methods=['POST'])
-def stripe_webhook():
-    if not config.STRIPE_WEBHOOK_SECRET:
-        return jsonify({'error': 'webhook secret not configured'}), 400
-
-    payload = request.get_data(as_text=True)
-    sig_header = request.headers.get('Stripe-Signature', '')
-    try:
-        event = stripe.Webhook.construct_event(payload, sig_header, config.STRIPE_WEBHOOK_SECRET)
-    except Exception:
-        return jsonify({'error': 'invalid webhook signature'}), 400
-
-    event_type = event.get('type')
-    obj = event.get('data', {}).get('object', {})
-
-    try:
-        if event_type == 'checkout.session.completed' and obj.get('mode') == 'subscription':
-            user_id = obj.get('metadata', {}).get('user_id')
-            subscription_id = obj.get('subscription')
-            if user_id and subscription_id:
-                subscription_obj = stripe.Subscription.retrieve(subscription_id)
-                _update_user_from_subscription(int(user_id), subscription_obj)
-
-        elif event_type in ('customer.subscription.updated', 'customer.subscription.created'):
-            subscription_id = obj.get('id')
-            user = auth_billing.get_user_by_subscription_id(config.AUTH_DB_PATH, subscription_id)
-            if not user and obj.get('customer'):
-                user = auth_billing.get_user_by_customer_id(config.AUTH_DB_PATH, obj.get('customer'))
-            if user:
-                _update_user_from_subscription(user['id'], obj)
-
-        elif event_type == 'customer.subscription.deleted':
-            subscription_id = obj.get('id')
-            user = auth_billing.get_user_by_subscription_id(config.AUTH_DB_PATH, subscription_id)
-            if user:
-                auth_billing.update_user_fields(
-                    config.AUTH_DB_PATH,
-                    user['id'],
-                    subscription_status='canceled',
-                    plan_code='none',
-                )
-    except Exception as exc:
-        return jsonify({'error': str(exc)}), 500
-
-    return jsonify({'received': True})
-
-
-@app.route('/api/logs', methods=['POST'])
-@login_required()
-def save_log():
-    """Save a digitized log to the user's account."""
-    user = _current_user(require_access=True)
-    if not user:
-        return jsonify({'success': False, 'error': 'Not authorized'}), 401
-        
-    # Enforce trial limits
-    if user.get('subscription_status') == 'trialing' and not user.get('is_admin'):
-        user_logs = auth_billing.get_user_logs(config.AUTH_DB_PATH, user['id'])
-        if len(user_logs) >= 3:
-            return jsonify({'success': False, 'error': 'Trial limit reached. You can only save up to 3 logs on the free trial. Please upgrade your account to save more logs.'}), 403
-
-    data = request.json
-    
-    try:
-        import uuid
-        log_id = str(uuid.uuid4())
-        name = data.get('name', 'Untitled Log')
-        curve_count = data.get('curve_count', 0)
-        depth_start = float(data.get('depth_start', 0))
-        depth_end = float(data.get('depth_end', 0))
-        depth_unit = data.get('depth_unit', 'FT')
-        las_content = data.get('las_content', '')
-        original_image_path = data.get('original_image_path', None)
-
-        with auth_billing.get_db(config.AUTH_DB_PATH) as conn:
-            conn.execute("""
-                INSERT INTO user_logs (id, user_id, name, curve_count, depth_start, depth_end, depth_unit, las_content, original_image_path, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                log_id, user['id'], name, curve_count, depth_start, depth_end, depth_unit, las_content, original_image_path,
-                datetime.now(timezone.utc).isoformat()
-            ))
-            conn.commit()
-            
-        print(f"[SAVE LOG] Successfully saved log {log_id} for user {user['id']}: {name}")
-        return jsonify({'success': True, 'log_id': log_id})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-
-
-@app.route('/api/logs/<log_id>/download', methods=['GET'])
-@login_required()
-def download_log(log_id):
-    """Download a saved log as a .las file."""
-    user = _current_user(require_access=True)
-    log_data = auth_billing.get_user_log(config.AUTH_DB_PATH, log_id, user['id'])
-    
-    if not log_data:
-        return "Log not found", 404
-        
-    filename = f"{log_data['name'].replace(' ', '_')}.las"
-    
-    return Response(
-        log_data['las_content'],
-        mimetype='text/plain',
-        headers={'Content-Disposition': f'attachment;filename={filename}'}
-    )
-
-
-@app.route('/api/logs/<log_id>/image', methods=['GET'])
-@login_required()
-def get_log_image(log_id):
-    """Serve the original image for a saved log, regardless of how the
-    original_image_path was stored: inline data URL, /api/images/<file>
-    server path, an absolute http(s) URL, or a GCS object key.
-    """
-    user = _current_user(require_access=True)
-    if not user:
-        return "Not authorized", 401
-
-    log_data = auth_billing.get_user_log(config.AUTH_DB_PATH, log_id, user['id'])
-    if not log_data:
-        return "Log not found", 404
-
-    path = (log_data.get('original_image_path') or '').strip()
-    if not path:
-        return "No image stored for this log", 404
-
-    # 1. Inline data URL → decode and serve directly
-    if path.startswith('data:'):
-        try:
-            header, b64 = path.split(',', 1)
-            mime = header[5:].split(';', 1)[0] or 'image/jpeg'
-            raw = base64.b64decode(b64)
-            return Response(raw, mimetype=mime)
-        except Exception as exc:
-            print(f"[get_log_image] Failed to decode data URL for {log_id}: {exc}")
-            return "Image decode failed", 500
-
-    # 2. Absolute http(s) URL → redirect
-    if path.startswith('http://') or path.startswith('https://'):
-        return redirect(path)
-
-    # 3. Server-hosted /api/images/<filename> path → read from disk
-    if path.startswith('/api/images/'):
-        filename = path.rsplit('/', 1)[-1]
-        from pathlib import Path
-        images_dir = Path(config.DATA_ROOT) / 'images'
-        file_path = images_dir / filename
-        if not file_path.exists():
-            print(f"[get_log_image] Missing file on disk: {file_path}")
-            return "Image file missing", 404
-        return send_from_directory(str(images_dir), filename)
-
-    # 4. Otherwise treat as a GCS object key → stream from the bucket
-    try:
-        bucket_name = getattr(config, 'GCS_UPLOADS_BUCKET', None)
-        if not bucket_name:
-            return "Cloud storage not configured", 500
-        global credentials
-        storage_client = (
-            storage.Client(credentials=credentials) if credentials else storage.Client()
-        )
-        bucket = storage_client.bucket(bucket_name)
-        blob = bucket.blob(path)
-        if not blob.exists():
-            print(f"[get_log_image] GCS blob missing: {bucket_name}/{path}")
-            return "Image not found in cloud storage", 404
-        blob.reload()
-        mime = blob.content_type or 'application/octet-stream'
-        raw = blob.download_as_bytes()
-        return Response(raw, mimetype=mime)
-    except Exception as exc:
-        print(f"[get_log_image] GCS fetch failed for {log_id}: {exc}")
-        return "Image fetch failed", 500
-
-
-@app.route('/api/logs/<log_id>', methods=['DELETE'])
-@login_required()
-def delete_log(log_id):
-    """Delete a saved log. Only the owner can delete their own log."""
-    user = _current_user(require_access=True)
-    if not user:
-        return jsonify({'success': False, 'error': 'Not authorized'}), 401
-
-    # Verify the log exists AND belongs to this user before deleting.
-    log_data = auth_billing.get_user_log(config.AUTH_DB_PATH, log_id, user['id'])
-    if not log_data:
-        return jsonify({'success': False, 'error': 'Log not found'}), 404
-
-    try:
-        with auth_billing.get_db(config.AUTH_DB_PATH) as conn:
-            cur = conn.execute(
-                "DELETE FROM user_logs WHERE id = ? AND user_id = ?",
-                (log_id, user['id'])
-            )
-            conn.commit()
-            deleted = cur.rowcount
-
-        if deleted < 1:
-            return jsonify({'success': False, 'error': 'Log not found'}), 404
-
-        print(f"[DELETE LOG] User {user['id']} deleted log {log_id} ({log_data.get('name')})")
-        return jsonify({'success': True, 'log_id': log_id})
-    except Exception as exc:
-        print(f"[DELETE LOG] Failed for {log_id}: {exc}")
-        return jsonify({'success': False, 'error': str(exc)}), 500
-
-
-
-@app.route('/workspace')
-@login_required()
-def workspace():
-    user = _current_user(require_access=True)
-    if not user:
-        return redirect(url_for('login'))
-        
-    if not auth_billing.can_access_workspace(user):
-        flash('Full-service users cannot access the self-serve workspace. Upgrade to a self-serve plan to use this feature.', 'warning')
-        return redirect(url_for('dashboard'))
-
-    response = make_response(render_template('workspace.html',
-                           user=user,
-                           app_version=APP_VERSION,
-                           build_time=APP_BUILD_TIME,
-                           vision_available=VISION_API_AVAILABLE,
-                           impersonating=bool(session.get('impersonate_user_id'))))
-    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
-    response.headers['Pragma'] = 'no-cache'
-    response.headers['Expires'] = '0'
-    return response
 
 @app.route('/dashboard')
-@login_required()
+@login_required
 def dashboard():
-    """User dashboard listing saved logs."""
-    user = _current_user(require_access=True)
-    if not user:
-        return redirect(url_for('login'))
-        
-    # Get global banner setting
-    settings = auth_billing.get_admin_settings(config.AUTH_DB_PATH)
-    global_banner = settings.get('global_banner')
-        
-    logs = auth_billing.get_user_logs(config.AUTH_DB_PATH, user['id'])
-    print(f"[DASHBOARD] User {user['id']} ({user.get('email')}) has {len(logs)} logs")
-    if logs:
-        print(f"[DASHBOARD] Log names: {[log['name'] for log in logs]}")
-    return render_template('dashboard.html', 
-                          user=user,
-                          logs=logs,
-                          global_banner=global_banner,
-                          impersonating=bool(session.get('impersonate_user_id')))
-
-
-
-@app.route('/las_viewer')
-@login_required()
-def las_viewer():
-    log_id = request.args.get('log_id')
-    log_data = None
-    if log_id:
-        user = _current_user()
-        if user:
-            log_data = auth_billing.get_user_log(config.AUTH_DB_PATH, log_id, user['id'])
-    
-    return render_template('las_viewer.html', app_version=APP_VERSION, log_data=log_data)
+    return render_template('dashboard.html', app_version=APP_VERSION, build_time=APP_BUILD_TIME)
 
 
 @app.route('/favicon.ico')
 def favicon():
     """Return empty response for favicon to prevent 404 errors."""
     return '', 204
-
-@app.route('/api/images/<filename>')
-@login_required()
-def get_image(filename):
-    """Serve saved well log images to authenticated users."""
-    user = _current_user(require_access=True)
-    if not user:
-        return "Not authorized", 401
-    
-    # We could theoretically verify the image belongs to the user,
-    # but the UUID filename acts as a sufficient secure capability URL
-    # for users inside their own session.
-    from pathlib import Path
-    images_dir = Path(config.DATA_ROOT) / 'images'
-    return send_from_directory(str(images_dir), filename)
-
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
@@ -8985,81 +6366,18 @@ def upload_file():
     if file.filename == '':
         return jsonify({'error': 'No file selected'}), 400
     
-    # Read image or PDF
+    # Read image
     file_bytes = file.read()
+    nparr = np.frombuffer(file_bytes, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     
-    if file.filename.lower().endswith('.pdf') or file_bytes.startswith(b'%PDF'):
-        try:
-            import fitz
-            doc = fitz.open("pdf", file_bytes)
-            if len(doc) == 0:
-                return jsonify({'error': 'PDF is empty'}), 400
-
-            # Render pages at a higher DPI (e.g. 200 DPI instead of 72)
-            zoom = 200 / 72.0
-            mat = fitz.Matrix(zoom, zoom)
-
-            page_images = []
-            max_w = 0
-
-            for page in doc:
-                pix = page.get_pixmap(matrix=mat, colorspace=fitz.csRGB, alpha=False)
-                # Convert fitz pixmap to numpy array for OpenCV
-                # Since colorspace=fitz.csRGB, pix.n will be 3 (RGB)
-                img_rgb = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, 3)
-                # Convert RGB to BGR for OpenCV
-                img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
-                
-                if img_bgr.shape[1] > max_w:
-                    max_w = img_bgr.shape[1]
-                    
-                page_images.append(img_bgr)
-
-            if not page_images:
-                return jsonify({'error': 'PDF contains no renderable pages'}), 400
-
-            # Pad images to match the maximum width to avoid vconcat errors
-            padded_images = []
-            for page_img in page_images:
-                h_img, w_img = page_img.shape[:2]
-                if w_img < max_w:
-                    # Pad on the right with white pixels
-                    padded = cv2.copyMakeBorder(page_img, 0, 0, 0, max_w - w_img, cv2.BORDER_CONSTANT, value=[255, 255, 255])
-                    padded_images.append(padded)
-                else:
-                    padded_images.append(page_img)
-
-            # Stitch all pages vertically into one long log image
-            img = cv2.vconcat(padded_images)
-            doc.close()
-        except ImportError:
-            return jsonify({'error': 'PDF support requires PyMuPDF (fitz) package'}), 500
-        except Exception as e:
-            return jsonify({'error': f'Failed to process PDF: {str(e)}'}), 400
-    else:
-        nparr = np.frombuffer(file_bytes, np.uint8)
-        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-
     if img is None:
-        return jsonify({'error': 'Could not read image or PDF'}), 400
+        return jsonify({'error': 'Could not read image'}), 400
     
     h, w, _ = img.shape
     
-    # Save the image to the persistent data volume so we can reference its path
-    import uuid
-    import os
-    from pathlib import Path
-    images_dir = Path(config.DATA_ROOT) / 'images'
-    images_dir.mkdir(parents=True, exist_ok=True)
-    image_filename = f"{uuid.uuid4().hex}.jpg"
-    image_path = images_dir / image_filename
-    
-    # Save as JPEG with 85% quality to save space
-    cv2.imwrite(str(image_path), img, [cv2.IMWRITE_JPEG_QUALITY, 85])
-    
-    # We still return the base64 version for immediate frontend display,
-    # but we also return the permanent path so the frontend can save it.
-    _, buffer = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    # Convert to base64 for display
+    _, buffer = cv2.imencode('.png', img)
     img_base64 = base64.b64encode(buffer).decode('utf-8')
     
     # Auto-detect tracks
@@ -9073,15 +6391,10 @@ def upload_file():
     # (e.g. from a Pass Summary table) without running full-panel OCR yet.
     detected_text = {'raw': [], 'numbers': [], 'suggestions': {}}
     ocr_suggestions = {}
-    if (VISION_API_AVAILABLE and vision_client is not None) or LOCAL_OCR_AVAILABLE:
+    if VISION_API_AVAILABLE and vision_client is not None:
         try:
-            header_h = max(100, int(h * 0.25))
-            footer_h = max(100, int(h * 0.50))
-            top_crop = img[0:header_h, :]
-            bottom_crop = img[max(0, h - footer_h):h, :]
-            # Stack top and bottom sections so one OCR call covers logs whose
-            # header info appears at the bottom (e.g. ATR / footer-style headers).
-            header_crop = np.vstack([top_crop, bottom_crop])
+            header_h = max(100, int(h * 0.3))
+            header_crop = img[0:header_h, :]
             ok_header, header_buf = cv2.imencode('.jpg', header_crop, [cv2.IMWRITE_JPEG_QUALITY, 90])
             if ok_header:
                 header_bytes = header_buf.tobytes()
@@ -9094,8 +6407,7 @@ def upload_file():
 
     return jsonify({
         'success': True,
-        'image': f'data:image/jpeg;base64,{img_base64}',
-        'image_path': f'/api/images/{image_filename}',
+        'image': f'data:image/png;base64,{img_base64}',
         'width': w,
         'height': h,
         'tracks': tracks,
@@ -9107,26 +6419,12 @@ def upload_file():
         } if primary_region else None,
         'detected_text': detected_text,
         'ocr_suggestions': ocr_suggestions or detected_text.get('suggestions', {}),
-        'vision_api_available': bool(VISION_API_AVAILABLE or LOCAL_OCR_AVAILABLE)
+        'vision_api_available': bool(VISION_API_AVAILABLE)
     })
 
 @app.route('/digitize', methods=['POST'])
-@login_required()
 def digitize():
     """Process digitization request"""
-    user = _current_user(require_access=True)
-    if not user:
-        return jsonify({'success': False, 'error': 'Not authorized'}), 401
-        
-    # Enforce trial limits on processing as well to prevent abuse
-    if user.get('subscription_status') == 'trialing' and not user.get('is_admin'):
-        user_logs = auth_billing.get_user_logs(config.AUTH_DB_PATH, user['id'])
-        if len(user_logs) >= 3:
-            return jsonify({
-                'success': False, 
-                'error': 'Trial limit reached. You have already processed and saved your 3 free logs. Please upgrade your account to continue digitizing.'
-            }), 403
-
     data = request.json
 
     # Decode image
@@ -9248,13 +6546,6 @@ def digitize():
         # and centerline boost that works well
         mask = compute_prob_map(roi, mode=mode, ui_filters=preview_filters)
 
-        if mode not in {"green", "red", "blue", "auto", "cyan", "magenta", "yellow", "orange", "purple"}:
-            _pm = mask.astype(np.float32) / 255.0
-            _pct_nonzero = float(np.mean(_pm > 0.01) * 100)
-            _pm_max = float(_pm.max())
-            _pm_mean = float(_pm.mean())
-            # Debug info removed
-
         # NEW: Use DP-based smooth path tracing with plausibility checks
         curve_type = c.get('type', 'GR')  # Get curve type for plausibility
 
@@ -9275,31 +6566,11 @@ def digitize():
         else:
             # Use user threshold for non-colored modes too (default was 1.1)
             refine_kwargs = {"dominance_ratio": snap_threshold}
-            # Non-GR black curves are supposed to follow visible crest tips.
-            # Any median smoothing here flattens short visible crest tips, so
-            # leave the trace unsmoothed and let the black-specific edge snap
-            # shape it instead.
-            if curve_type.upper() != "GR":
-                curve_smooth_window = 1
-                outlier_threshold = 12.0
-        # Effectively zero smoothness penalty for colored modes to prefer jagged ink over smooth artifacts.
-        # Black mode needs looser DP than the old max_step=3 / smooth_lambda=0.5 settings;
-        # otherwise the path lags real excursions and the later black refiners are forced to
-        # drag a too-stiff base trace sideways after the fact.
-        if mode in colored_modes:
-            dp_smooth_lambda = 0.001
-            dp_curv_lambda = 0.001
-            max_step_dp = 200  # Allow unlimited movement to follow gamma ray spikes
-        else:
-            curve_type_upper = curve_type.upper()
-            if curve_type_upper == "GR":
-                dp_smooth_lambda = 0.001
-                dp_curv_lambda = 0.001
-                max_step_dp = 150
-            else:
-                dp_smooth_lambda = 0.005
-                dp_curv_lambda = 0.001
-                max_step_dp = 150
+        # Effectively zero smoothness penalty for colored modes to prefer jagged ink over smooth artifacts
+        dp_smooth_lambda = 0.001 if mode in colored_modes else 0.5
+        # ALSO zero out curvature penalty to allow high-frequency wiggles/jitter
+        dp_curv_lambda = 0.001 if mode in colored_modes else 0.05
+        max_step_dp = 200 if mode in colored_modes else 3  # Allow unlimited movement to follow gamma ray spikes
 
         # Optional pixel-perfect skeleton tracer (preserve every bump)
         if ai_tracer.is_available() and trace_mode == "ai_tracer":
@@ -9403,13 +6674,13 @@ def digitize():
                         # Prefer the strongest local peak that stays close to the DP path.
                         best_cand = candidates[0]
                         best_score = -1e9
-                        for ci in candidates:
-                            x_cand = start + ci
+                        for c in candidates:
+                            x_cand = start + c
                             d = abs(x_cand - x_dp)
-                            score = local_prob[ci] - 0.15 * d  # strongest penalty to stay on DP path center
+                            score = local_prob[c] - 0.15 * d  # strongest penalty to stay on DP path center
                             if score > best_score:
                                 best_score = score
-                                best_cand = ci
+                                best_cand = c
                                 
                         p_local = float(local_prob[best_cand])
 
@@ -9469,7 +6740,7 @@ def digitize():
             
             # 8. Minimal cleanup only - NO aggressive snapping to far-away peaks
             s = pd.Series(xs)
-            xs = s.interpolate(method='linear', limit_direction='both', limit=max(25, int(xs.size * 0.02))).to_numpy(dtype=np.float32)
+            xs = s.interpolate(method='linear', limit_direction='both').to_numpy(dtype=np.float32)
             
             # DOWNSAMPLE: Map back to original resolution
             # Take every 2nd point and divide coordinate by 2
@@ -9512,8 +6783,7 @@ def digitize():
             # Run the peak pusher on the original resolution to catch the absolute edges
             # that might have been smoothed by downsampling.
             # Use small buffer (0.2) to be very sticky to tips.
-            # Reduced search radius to 30px to prevent teleporting to distant noise.
-            xs = refine_peaks_and_valleys(mask, xs, search_radius=30, min_prob=0.005)
+            xs = refine_peaks_and_valleys(mask, xs, search_radius=100, min_prob=0.005)
 
             # Gentle centerline refinement to re-center on ink after outer-edge bias and fusion
             try:
@@ -9554,95 +6824,47 @@ def digitize():
                 curve_type=curve_type,
                 max_step=max_step_dp,
                 smooth_lambda=dp_smooth_lambda,
-                curv_lambda=dp_curv_lambda,
+                curv_lambda=0.05,
                 hot_side=hot_side,
             )
-
+            
             # Snap the DP path toward obvious local maxima in the prob mask
             xs = refine_trace_with_local_maxima(mask, xs, **refine_kwargs)
+            
+            # Refine peaks and valleys where curve changes direction sharply
+            xs = refine_peaks_and_valleys(mask, xs, search_radius=50, min_prob=0.03)
+            
+            # Ensure every significant peak has a traced point
+            xs = ensure_peaks_have_points(mask, xs, min_prob=0.08, min_peak_prominence=0.03, max_shift=40)
+            
+            # Final centerline refinement
+            xs = refine_to_stroke_centerline(mask, xs, window_size=6)
 
-            # Skip the aggressive peak/valley pusher for black traces. On
-            # dense black logs it can snap sideways onto neighboring rails or
-            # filled blocks, which is what creates the horizontal "shelf"
-            # artifacts. DP + local maxima already finds the right branch;
-            # re-center on the stroke body instead of pushing to extrema.
-            try:
-                # Give black traces a wider recentering window so thick strokes
-                # can settle onto the body of the ink instead of staying pinned
-                # near whichever edge the DP pass first touched.
-                xs = refine_to_stroke_centerline(mask, xs, threshold_ratio=0.55, window_size=14)
-            except Exception:
-                pass
-
-            try:
-                # Probability maps still bias toward one stroke edge on dense
-                # black logs. Recenter once more against the raw dark stroke
-                # body in the grayscale ROI so the trace sits in the visual
-                # middle of the black ink.
-                xs = refine_black_trace_to_dark_run_center(
-                    roi,
-                    xs,
-                    hot_side=hot_side,
-                    curve_type=curve_type,
-                )
-            except Exception:
-                pass
-
-        # Do not run the old non-GR black smoother here. After the dark-run
-        # recenter/hot-side bias pass, even light smoothing pulls RHOB/DT-type
-        # traces back toward the inner half of the stroke and weakens the
-        # actual printed excursions we are trying to follow.
+            # Remove outliers and smooth
+            xs = remove_outliers_and_smooth(xs, window=curve_smooth_window, outlier_threshold=outlier_threshold)
 
         width_px = mask.shape[1]
 
-        # UNIVERSAL GAP FILLING:
-        # Aggressive grid removal can leave small gaps where the curve crossed a grid line.
-        # We linearly interpolate these gaps to ensure continuity.
-        if xs.size > 0:
+        # For colored modes, aggressively interpolate to fill ALL gaps
+        if mode in colored_modes:
+            # Fill any remaining NaN gaps with linear interpolation
             s = pd.Series(xs)
+            # First forward fill, then backward fill to handle edges
             h_mask, w_mask = mask.shape
-            if mode in colored_modes:
-                max_gap = max(25, int(h_mask * 0.02))
-            else:
-                max_gap = max(25, int(h_mask * 0.02))  # Strict for dashed black curves
+            max_gap = max(10, int(h_mask * 0.02))
             s = s.interpolate(method='linear', limit_direction='both', limit=max_gap, limit_area=None)
-            # Handle edge cases
+            # If still any NaNs at the very edges, fill with nearest valid value
             if s.isna().any():
-                s = s.ffill(limit=max_gap).bfill(limit=max_gap)
+                s = s.fillna(method='ffill', limit=max_gap).fillna(method='bfill', limit=max_gap)
             xs = s.to_numpy(dtype=np.float32)
 
-        if mode not in colored_modes:
-            try:
-                xs = suppress_black_grid_lock_runs(roi, xs, curve_type=curve_type)
-            except Exception:
-                pass
-
-            try:
-                # Finish black mode the same way the successful color path
-                # does: re-center after the grid-lock cleanup, not before it.
-                # This keeps the line on the middle of the visible black ink
-                # instead of on the stroke edge or a nearby rail.
-                xs = refine_to_stroke_centerline(mask, xs, threshold_ratio=0.45, window_size=16)
-            except Exception:
-                pass
-
-            try:
-                xs = recenter_black_trace_post_dp(roi, xs)
-            except Exception:
-                pass
-
-        # Likewise, skip the old final non-GR black crest snap. The dark-run
-        # recenter helper now already biases wide rows toward the reading-side
-        # edge, and a second crest-only shove consistently degraded RHOB on the
-        # saved black capture set.
-
-        # For colored modes, apply specific enhancements (peaks, centerline refinement)
-        if mode in colored_modes:
             if curve_type.upper() == "GR":
                 prob_map = mask.astype(np.float32) / 255.0
-                xs = ensure_gr_peak_crests(xs, prob_map, hot_side=hot_side, min_prob=0.01)
+                xs = ensure_gr_peak_crests(xs, prob_map, hot_side=hot_side)
 
-            # Final centerline snap for ALL colored modes
+            # Final centerline snap for ALL colored modes (green/red/blue/auto).
+            # This helps achieve near pixel-perfect centerline after interpolation
+            # and GR peak tweaks.
             try:
                 xs = refine_to_stroke_centerline(mask, xs, threshold_ratio=0.5, window_size=10)
             except Exception:
@@ -9719,73 +6941,31 @@ def digitize():
 
             if xs_valid.size > 0:
                 std_x = float(np.nanstd(xs_valid))
-                std_threshold = max(1.0, 0.005 * float(width_px))
-                # Only reject near-perfectly-vertical traces (rail lock-on).
-                # Use a very tight threshold: 0.5% of track width or 1.0px minimum.
-                # Slow curves like DTC/RHOB can legitimately have low std.
-                if std_x < std_threshold:
+                if std_x < max(1.5, 0.03 * float(width_px)):
                     xs[:] = np.nan
 
-        # Scale-aware pixel → value conversion.
-        # curve config may carry scale_type ('linear' | 'log' | 'centered') and wrapped.
-        # If missing, fall back to the curve-type default (e.g. resistivity → log).
-        scale_type = (c.get('scale_type') or '').lower().strip()
-        wrapped_flag = bool(c.get('wrapped'))
-        if not scale_type:
-            _hint = scale_detection.classify_curve_type(c.get('name') or c.get('type') or '')
-            scale_type = (_hint or {}).get('scale_type', 'linear')
-
-        # Auto-detect wrap for log scales when the user didn't check the box.
-        # detect_wrap() fires when the trace has repeated large alternating
-        # jumps (characteristic of multi-decade resistivity wrapping).
-        wrap_auto_detected = False
-        if scale_type == 'log' and not wrapped_flag:
-            try:
-                if scale_detection.detect_wrap(xs, width_px):
-                    wrapped_flag = True
-                    wrap_auto_detected = True
-            except Exception:
-                pass
-
-        vals = scale_detection.pixel_to_value(
-            xs=xs,
-            width_px=width_px,
-            left_value=left_value,
-            right_value=right_value,
-            scale_type=scale_type,
-            wrapped=wrapped_flag,
-        )
-
-        if wrap_auto_detected:
-            curve_warnings.append({
-                'curve': name,
-                'info': f"Auto-enabled wrap unwrapping for {name} (multi-decade log trace detected).",
-                'auto_wrap': True,
-            })
+        vals = np.full(xs.shape, np.nan, dtype=np.float32)
+        valid = ~np.isnan(xs)
+        vals[valid] = left_value + (xs[valid] / max(1, width_px-1)) * (right_value - left_value)
 
         vals_out = np.where(np.isnan(vals), null_val, vals).astype(np.float32)
         curve_data[name] = {'unit': unit, 'values': vals_out}
 
-        # Build a continuous display trace for the UI overlay. The exported LAS
-        # values can still contain nulls, but the visible editing line should
-        # remain continuous rather than showing gaps.
+        # Build a sparse set of trace points in original image coordinates for UI overlay
         trace_points = []
         if xs.size > 0:
-            try:
-                xs_display = pd.Series(xs.astype(np.float32)).interpolate(
-                    method='linear',
-                    limit_direction='both',
-                    limit_area=None,
-                ).to_numpy(dtype=np.float32)
-            except Exception:
-                xs_display = xs
-
-            valid_rows = np.where(~np.isnan(xs_display))[0]
+            # Only sample from rows where the DP tracer produced a valid X.
+            # This avoids the corner-case where all sampled indices land on
+            # NaNs even though some rows are valid, which would yield an
+            # empty trace and no cyan dots in the UI.
+            valid_rows = np.where(~np.isnan(xs))[0]
             if valid_rows.size > 0:
+                # Send EVERY single traced point - no sampling at all.
+                # This creates a completely solid line that shows the exact trace.
                 for row_idx in valid_rows:
-                    x_val = xs_display[row_idx]
-                    x_img = float(left_px) + float(x_val)
-                    y_img = float(top + row_idx)
+                    x_val = xs[row_idx]
+                    x_img = round(left_px + x_val)
+                    y_img = int(top + row_idx)
                     trace_points.append([x_img, y_img])
 
         curve_traces[name] = trace_points
@@ -10154,10 +7334,8 @@ def refine_edit():
         request_max_snap_dist = data.get('maxSnapDist')
         try:
             snap_threshold = float(data.get('snapThreshold', 1.05))
-        except Exception:
-            snap_threshold = 1.05
 
-        if is_crop:
+    if is_crop:
         # Image is already cropped to the track/ROI
             track_crop = img
             # If editRelativeY is provided, use it; otherwise assume center
@@ -10206,48 +7384,38 @@ def refine_edit():
         colored_modes = {'green', 'red', 'blue', 'auto', 'cyan', 'magenta', 'yellow', 'orange', 'purple'}
         
         try:
-            # ALWAYS use compute_prob_map so we get grid removal, UI filters, and enhanced detection
-            # for both colored and black modes.
-            mask = compute_prob_map(track_proc, mode, ui_filters=ui_filters)
+            if mode in colored_modes:
+                mask = compute_prob_map(track_proc, mode, ui_filters=ui_filters)
+            else:
+                source_roi = track_proc if track_proc is not None else track_crop
+                gray = cv2.cvtColor(source_roi, cv2.COLOR_BGR2GRAY) if len(source_roi.shape) == 3 else source_roi
+                mask = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
         except Exception as _prob_err:
             print(f'refine_edit: compute_prob_map failed ({_prob_err}), returning edit position')
             return jsonify({'success': True, 'refinedX': float(edit_x), 'confidence': 0.0,
                             'originalX': float(edit_x), 'refinedPath': []})
 
         weight_map = mask.astype(np.float32)
-        # Calculate distance transform for weighting if needed (compute_prob_map already does this internally,
-        # but we do it here for the refined_centroid helper)
-        try:
-            bin_mask = (mask > 0).astype(np.uint8)
-            dist = cv2.distanceTransform(bin_mask, cv2.DIST_L2, 3)
-            if dist is not None and dist.size:
-                maxv = float(np.max(dist))
-                if maxv > 1e-6:
-                    weight_map = (dist / maxv) * 255.0
-        except Exception:
-            weight_map = mask.astype(np.float32)
+        if mode not in colored_modes:
+            try:
+                bin_mask = (mask > 0).astype(np.uint8)
+                dist = cv2.distanceTransform(bin_mask, cv2.DIST_L2, 3)
+                if dist is not None and dist.size:
+                    maxv = float(np.max(dist))
+                    if maxv > 1e-6:
+                        weight_map = (dist / maxv) * 255.0
+            except Exception:
+                weight_map = mask.astype(np.float32)
         
         # Run multi-scale tracing on this segment
-        # Use parameters consistent with the main digitization loop
-        smooth_l = 0.001 if (mode in colored_modes or curve_type == 'GR') else 0.02
-        max_s = 200 if mode in colored_modes else (30 if curve_type == 'GR' else 50)
-        curv_l = 0.001 if (mode in colored_modes or curve_type == 'GR') else 0.005
-        
-        # For non-colored modes (black), we need higher max_step to track large excursions
-        # and slightly lower smoothing so it doesn't just average through peaks
-        max_step_eff = max_s if curve_type == 'GR' else 35
-        smooth_eff = smooth_l if curve_type == 'GR' else 0.005
-        curv_eff = curv_l if curve_type == 'GR' else 0.001
-        
         try:
             xs_refined, confidence = trace_curve_multiscale(
                 mask,
                 scale_min=left_value,
                 scale_max=right_value,
                 curve_type=curve_type,
-                max_step=max_step_eff,
-                smooth_lambda=smooth_eff,
-                curv_lambda=curv_eff,
+                max_step=100,
+                smooth_lambda=0.5,
                 hot_side=None,
             )
         except Exception as _trace_err:
@@ -10255,20 +7423,6 @@ def refine_edit():
             return jsonify({'success': True, 'refinedX': float(edit_x), 'confidence': 0.0,
                             'originalX': float(edit_x), 'refinedPath': []})
         
-        # UNIVERSAL GAP FILLING (Same as main loop):
-        # Fill gaps from grid removal so the refined path is continuous
-        if xs_refined is not None and xs_refined.size > 0:
-            try:
-                s = pd.Series(xs_refined)
-                # Use at least 25px gap fill to bridge grid cuts
-                max_gap = 25
-                s = s.interpolate(method='linear', limit_direction='both', limit=max_gap, limit_area=None)
-                if s.isna().any():
-                    s = s.ffill(limit=max_gap).bfill(limit=max_gap)
-                xs_refined = s.to_numpy(dtype=np.float32)
-            except Exception:
-                pass
-
         # Helper for centroid refinement
         def get_refined_centroid(x_viterbi, row_idx):
             try:
@@ -10293,13 +7447,6 @@ def refine_edit():
             except Exception:
                 pass
             return x_viterbi
-
-        if not (pixel_perfect and mode not in colored_modes):
-            try:
-                # Mathmatical centering pass for thick black ink inside refine segment
-                xs_refined = recenter_black_trace_post_dp(track_proc, xs_refined)
-            except Exception:
-                pass
 
         if 0 <= edit_row_in_window < len(xs_refined) and np.isfinite(xs_refined[edit_row_in_window]):
             # Refine the specific click point
@@ -10369,14 +7516,10 @@ def refine_edit():
         
     except Exception as e:
         import traceback
-        tb = traceback.format_exc()
-        if is_prod:
-            tb = None
-            print(f"Auto capture error: {e}")
         return jsonify({
             'success': False,
             'error': str(e),
-            'traceback': tb
+            'traceback': traceback.format_exc()
         })
 
 
@@ -10433,119 +7576,6 @@ def log_correction():
             f.write(json.dumps(record, ensure_ascii=False) + '\n')
 
         return jsonify({'success': True, 'event_id': event_id})
-    except Exception as exc:
-        return jsonify({'success': False, 'error': str(exc)}), 500
-
-
-def _black_capture_output_dir(now_utc: datetime) -> Path:
-    date_str = now_utc.strftime('%Y-%m-%d')
-    out_dir = Path(__file__).resolve().parent / 'corrections' / date_str / 'black_segments'
-    out_dir.mkdir(parents=True, exist_ok=True)
-    return out_dir
-
-
-def _safe_capture_component(value, default='capture') -> str:
-    text = '' if value is None else str(value).strip()
-    if not text:
-        return default
-    text = re.sub(r"\s+", "_", text)
-    text = re.sub(r"[^A-Za-z0-9_\-]+", "", text)
-    text = text.strip("_-")
-    return (text[:80] or default)
-
-
-def _write_capture_image(image_data, out_dir: Path, stem: str) -> Optional[Path]:
-    if not isinstance(image_data, str) or not image_data.startswith('data:image'):
-        return None
-
-    try:
-        header, b64 = image_data.split(',', 1)
-        ext = 'jpg'
-        if 'image/png' in header:
-            ext = 'png'
-        elif 'image/webp' in header:
-            ext = 'webp'
-
-        raw = base64.b64decode(b64)
-        image_path = out_dir / f'{stem}.{ext}'
-        image_path.write_bytes(raw)
-        return image_path
-    except Exception:
-        return None
-
-
-@app.route('/api/save_bad_black_segment', methods=['POST'])
-def save_bad_black_segment():
-    try:
-        data = request.json or {}
-        if not isinstance(data, dict):
-            return jsonify({'success': False, 'error': 'Invalid JSON payload'}), 400
-
-        now = datetime.utcnow()
-        ts = now.strftime('%Y%m%dT%H%M%S.%fZ')
-        capture_id = data.get('capture_id') or str(uuid.uuid4())
-        out_dir = _black_capture_output_dir(now)
-        curve_slug = _safe_capture_component(data.get('curve_id'), default='BLACK')
-        stem = f'{ts}_{curve_slug}_{capture_id}'
-
-        trace_points = data.get('trace_points')
-        if not isinstance(trace_points, list):
-            trace_points = []
-
-        image_path = _write_capture_image(data.get('image'), out_dir, stem)
-        payload_path = out_dir / f'{stem}.json'
-        summary_path = out_dir / 'captures.jsonl'
-        user = _current_user(require_access=False)
-
-        payload_record = {
-            'capture_id': capture_id,
-            'ts_utc': now.isoformat() + 'Z',
-            'curve_id': data.get('curve_id'),
-            'trace_key': data.get('trace_key'),
-            'status': data.get('status') or 'needs_review',
-            'capture_source': data.get('capture_source'),
-            'capture_event': data.get('capture_event'),
-            'capture_session_id': data.get('capture_session_id'),
-            'auto_capture': bool(data.get('auto_capture')),
-            'download_format': data.get('download_format'),
-            'notes': data.get('notes'),
-            'trace_rows': len(trace_points),
-            'image_path': str(image_path) if image_path else None,
-            'user_id': user['id'] if user else None,
-            'payload': data,
-        }
-
-        payload_path.write_text(
-            json.dumps(payload_record, ensure_ascii=False, indent=2),
-            encoding='utf-8'
-        )
-
-        summary_record = {
-            'capture_id': capture_id,
-            'ts_utc': payload_record['ts_utc'],
-            'curve_id': payload_record['curve_id'],
-            'trace_key': payload_record['trace_key'],
-            'status': payload_record['status'],
-            'capture_source': payload_record['capture_source'],
-            'capture_event': payload_record['capture_event'],
-            'capture_session_id': payload_record['capture_session_id'],
-            'auto_capture': payload_record['auto_capture'],
-            'download_format': payload_record['download_format'],
-            'notes': payload_record['notes'],
-            'trace_rows': payload_record['trace_rows'],
-            'image_path': payload_record['image_path'],
-            'payload_path': str(payload_path),
-            'user_id': payload_record['user_id'],
-        }
-        with summary_path.open('a', encoding='utf-8') as f:
-            f.write(json.dumps(summary_record, ensure_ascii=False) + '\n')
-
-        return jsonify({
-            'success': True,
-            'capture_id': capture_id,
-            'trace_rows': len(trace_points),
-            'payload_path': str(payload_path),
-        })
     except Exception as exc:
         return jsonify({'success': False, 'error': str(exc)}), 500
 
@@ -11197,56 +8227,6 @@ def _ml_resolve_curve_trace_model_path(requested_path: Optional[str]) -> str:
      return str(candidates[0])
 
 
-@app.route('/api/download_las_zip', methods=['POST'])
-def download_las_zip():
-    """Generate a ZIP file containing individual LAS files for each curve."""
-    data = request.json or {}
-    
-    depths = data.get('depths')
-    curves = data.get('curves')
-    header_metadata = data.get('header_metadata') or {}
-    depth_unit = data.get('depth_unit', 'FT')
-    
-    if not depths or not curves:
-        return jsonify({'error': 'Missing depth or curve data'}), 400
-        
-    try:
-        depth_arr = np.array(depths, dtype=np.float32)
-        
-        # Create in-memory ZIP
-        zip_buffer = BytesIO()
-        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-            base_name = build_las_filename_from_metadata(header_metadata, default_name='digitized_log').replace('.las', '')
-            
-            for curve_name, curve_info in curves.items():
-                # Prepare single-curve data dict
-                single_curve_data = {
-                    curve_name: curve_info
-                }
-                
-                # Generate LAS content
-                las_content = write_las_simple(depth_arr, single_curve_data, depth_unit, header_metadata)
-                
-                # Add to ZIP
-                # Filename: WellName_CurveName.las
-                # Sanitize curve name for filename
-                safe_curve_name = "".join([c for c in curve_name if c.isalnum() or c in ('_', '-')])
-                filename = f"{base_name}_{safe_curve_name}.las"
-                zf.writestr(filename, las_content)
-                
-        zip_buffer.seek(0)
-        
-        return send_file(
-            zip_buffer,
-            mimetype='application/zip',
-            as_attachment=True,
-            download_name=f"{base_name}_curves.zip"
-        )
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
 @app.route('/api/ml_predict_curve_trace', methods=['POST'])
 def ml_predict_curve_trace():
      if not TORCH_AVAILABLE:
@@ -11330,588 +8310,14 @@ def ml_predict_curve_trace():
          return jsonify({'success': False, 'error': str(e)}), 500
 
 
-def _decode_image_data_url(image_data):
-    """Decode a data-URL image. Returns (img_bgr, error_message)."""
-    if not image_data or ',' not in image_data:
-        return None, 'Missing image data'
-    try:
-        img_payload = image_data.split(',', 1)[1]
-        img_bytes = base64.b64decode(img_payload)
-    except Exception:
-        return None, 'Invalid image data'
-    nparr = np.frombuffer(img_bytes, np.uint8)
-    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-    if img is None:
-        return None, 'Could not decode image'
-    return img, None
-
-
-def _ocr_strings(crop):
-    """Run OCR on a small crop and return a list of plain strings."""
-    try:
-        ok, buf = cv2.imencode('.jpg', crop, [cv2.IMWRITE_JPEG_QUALITY, 90])
-        if not ok:
-            return []
-        result = detect_text_vision_api(buf.tobytes()) or {}
-        raw = result.get('raw') or []
-        out = []
-        for item in raw:
-            if isinstance(item, dict):
-                t = item.get('text') or item.get('description')
-                if t:
-                    out.append(str(t))
-            elif isinstance(item, str):
-                out.append(item)
-        return out
-    except Exception as exc:
-        print(f'[detect-scale] OCR failed: {exc}')
-        return []
-
-
-def _document_ocr_numbers(crop_bgr):
-    """Run document-level OCR (better for dense text + rotation) and return numeric entries.
-
-    Prefers Google Vision's DOCUMENT_TEXT_DETECTION when available; falls back to the
-    generic text detector (which is what our EasyOCR fallback implements anyway).
-
-    Returns a list of dicts { value: float, text: str, x: int, y: int }.
-    """
-    try:
-        ok, buf = cv2.imencode('.jpg', crop_bgr, [cv2.IMWRITE_JPEG_QUALITY, 92])
-        if not ok:
-            return []
-        img_bytes = buf.tobytes()
-    except Exception:
-        return []
-
-    numeric_entries = []
-
-    if VISION_API_AVAILABLE and vision_client is not None:
-        try:
-            image = vision.Image(content=img_bytes)
-            response = vision_client.document_text_detection(image=image)
-            # Iterate word-level blocks, which preserves position accurately
-            if response.full_text_annotation and response.full_text_annotation.pages:
-                for page in response.full_text_annotation.pages:
-                    for block in page.blocks:
-                        for para in block.paragraphs:
-                            for word in para.words:
-                                text = ''.join(sym.text for sym in word.symbols)
-                                vtx = word.bounding_box.vertices
-                                if not vtx:
-                                    continue
-                                x = int(vtx[0].x)
-                                y = int(vtx[0].y)
-                                # middle-y of the word is more representative
-                                ys = [v.y for v in vtx]
-                                y_mid = int(sum(ys) / len(ys))
-                                for tok in re.findall(r'-?\d+(?:\.\d+)?', text):
-                                    try:
-                                        numeric_entries.append({
-                                            'value': float(tok),
-                                            'text': text,
-                                            'x': x,
-                                            'y': y_mid,
-                                        })
-                                    except ValueError:
-                                        continue
-                return numeric_entries
-        except Exception as exc:
-            print(f'[document-ocr] Vision API error, falling back: {exc}')
-
-    # Fallback: reuse the generic detector and synthesize numeric_entries from 'numbers'
-    try:
-        result = detect_text_vision_api(img_bytes) or {}
-        for n in result.get('numbers') or []:
-            try:
-                numeric_entries.append({
-                    'value': float(n.get('value')),
-                    'text':  str(n.get('text', n.get('value'))),
-                    'x':     int(n.get('x', 0)),
-                    'y':     int(n.get('y', 0)),
-                })
-            except (TypeError, ValueError):
-                continue
-    except Exception as exc:
-        print(f'[document-ocr] fallback failed: {exc}')
-
-    return numeric_entries
-
-
-def _llm_identify_curve(header_strings, axis_strings, existing_guess=None):
-    """When local pattern matching fails, ask the LLM to pick a canonical mnemonic.
-
-    Returns a dict { mnemonic, scale_type, left, right, unit, confidence } or None.
-    Uses the existing call_ai_curve_suggestions plumbing to avoid adding a new API key.
-    """
-    if existing_guess and (existing_guess.get('confidence') or 0) >= 0.6:
-        return None  # local detection is already confident enough
-
-    payload = {
-        "task": "identify_well_log_curve",
-        "header_ocr":  header_strings or [],
-        "axis_ocr":    axis_strings or [],
-        "allowed_mnemonics": ["GR", "SP", "RT", "ILD", "LLD", "LLS", "MSFL",
-                              "RHOB", "NPHI", "DT", "CALI", "PEF", "OTHER"],
-        "instruction": (
-            "Given OCR strings from a paper well-log track header and axis labels, "
-            "return the most likely canonical curve mnemonic (one of allowed_mnemonics). "
-            "Also return the scale_type as one of 'linear', 'log', 'centered'. "
-            "For resistivity (RT/ILD/LLD/LLS/MSFL) always return scale_type='log'. "
-            "For SP always return 'centered'. For everything else return 'linear'. "
-            "If axis numeric labels are present, return left and right as the numeric "
-            "scale endpoints you read; otherwise omit them. "
-            "Respond with JSON ONLY using this schema: "
-            '{"mnemonic": string, "scale_type": string, "left": number|null, '
-            '"right": number|null, "unit": string|null, "confidence": number}'
-        ),
-    }
-    try:
-        result = call_ai_curve_suggestions(payload)
-    except Exception as exc:
-        print(f'[detect-scale] LLM call failed: {exc}')
-        return None
-    if not isinstance(result, dict):
-        return None
-
-    # Accept both the schema above and a wrapped {curves:[{mnemonic:...}]} shape
-    candidate = result
-    if 'curves' in result and isinstance(result['curves'], list) and result['curves']:
-        candidate = result['curves'][0]
-
-    mnemonic = str(candidate.get('mnemonic') or '').upper().strip()
-    if not mnemonic or mnemonic == 'OTHER':
-        return None
-    defaults = scale_detection.get_mnemonic_defaults(mnemonic) or {}
-    scale_type = (candidate.get('scale_type') or defaults.get('scale_type') or 'linear').lower()
-    left = candidate.get('left', defaults.get('default_left'))
-    right = candidate.get('right', defaults.get('default_right'))
-    try:
-        left = float(left) if left is not None else None
-        right = float(right) if right is not None else None
-    except (TypeError, ValueError):
-        left = defaults.get('default_left')
-        right = defaults.get('default_right')
-    unit = candidate.get('unit') or defaults.get('unit')
-    confidence = float(candidate.get('confidence') or 0.7)
-    return {
-        'mnemonic': mnemonic,
-        'scale_type': scale_type,
-        'left_value': left,
-        'right_value': right,
-        'unit': unit,
-        'confidence': max(0.0, min(1.0, confidence)),
-    }
-
-
-def _detect_scale_for_region(img, region, curve_name='', xs_trace=None, use_llm=True):
-    """Shared detector used by both single-curve and batch endpoints.
-
-    Returns dict: { ok, error?, scale?, ocr_header?, ocr_axis_labels?, llm_used? }
-    """
-    H, W, _ = img.shape
-    try:
-        left = max(0, int(region.get('left_px', 0)))
-        right = min(W, int(region.get('right_px', W)))
-        top = max(0, int(region.get('top_px', 0)))
-        bottom = min(H, int(region.get('bottom_px', H)))
-    except Exception:
-        return {'ok': False, 'error': 'Invalid region'}
-    if right <= left or bottom <= top:
-        return {'ok': False, 'error': 'Empty region'}
-
-    panel = img[top:bottom, left:right]
-    panel_h, panel_w, _ = panel.shape
-    if panel_h < 2 or panel_w < 2:
-        return {'ok': False, 'error': 'Panel too small'}
-
-    header_band = panel[: max(1, panel_h // 5), :]
-    axis_top    = panel[: max(1, panel_h // 12), :]
-    axis_bot    = panel[-max(1, panel_h // 12):, :]
-
-    header_strings = _ocr_strings(header_band)
-    axis_strings = _ocr_strings(axis_top) + _ocr_strings(axis_bot)
-
-    header_text = curve_name or ' '.join(header_strings)
-    xs_np = None
-    if isinstance(xs_trace, list) and xs_trace:
-        try:
-            xs_np = np.asarray(xs_trace, dtype=np.float32)
-        except Exception:
-            xs_np = None
-
-    detected = scale_detection.detect_scale(
-        header_text=header_text,
-        axis_labels=axis_strings,
-        xs_trace=xs_np,
-        width_px=panel_w,
-    )
-    scale_dict = detected.to_dict()
-    llm_used = False
-    memory_used = False
-
-    # Prior-correction memory: check if we've seen a similar OCR pattern before.
-    # Stored user choices beat generic rules when available.
-    try:
-        uid = session.get('user_id') if 'session' in globals() else None
-    except Exception:
-        uid = None
-    try:
-        prior = corrections_store.best_suggestion(
-            header_ocr=header_strings,
-            axis_ocr=axis_strings,
-            user_id=uid,
-        )
-    except Exception as exc:
-        print(f'[detect-scale] corrections lookup failed: {exc}')
-        prior = None
-
-    if prior and prior.get('confidence', 0.0) > scale_dict.get('confidence', 0.0):
-        uc = prior['user_choice']
-        memory_used = True
-        if uc.get('mnemonic'):
-            scale_dict['mnemonic'] = uc['mnemonic']
-        if uc.get('scale_type'):
-            scale_dict['scale_type'] = uc['scale_type']
-        if uc.get('left') is not None:
-            scale_dict['left_value'] = uc['left']
-        if uc.get('right') is not None:
-            scale_dict['right_value'] = uc['right']
-        if 'wrapped' in uc:
-            scale_dict['wrapped'] = bool(uc['wrapped'])
-        scale_dict['confidence'] = max(scale_dict.get('confidence', 0.0), prior['confidence'])
-        scale_dict.setdefault('reasons', []).append(
-            f"Applied prior correction (similarity={prior['similarity']:.2f}, {prior['agreeing_count']} matches)"
-        )
-
-    # LLM fallback when local detection AND memory lookup are still unsure
-    if use_llm and scale_dict.get('confidence', 0.0) < 0.6:
-        llm = _llm_identify_curve(header_strings, axis_strings, existing_guess=scale_dict)
-        if llm:
-            llm_used = True
-            scale_dict['mnemonic'] = llm['mnemonic']
-            scale_dict['scale_type'] = llm['scale_type']
-            if llm.get('left_value') is not None:
-                scale_dict['left_value'] = llm['left_value']
-            if llm.get('right_value') is not None:
-                scale_dict['right_value'] = llm['right_value']
-            if llm.get('unit'):
-                scale_dict['unit'] = llm['unit']
-            # Boost confidence, but cap at 0.85 so UI still shows review for LLM-only picks
-            scale_dict['confidence'] = max(scale_dict.get('confidence', 0.0), min(0.85, llm['confidence']))
-            scale_dict.setdefault('reasons', []).append('LLM fallback used')
-
-    return {
-        'ok': True,
-        'scale': scale_dict,
-        'ocr_header': header_strings,
-        'ocr_axis_labels': axis_strings,
-        'llm_used': llm_used,
-        'memory_used': memory_used,
-    }
-
-
-@app.route('/api/detect-scale', methods=['POST'])
-def api_detect_scale():
-    """Detect scale for a single curve region. See /api/detect-all-scales for batch."""
-    data = request.json or {}
-    img, err = _decode_image_data_url(data.get('image'))
-    if err:
-        return jsonify({'success': False, 'error': err}), 400
-
-    res = _detect_scale_for_region(
-        img,
-        region=data.get('region') or {},
-        curve_name=(data.get('curve_name') or '').strip(),
-        xs_trace=data.get('xs_trace'),
-        use_llm=bool(data.get('use_llm', True)),
-    )
-    if not res.get('ok'):
-        return jsonify({'success': False, 'error': res.get('error')}), 400
-    return jsonify({
-        'success': True,
-        'scale': res['scale'],
-        'ocr_header': res['ocr_header'],
-        'ocr_axis_labels': res['ocr_axis_labels'],
-        'llm_used': res['llm_used'],
-        'memory_used': res['memory_used'],
-    })
-
-
-def _cluster_numbers_into_columns(numbers, bandwidth_px: int = 60):
-    """Group OCR numeric entries by x-position into vertical "columns".
-
-    Args:
-        numbers: list of {value, x, y, text} dicts
-        bandwidth_px: merge-distance in x; entries within this are one column
-
-    Returns:
-        list of columns, each a dict { x_center, entries: [...] }, sorted by x_center.
-    """
-    if not numbers:
-        return []
-    # Sort by x so we can do a simple linear-merge pass
-    xs_sorted = sorted(numbers, key=lambda n: int(n.get('x', 0)))
-    columns = []
-    for n in xs_sorted:
-        x = int(n.get('x', 0))
-        if columns and x - columns[-1]['x_center'] <= bandwidth_px:
-            col = columns[-1]
-            col['entries'].append(n)
-            # update center as running mean for stability
-            xs = [int(e.get('x', 0)) for e in col['entries']]
-            col['x_center'] = sum(xs) // len(xs)
-        else:
-            columns.append({'x_center': x, 'entries': [n]})
-    return columns
-
-
-def _pick_best_depth_column(columns, panel_height_px, unit_hint):
-    """Run detect_depth_axis on each column and pick the best fit.
-
-    Scoring favors: many labels, high R², depth values in plausible range.
-    Returns (best_axis, best_column_xcenter) or (None, None) if nothing plausible.
-    """
-    best = None
-    best_score = -1.0
-    best_x = None
-    for col in columns:
-        entries = col['entries']
-        if len(entries) < 2:
-            continue
-        # Skip columns where all values are tiny (likely scale labels like 0.2/20)
-        vals = [float(e.get('value', 0)) for e in entries]
-        if max(vals) < 50:
-            continue
-        axis = scale_detection.detect_depth_axis(
-            ocr_numbers=entries,
-            panel_height_px=panel_height_px,
-            unit_hint=unit_hint,
-        )
-        n_labels = len(axis.labels)
-        if n_labels < 2 or axis.top_depth is None:
-            continue
-        # Score: R² weighted by number of labels (log-scaled) and depth plausibility
-        r2 = max(0.0, axis.r_squared)
-        depth_span = abs(axis.bottom_depth - axis.top_depth) if axis.bottom_depth else 0
-        # Penalize tiny spans (could be scale labels) or absurdly large
-        span_factor = 1.0 if 50 < depth_span < 20000 else 0.3
-        score = r2 * math.log(n_labels + 1) * span_factor
-        if score > best_score:
-            best_score = score
-            best = axis
-            best_x = col['x_center']
-    return best, best_x
-
-
-@app.route('/api/detect-depth-axis', methods=['POST'])
-def api_detect_depth_axis():
-    """Detect the depth axis by auto-finding the depth column anywhere in the image.
-
-    Request JSON:
-        image:       data URL
-        region:      optional { left_px, right_px, top_px, bottom_px } to constrain search
-        unit_hint:   optional 'FT' or 'M'
-
-    Response:
-        success:   bool
-        axis:      DetectedDepthAxis dict with extra x_center + image-space coords
-    """
-    data = request.json or {}
-    img, err = _decode_image_data_url(data.get('image'))
-    if err:
-        return jsonify({'success': False, 'error': err}), 400
-
-    region = data.get('region') or {}
-    unit_hint = (data.get('unit_hint') or '').upper().strip() or None
-    if unit_hint and unit_hint not in ('FT', 'M'):
-        unit_hint = None
-
-    H, W, _ = img.shape
-    try:
-        left = max(0, int(region.get('left_px', 0))) if region.get('left_px') is not None else 0
-        right = min(W, int(region.get('right_px', W))) if region.get('right_px') is not None else W
-        top = max(0, int(region.get('top_px', 0))) if region.get('top_px') is not None else 0
-        bottom = min(H, int(region.get('bottom_px', H))) if region.get('bottom_px') is not None else H
-    except Exception:
-        return jsonify({'success': False, 'error': 'Invalid region'}), 400
-    if right <= left or bottom <= top:
-        return jsonify({'success': False, 'error': 'Empty region'}), 400
-
-    crop = img[top:bottom, left:right]
-    crop_h, crop_w, _ = crop.shape
-    if crop_h < 10 or crop_w < 5:
-        return jsonify({'success': False, 'error': 'Region too small'}), 400
-
-    # OCR the full (optionally constrained) panel, then auto-find the depth column
-    numbers = _document_ocr_numbers(crop)
-    if not numbers:
-        return jsonify({
-            'success': True,
-            'axis': {'top_depth': None, 'bottom_depth': None, 'labels': [],
-                     'confidence': 0.0, 'reasons': ['no numbers detected in region']},
-        })
-
-    columns = _cluster_numbers_into_columns(numbers, bandwidth_px=max(40, crop_w // 30))
-    axis, col_x_center = _pick_best_depth_column(columns, panel_height_px=crop_h, unit_hint=unit_hint)
-
-    if axis is None:
-        # Return diagnostic info to help the user adjust
-        col_summary = [
-            {'x_center': c['x_center'], 'count': len(c['entries']),
-             'sample_values': sorted({float(e['value']) for e in c['entries']})[:6]}
-            for c in columns
-        ]
-        return jsonify({
-            'success': True,
-            'axis': {
-                'top_depth': None, 'bottom_depth': None, 'labels': [],
-                'confidence': 0.0,
-                'reasons': [f'scanned {len(numbers)} numbers in {len(columns)} columns; none yielded a linear depth fit'],
-                'candidate_columns': col_summary,
-            },
-        })
-
-    axis_dict = axis.to_dict()
-    axis_dict['x_center'] = int(left + (col_x_center or 0))
-    # Map y coords back to full-image space for the frontend
-    if axis_dict.get('top_px') is not None:
-        axis_dict['top_px_image'] = int(top + axis_dict['top_px'])
-    if axis_dict.get('bottom_px') is not None:
-        axis_dict['bottom_px_image'] = int(top + axis_dict['bottom_px'])
-    for lbl in axis_dict.get('labels', []):
-        lbl['y_px_image'] = int(top + lbl['y_px'])
-
-    return jsonify({'success': True, 'axis': axis_dict})
-
-
-@app.route('/api/detect-all-scales', methods=['POST'])
-def api_detect_all_scales():
-    """Batch detect scales for many curves in one image with a single OCR pass per region.
-
-    Request JSON:
-        image:   data URL
-        curves:  [ { id, left_px, right_px, top_px, bottom_px, name? }, ... ]
-        use_llm: bool (default True) — enable LLM fallback for low-confidence tracks
-
-    Response:
-        { success: bool, results: [ { id, scale, ocr_header, ocr_axis_labels, llm_used, error? } ] }
-    """
-    data = request.json or {}
-    img, err = _decode_image_data_url(data.get('image'))
-    if err:
-        return jsonify({'success': False, 'error': err}), 400
-
-    curves = data.get('curves') or []
-    if not isinstance(curves, list) or not curves:
-        return jsonify({'success': False, 'error': 'Missing curves[]'}), 400
-
-    use_llm = bool(data.get('use_llm', True))
-    results = []
-    for idx, c in enumerate(curves):
-        region = {
-            'left_px':   c.get('left_px', 0),
-            'right_px':  c.get('right_px', 0),
-            'top_px':    c.get('top_px', 0),
-            'bottom_px': c.get('bottom_px', img.shape[0]),
-        }
-        res = _detect_scale_for_region(
-            img,
-            region=region,
-            curve_name=(c.get('name') or '').strip(),
-            xs_trace=c.get('xs_trace'),
-            use_llm=use_llm,
-        )
-        entry = {'id': c.get('id', idx)}
-        if not res.get('ok'):
-            entry['error'] = res.get('error')
-        else:
-            entry['scale'] = res['scale']
-            entry['ocr_header'] = res['ocr_header']
-            entry['ocr_axis_labels'] = res['ocr_axis_labels']
-            entry['llm_used'] = res['llm_used']
-            entry['memory_used'] = res.get('memory_used', False)
-        results.append(entry)
-
-    return jsonify({'success': True, 'results': results})
-
-
-@app.route('/api/record-correction', methods=['POST'])
-def api_record_correction():
-    """Record a user correction of a previously-detected scale.
-
-    Request JSON:
-        header_ocr:  list[str] — the OCR strings the detector saw in the header
-        axis_ocr:    list[str] — axis band OCR strings
-        ai_choice:   {mnemonic, scale_type, left, right, wrapped}
-        user_choice: same shape — what the user chose/edited to
-    """
-    data = request.json or {}
-    header_ocr = data.get('header_ocr') or []
-    axis_ocr = data.get('axis_ocr') or []
-    ai_choice = data.get('ai_choice') or {}
-    user_choice = data.get('user_choice') or {}
-
-    if not isinstance(header_ocr, list) or not isinstance(axis_ocr, list):
-        return jsonify({'success': False, 'error': 'header_ocr/axis_ocr must be arrays'}), 400
-    if not isinstance(user_choice, dict) or not user_choice:
-        return jsonify({'success': False, 'error': 'user_choice required'}), 400
-
-    try:
-        uid = session.get('user_id')
-    except Exception:
-        uid = None
-
-    try:
-        correction_id = corrections_store.record_correction(
-            corrections_store.CorrectionEntry(
-                header_ocr=header_ocr,
-                axis_ocr=axis_ocr,
-                ai_choice=ai_choice,
-                user_choice=user_choice,
-                user_id=uid,
-            )
-        )
-    except Exception as exc:
-        return jsonify({'success': False, 'error': str(exc)}), 500
-
-    return jsonify({
-        'success': True,
-        'id': correction_id,
-        'total_corrections': corrections_store.count_corrections(),
-    })
-
-
-@app.route('/api/corrections-stats', methods=['GET'])
-def api_corrections_stats():
-    """Return count of stored corrections (useful for a 'trained on N examples' UI badge)."""
-    try:
-        uid = session.get('user_id')
-    except Exception:
-        uid = None
-    try:
-        return jsonify({
-            'success': True,
-            'user_total': corrections_store.count_corrections(user_id=uid) if uid else 0,
-            'global_total': corrections_store.count_corrections(),
-        })
-    except Exception as exc:
-        return jsonify({'success': False, 'error': str(exc)}), 500
-
-
 if __name__ == '__main__':
     # Create templates folder if it doesn't exist
     os.makedirs('templates', exist_ok=True)
     os.makedirs('static', exist_ok=True)
     
-    print("Starting TIFF-to-LAS Web App")
-    if VISION_API_AVAILABLE:
-        print("Google Vision API: Available")
-    elif LOCAL_OCR_AVAILABLE:
-        print("Google Vision API: Not configured (using EasyOCR fallback)")
-    else:
-        print("Google Vision API: Not configured")
-    print("Open: http://localhost:5000")
+    print("🚀 Starting TIFF→LAS Web App")
+    print(f"📊 Google Vision API: {'✅ Available' if VISION_API_AVAILABLE else '⚠️  Not configured'}")
+    print("🌐 Open: http://localhost:5000")
     
     app.run(debug=False, use_reloader=False, host='0.0.0.0', port=5000)
     app.run(debug=False, use_reloader=False, host='0.0.0.0', port=5000)
