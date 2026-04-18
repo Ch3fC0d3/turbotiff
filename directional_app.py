@@ -517,7 +517,7 @@ def index():
 def viewer(task_id):
     job = jobs.get(task_id)
     if not job or job.get('status') != 'done':
-        abort(404)
+        return "<h3>Session Expired</h3><p>Your conversion task was not found. This usually happens if the server was restarted or the link expired.</p><p><a href='/directional'>&larr; Return to Directional Tool</a></p>", 404
     return render_template('directional_viewer.html', task_id=task_id)
 
 @directional_bp.route('/start_conversion', methods=['POST'])
