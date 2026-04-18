@@ -140,11 +140,9 @@ def extract_survey_from_pdf(pdf_path: str, pages_list=None, is_curve=False):
             print(f"Failed to process page {page_num + 1}: {e}")
 
     if not all_dataframes:
-        return None
+        print("No tables detected by Gemini.")
 
-    # Combine all pages
-    combined_df = pd.concat(all_dataframes, ignore_index=True)
-    return combined_df
+    return all_dataframes
 
 if __name__ == "__main__":
     import sys
