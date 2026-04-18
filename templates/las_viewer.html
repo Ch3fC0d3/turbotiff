@@ -143,6 +143,7 @@
 
         .main-content {
             display: flex;
+            position: relative;
             height: calc(100vh - 180px); /* Adjust based on header/toolbar height */
             border-top: 1px solid #e9ecef;
         }
@@ -151,6 +152,15 @@
             overflow: auto;
             position: relative;
             background: #fff;
+        }
+        .viewer-pane.overlay-mode {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+            background: transparent !important;
         }
         #imagePane {
             border-right: 1px solid #e9ecef;
@@ -349,7 +359,16 @@
                 <input type="checkbox" id="syncScroll"> Sync Scroll
             </label>
             <button class="zoom-btn" id="btnMatchScale" onclick="matchImageScale()" title="Match LAS zoom to Image scale" style="margin-left:8px; font-size:0.8em; padding:4px 8px;">Match Scale</button>
+
+            <div class="toolbar-divider"></div>
             
+            <label class="sync-toggle" title="Overlay Curves onto Image" style="color:#4ecca3;">
+                <input type="checkbox" id="overlayToggle"> Overlay Curves
+            </label>
+            <label class="sync-toggle" id="opacityControl" title="Adjust curve opacity" style="display:none; margin-left:4px;">
+                <input type="range" id="overlayOpacity" min="10" max="100" value="80" style="width: 60px;">
+            </label>
+
             <div class="toolbar-divider"></div>
             <span style="font-size:0.85em; font-weight:600; color:#e2e8f0;">Shift:</span>
             <input type="number" id="syncOffset" value="0" step="10" style="width:50px" class="depth-input" title="Vertical offset correction (px)">
@@ -549,9 +568,68 @@ document.getElementById('imageInput').addEventListener('change', function(e) {
     img.src = url;
 });
 
-// ── Sync Logic ─────────────────────────────────────────────────────────────
+// ── Sync Logic ───────────────────────────────────────────────────────────────
 const imagePane = document.getElementById('imagePane');
 const plotWrapper = document.getElementById('plotWrapper');
+
+// --- Overlay Controls ---
+let isDraggingPlot = false;
+let dragStartX = 0;
+let currentPlotTx = 0;
+const overlayToggle = document.getElementById('overlayToggle');
+const opacitySlider = document.getElementById('overlayOpacity');
+const opacityControl = document.getElementById('opacityControl');
+
+overlayToggle.addEventListener('change', (e) => {
+    if (e.target.checked) {
+        plotWrapper.classList.add('overlay-mode');
+        opacityControl.style.display = 'inline-flex';
+        document.getElementById('syncScroll').checked = true;
+        syncImageToLas();
+        document.getElementById('well-plot').style.cursor = 'grab';
+    } else {
+        plotWrapper.classList.remove('overlay-mode');
+        opacityControl.style.display = 'none';
+        document.getElementById('well-plot').style.cursor = 'default';
+        currentPlotTx = 0;
+        document.getElementById('well-plot').style.transform = '';
+    }
+    applyOverlayStyles();
+});
+
+opacitySlider.addEventListener('input', applyOverlayStyles);
+
+function applyOverlayStyles() {
+    const wp = document.getElementById('well-plot');
+    if (overlayToggle.checked) {
+        wp.style.opacity = opacitySlider.value / 100;
+        document.querySelectorAll('#well-plot svg').forEach(svg => svg.style.backgroundColor = 'transparent');
+        document.querySelectorAll('.wellioviz_container').forEach(c => c.style.backgroundColor = 'transparent');
+    } else {
+        wp.style.opacity = '1';
+        document.querySelectorAll('#well-plot svg').forEach(svg => svg.style.backgroundColor = '');
+        document.querySelectorAll('.wellioviz_container').forEach(c => c.style.backgroundColor = '');
+    }
+}
+
+document.getElementById('well-plot').addEventListener('mousedown', (e) => {
+    if (!overlayToggle.checked) return;
+    isDraggingPlot = true;
+    dragStartX = e.clientX - currentPlotTx;
+    document.getElementById('well-plot').style.cursor = 'grabbing';
+});
+window.addEventListener('mousemove', (e) => {
+    if (!isDraggingPlot) return;
+    currentPlotTx = e.clientX - dragStartX;
+    document.getElementById('well-plot').style.transform = `translateX(${currentPlotTx}px)`;
+});
+window.addEventListener('mouseup', () => {
+    if (isDraggingPlot) {
+        isDraggingPlot = false;
+        document.getElementById('well-plot').style.cursor = 'grab';
+    }
+});
+// ------------------------
 
 function getSyncState() {
     const img = document.getElementById('uploadedImage');
@@ -959,6 +1037,8 @@ function renderPlot() {
         wviz.multipleLogPlot('well-plot', allTemplates);
         clearError();
         
+        applyOverlayStyles();
+
         // Auto-match scale ONCE if calibration is fresh
         if (imageCalibration && !window._hasAutoMatchedScale) {
             window._hasAutoMatchedScale = true;
