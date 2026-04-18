@@ -62,7 +62,7 @@
     </div>
 
     <script>
-        const taskId = {{ task_id | tojson }};
+        const taskId = "{{ task_id }}";
         const viewerTitle = document.getElementById('viewerTitle');
         const viewerMeta = document.getElementById('viewerMeta');
         const viewerStatus = document.getElementById('viewerStatus');
@@ -360,23 +360,28 @@
                 });
             }
             const maxStack = isClassic ? Math.max(t1Total, t2Total) : isConsolidated ? visibleIndices.length : 0;
-            const extraStacks = Math.max(0, maxStack - 1);
-            const yDomainEnd = (isClassic || isConsolidated) ? Math.max(0.5, 0.99 - (extraStacks * 0.04)) : 1;
 
-            const traces = [];
-            const layout = {
-                paper_bgcolor: 'rgba(0,0,0,0)',
-                plot_bgcolor: '#faf7ef',
-                margin: { l: 95, r: 24, t: 30, b: 40 },
-                showlegend: false,
-                hovermode: 'closest',
-                dragmode: 'pan',
-                height: 800, 
-                hoverlabel: { bgcolor: '#18242f', bordercolor: '#4ecca3', font: { color: '#ffffff' } },
-                annotations: [], shapes: []
-            };
+    if (isClassic) {
+        pill.draggable = true;
+        pill.ondragstart = (e) => {
+            e.dataTransfer.setData('text/plain', index);
+            setTimeout(() => pill.style.opacity = '0.3', 0);
+        };
+        pill.ondragend = (e) => {
+            pill.style.opacity = trackVisibility[index] ? '1' : '0.4';
+        };
+    }
 
-            const numVisible = visibleIndices.length;
+    const toggleArea = document.createElement('div');
+    toggleArea.style.display = 'inline-flex';
+    toggleArea.style.alignItems = 'center';
+    toggleArea.style.gap = '8px';
+    toggleArea.style.cursor = 'pointer';
+    toggleArea.onclick = () => {
+        trackVisibility[index] = !trackVisibility[index];
+        pill.style.opacity = trackVisibility[index] ? '1' : '0.4';
+        renderPlot();
+    };
             const trackGap = 0.018;
             const totalGap = numVisible > 1 ? trackGap * (numVisible - 1) : 0;
             const trackWidth = numVisible > 0 ? (1 - totalGap) / numVisible : 1;
