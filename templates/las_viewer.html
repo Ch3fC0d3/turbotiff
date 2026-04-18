@@ -299,7 +299,7 @@
             </div>
         </div>
         <div style="display: flex; gap: 15px; align-items: center;">
-            <a href="/directional" class="back-btn" style="background: rgba(16, 185, 129, 0.2); color: #10b981; border-color: rgba(16, 185, 129, 0.4);">🎯 Directional MD-TVD Converter</a>
+            <a href="/directional" class="back-btn" style="background: rgba(16, 185, 129, 0.2); color: #10b981; border-color: rgba(16, 185, 129, 0.4);" onclick="openDirectionalToolWithData(event)">🎯 Directional MD-TVD Converter</a>
             <a href="/dashboard" class="back-btn">← Back to Dashboard</a>
         </div>
     </div>
@@ -1084,6 +1084,27 @@ if (window.librariesLoaded) {
     window.addEventListener('libraries-loaded', checkLibs);
 }
 window.addEventListener('load', checkLibs);
+</script>
+<script>
+    function openDirectionalToolWithData(event) {
+        event.preventDefault();
+        try {
+            sessionStorage.removeItem('directionalToolContent');
+            sessionStorage.removeItem('directionalToolFilename');
+            
+            const lasContent = window.PRELOADED_LAS_CONTENT || sessionStorage.getItem('lasViewerContent');
+            if (lasContent) {
+                sessionStorage.setItem('directionalToolContent', lasContent);
+                // Try to infer a nice filename
+                const originalName = window.PRELOADED_IMAGE_CONTENT || sessionStorage.getItem('lasViewerImage') || 'las_viewer';
+                const baseName = originalName.split('/').pop().split('?')[0].replace(/\.[^/.]+$/, "");
+                sessionStorage.setItem('directionalToolFilename', `${baseName}_digitized.las`);
+            }
+        } catch (e) {
+            console.warn('Failed to save data for Directional Tool:', e);
+        }
+        window.location.href = '/directional';
+    }
 </script>
 </body>
 </html>

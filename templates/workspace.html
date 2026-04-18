@@ -1344,7 +1344,7 @@
             <img src="/static/images/logo.svg" alt="TifLAS Logo" style="height: 140px; margin-bottom: 8px; display: inline-block; filter: drop-shadow(0 2px 8px rgba(0,0,0,0.25));">
             <p style="font-size: 1.15em; letter-spacing: 0.3px; opacity: 0.92;">Convert legacy well log images to standard LAS files using Computer Vision</p>
             <div class="header-actions">
-                <a href="/directional" class="directional-btn" style="background: rgba(16, 185, 129, 0.2); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.4); border-radius: 20px; padding: 6px 14px; text-decoration: none; font-size: 0.9em; font-weight: 600; display: inline-flex; align-items: center; transition: all 0.2s ease;">🎯 Directional Tool</a>
+                <a href="/directional" class="directional-btn" style="background: rgba(16, 185, 129, 0.2); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.4); border-radius: 20px; padding: 6px 14px; text-decoration: none; font-size: 0.9em; font-weight: 600; display: inline-flex; align-items: center; transition: all 0.2s ease;" onclick="openDirectionalToolWithData(event)">🎯 Directional Tool</a>
                 <a href="/dashboard" class="dashboard-btn">🏠 Dashboard</a>
                 <a href="/las_viewer" class="las-viewer-btn" onclick="openLasViewerWithData(event)">📈 LAS Viewer</a>
                 <a href="/account" class="account-btn">Manage Billing</a>
@@ -3097,6 +3097,24 @@
 
         function openIntroModal() {
             startWorkspaceTour();
+        }
+
+        function openDirectionalToolWithData(event) {
+            event.preventDefault();
+            try {
+                sessionStorage.removeItem('directionalToolContent');
+                sessionStorage.removeItem('directionalToolFilename');
+                
+                if (lastLasContent) {
+                    sessionStorage.setItem('directionalToolContent', lastLasContent);
+                    const originalName = uploadedImagePath ? uploadedImagePath.split('/').pop().split('?')[0] : 'workspace';
+                    const baseName = originalName.replace(/\.[^/.]+$/, "");
+                    sessionStorage.setItem('directionalToolFilename', `${baseName}_digitized.las`);
+                }
+            } catch (e) {
+                console.warn('Failed to save data for Directional Tool:', e);
+            }
+            window.location.href = '/directional';
         }
 
         function openLasViewerWithData(event) {

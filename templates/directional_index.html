@@ -31,10 +31,13 @@
                 <h3 style="margin-bottom: 10px; font-size:16px; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:5px;">2. Curves File</h3>
                 <div class="row">
                     <div class="form-group half" style="flex: 2;">
-                        <label for="curve">Curves File (CSV, PDF, or LAS)</label>
+                        <label for="curve" id="curveLabel">Curves File (CSV, PDF, or LAS)</label>
                         <input type="file" id="curve" name="curve" accept=".csv,.pdf,.las" required>
+                        <div id="preloadedCurveNotice" style="display: none; margin-top: 8px; font-size: 0.9em; color: var(--primary); background: rgba(16,185,129,0.1); padding: 8px 12px; border-radius: 6px; border: 1px solid rgba(16,185,129,0.2);">
+                            ✨ Currently working LAS log loaded.
+                        </div>
                     </div>
-                    <div class="form-group half" style="flex: 1;">
+                    <div class="form-group half" style="flex: 1;" id="curvePagesGroup">
                         <label for="curve_pages" style="color:var(--primary);">PDF Pages (Opt)</label>
                         <input type="text" id="curve_pages" name="curve_pages" placeholder="e.g. 3">
                     </div>
@@ -126,6 +129,28 @@
             document.body.removeChild(link);
         }
 
+        const curveInput = document.getElementById('curve');
+        const curveLabel = document.getElementById('curveLabel');
+        const curvePagesGroup = document.getElementById('curvePagesGroup');
+        const preloadedCurveNotice = document.getElementById('preloadedCurveNotice');
+        
+        let preloadedCurveBlob = null;
+        let preloadedCurveFilename = null;
+
+        // Check if we arrived here from the Workspace or LAS viewer with an active log
+        if (sessionStorage.getItem('directionalToolContent')) {
+            const content = sessionStorage.getItem('directionalToolContent');
+            preloadedCurveFilename = sessionStorage.getItem('directionalToolFilename') || 'digitized.las';
+            preloadedCurveBlob = new Blob([content], { type: 'text/plain' });
+            
+            // Hide the actual input and show the notice
+            curveInput.style.display = 'none';
+            curveInput.removeAttribute('required'); // We'll append it manually
+            curvePagesGroup.style.display = 'none';
+            preloadedCurveNotice.style.display = 'block';
+            curveLabel.textContent = "Curves File";
+        }
+
         document.getElementById('convertForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             const btn = document.getElementById('submitBtn');
@@ -146,6 +171,11 @@
             }, 1000);
 
             const formData = new FormData(e.target);
+            
+            // If we have a preloaded file, append it manually
+            if (preloadedCurveBlob) {
+                formData.set('curve', preloadedCurveBlob, preloadedCurveFilename);
+            }
 
             try {
                 // Submit the background task start
@@ -163,7 +193,7 @@
                 
                 // Polling loop
                 const pollInterval = setInterval(async () => {
-                    const statusRes = await fetch(`/status/${task_id}`);
+                    const statusRes = await fetch(`/directional/status/${task_id}`);
                     const statusData = await statusRes.json();
                     
                     if (statusData.status === 'done') {
@@ -172,8 +202,8 @@
                         timerDiv.style.display = 'none';
                         btn.classList.remove('loading');
 
-                        const downloadUrl = `/download/${task_id}`;
-                        const viewerUrl = `/viewer/${task_id}`;
+                        const downloadUrl = `/directional/download/${task_id}`;
+                        const viewerUrl = `/directional/viewer/${task_id}`;
                         const targetBasis = statusData.target_basis || document.getElementById('target_basis').value.toUpperCase();
                         const curveCount = formatCompactNumber(statusData.curve_count);
                         const sampleCount = formatCompactNumber(statusData.sample_count);
