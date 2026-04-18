@@ -10,18 +10,18 @@
 </head>
 <body>
     <div class="container viewer-container">
-        <div class="glass-panel viewer-hero">
+        <div class="glass-panel viewer-hero" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 20px;">
             <div>
                 <p class="section-eyebrow">Converted Log</p>
                 <h1 id="viewerTitle">Loading log viewer...</h1>
                 <p id="viewerMeta" class="subtitle">Preparing shared depth tracks.</p>
             </div>
-            <div class="result-actions" style="display: flex; gap: 8px;">
-                <a class="action-link secondary" href="/directional" style="min-width: auto; padding: 10px 16px;">Back</a>
-                <a id="viewerDownloadCsv" class="action-link" href="#" style="min-width: auto; padding: 10px 16px;">CSV</a>
-                <a id="viewerDownloadLas" class="action-link" href="#" style="min-width: auto; padding: 10px 16px;">LAS</a>
-                <button id="viewerDownloadJpg" class="action-link" style="min-width: auto; padding: 10px 16px; border: none; font-family: inherit; cursor: pointer;">JPG</button>
-                <button id="viewerDownloadPdf" class="action-link" style="min-width: auto; padding: 10px 16px; border: none; font-family: inherit; cursor: pointer;">PDF</button>
+            <div class="result-actions" style="display: flex; gap: 12px; flex-wrap: wrap; align-items: center;">
+                <a class="action-link secondary" href="/directional" style="min-width: 80px;">Back</a>
+                <a id="viewerDownloadCsv" class="action-link" href="#" style="min-width: 80px;">CSV</a>
+                <a id="viewerDownloadLas" class="action-link" href="#" style="min-width: 80px;">LAS</a>
+                <button id="viewerDownloadJpg" class="action-link" style="min-width: 80px; border: none; font-family: inherit; cursor: pointer;">JPG</button>
+                <button id="viewerDownloadPdf" class="action-link" style="min-width: 80px; border: none; font-family: inherit; cursor: pointer;">PDF</button>
             </div>
         </div>
 
@@ -361,13 +361,13 @@
             }
             const maxStack = isClassic ? Math.max(t1Total, t2Total) : isConsolidated ? visibleIndices.length : 0;
             const extraStacks = Math.max(0, maxStack - 1);
-            const yDomainEnd = (isClassic || isConsolidated) ? Math.max(0.5, 0.99 - (extraStacks * 0.04)) : 1;
+            const yDomainEnd = (isClassic || isConsolidated) ? Math.max(0.5, 0.99 - (extraStacks * 0.055)) : 1;
 
             const traces = [];
             const layout = {
                 paper_bgcolor: '#faf7ef',
                 plot_bgcolor: '#faf7ef',
-                margin: { l: 95, r: 24, t: 40, b: 40 },
+                margin: { l: 95, r: 24, t: 40 + (extraStacks * 32), b: 40 },
                 showlegend: false,
                 hovermode: 'closest',
                 dragmode: 'pan',
@@ -510,7 +510,7 @@
                     } else {
                         ax.overlaying = 'x';
                         ax.anchor = 'free';
-                        ax.position = yDomainEnd + (renderedIndex * 0.04);
+                        ax.position = yDomainEnd + (renderedIndex * 0.055);
                     }
                 } else if (isClassic) {
                     let isBaseInGroup = (group === 1 && t1Count === 0) || (group === 2 && t2Count === 0);
@@ -530,7 +530,7 @@
                     } else {
                         ax.overlaying = overlayRef;
                         ax.anchor = 'free';
-                        ax.position = yDomainEnd + ((group === 1 ? t1Count : t2Count) * 0.04);
+                        ax.position = yDomainEnd + ((group === 1 ? t1Count : t2Count) * 0.055);
                     }
                     
                     if (group === 1) t1Count++;

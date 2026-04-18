@@ -351,12 +351,12 @@ button.loading::after {
 
 .plot-scroll {
     overflow-x: auto;
-    max-width: 1280px;
+    overflow-y: hidden;
     margin: 0 auto;
 }
 
 .log-plot {
-    min-height: 860px;
+    min-height: 800px;
 }
 
 @media (max-width: 900px) {
