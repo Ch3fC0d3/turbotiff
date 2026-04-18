@@ -1,6 +1,0 @@
-
-InputObject                               SideIndicator
------------                               -------------
-web_app.py                                =>
-D:\Users\gabep\Desktop\tifflas\web_app.py <=
-
