@@ -4825,8 +4825,7 @@
             if (!curveKey || !lastDigitizedCurves[curveKey]) return;
             const targetTrack = findTrackByCurveId(editCurveId);
             if (!targetTrack) return;
-            if (xImg < Math.min(targetTrack.leftX, targetTrack.rightX) || xImg > Math.max(targetTrack.leftX, targetTrack.rightX)) return;
-
+            
             const depthCfg = lastDepthConfig || getDepthConfigFromInputs();
             const depth = pixelToDepthFromConfig(yImg, depthCfg);
             if (!Number.isFinite(depth)) return;
@@ -4906,7 +4905,6 @@
             if (!curveKey || !lastDigitizedCurves[curveKey]) return;
             const targetTrack = findTrackByCurveId(editCurveId);
             if (!targetTrack) return;
-            if (xImg < Math.min(targetTrack.leftX, targetTrack.rightX) || xImg > Math.max(targetTrack.leftX, targetTrack.rightX)) return;
 
             const depthCfg = lastDepthConfig || getDepthConfigFromInputs();
             const depth = pixelToDepthFromConfig(yImg, depthCfg);
@@ -4922,8 +4920,7 @@
                 return;
             }
 
-            // Clamp to track bounds so values stay within scale
-            const clampedX = Math.max(targetTrack.leftX, Math.min(targetTrack.rightX, xImg));
+            const clampedX = xImg; // Allow values outside track box
             const newValue = pixelToTrackValue(clampedX, targetTrack);
             if (!Number.isFinite(newValue)) return;
 
@@ -5007,8 +5004,7 @@
             }
             const targetTrack = findTrackByCurveId(editCurveId);
             if (!targetTrack) return;
-            if (xImg < Math.min(targetTrack.leftX, targetTrack.rightX) || xImg > Math.max(targetTrack.leftX, targetTrack.rightX)) return;
-
+            
             const activeTrace = getActiveCurveTracePoints(editCurveId);
             const traceKey = activeTrace.traceKey || getActiveCurveTraceKey(editCurveId) || editCurveId;
             const pts = activeTrace.points;
@@ -5301,9 +5297,7 @@
             rebuildCurveTraceFromDigitized(editCurveId);
             const targetTrack = findTrackByCurveId(editCurveId);
             if (!targetTrack) return false;
-            if (xImg < Math.min(targetTrack.leftX, targetTrack.rightX) || xImg > Math.max(targetTrack.leftX, targetTrack.rightX)) {
-                return false;
-            }
+            // Removed tight bounds check to allow edits outside track
 
             const activeTrace = getActiveCurveTracePoints(editCurveId);
             const traceKey = activeTrace.traceKey || getActiveCurveTraceKey(editCurveId) || editCurveId;
