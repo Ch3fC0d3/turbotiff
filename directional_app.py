@@ -414,7 +414,7 @@ def _build_log_view_payload(job: dict, task_id: str) -> dict:
         "sample_count": int(depth_series.notna().sum()),
         "curve_count": int(sum(1 for track in tracks if not track["is_reference"])),
         "tracks": tracks,
-        "download_url": f"/download/{task_id}",
+        "download_url": f"/directional/download/{task_id}",
     }
 
 def parse_file_to_df(filepath, filename, pages_input, is_curve=False, source_basis=None):
