@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 
 
 def _configure_stdio() -> None:
@@ -33,7 +34,22 @@ from directional_converter import DirectionalSurvey, CurveSet, MdTvdConverter
 directional_bp = Blueprint('directional', __name__)
 UPLOAD_FOLDER = tempfile.gettempdir()
 
-jobs = {}
+def _get_job_file(task_id):
+    return os.path.join(UPLOAD_FOLDER, f"{task_id}_job.json")
+
+def get_job(task_id, default=None):
+    jf = _get_job_file(task_id)
+    if os.path.exists(jf):
+        try:
+            with open(jf, "r") as f:
+                return json.load(f)
+        except:
+            return default
+    return default
+
+def save_job(task_id, data):
+    with open(_get_job_file(task_id), "w") as f:
+        json.dump(data, f)
 
 HEADER_HINTS = (
     "measured",
@@ -495,7 +511,7 @@ def convert_bg_task(task_id, survey_path, survey_name, survey_pages, curve_path,
         native_df.to_csv(native_path, index=False)
 
         primary_tracks = [column for column in out.columns if column != 'depth' and not column.lower().startswith('source_')]
-        jobs[task_id] = {
+        save_job(task_id, {
             'status': 'done',
             'filepath': out_path,
             'filename': out_filename,
@@ -507,9 +523,9 @@ def convert_bg_task(task_id, survey_path, survey_name, survey_pages, curve_path,
             'sample_count': int(out['depth'].notna().sum()) if 'depth' in out.columns else int(len(out)),
             'depth_min': float(out['depth'].min()) if 'depth' in out.columns else None,
             'depth_max': float(out['depth'].max()) if 'depth' in out.columns else None,
-        }
+        })
     except Exception as e:
-        jobs[task_id] = {'status': 'error', 'error': str(e)}
+        save_job(task_id, {'status': 'error', 'error': str(e)})
 
 @directional_bp.route('/')
 def index():
@@ -518,7 +534,7 @@ def index():
 
 @directional_bp.route('/viewer/<task_id>')
 def viewer(task_id):
-    job = jobs.get(task_id)
+    job = get_job(task_id)
     if not job or job.get('status') != 'done':
         return "<h3>Session Expired</h3><p>Your conversion task was not found. This usually happens if the server was restarted or the link expired.</p><p><a href='/directional'>&larr; Return to Directional Tool</a></p>", 404
     return render_template('directional_viewer.html', task_id=task_id)
@@ -543,7 +559,7 @@ def start_conversion():
     smooth = request.form.get('smooth', '')
     smooth_window = int(smooth) if smooth else None
     
-    jobs[task_id] = {'status': 'processing'}
+    save_job(task_id, {'status': 'processing'})
     
     t = threading.Thread(target=convert_bg_task, args=(
         task_id, survey_path, survey_file.filename, survey_pages, 
@@ -556,12 +572,12 @@ def start_conversion():
 
 @directional_bp.route('/status/<task_id>')
 def get_status(task_id):
-    return jsonify(jobs.get(task_id, {'status': 'unknown'}))
+    return jsonify(get_job(task_id, {'status': 'unknown'}))
 
 
 @directional_bp.route('/plot_data/<task_id>')
 def plot_data(task_id):
-    job = jobs.get(task_id)
+    job = get_job(task_id)
     if not job or job.get('status') != 'done':
         return jsonify({'error': 'Plot data is only available for completed conversions.'}), 404
 
@@ -573,7 +589,7 @@ def plot_data(task_id):
 @directional_bp.route('/download/<task_id>')
 def download(task_id):
     format_type = request.args.get('format', 'csv').lower()
-    job = jobs.get(task_id)
+    job = get_job(task_id)
     if not job or job.get('status') != 'done':
         return "<h3>Session Expired</h3><p>Your conversion task was not found. This usually happens if the server was restarted or the link expired.</p><p><a href='/directional'>&larr; Return to Directional Tool</a></p>", 404
 
