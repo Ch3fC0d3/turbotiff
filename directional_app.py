@@ -571,9 +571,9 @@ def plot_data(task_id):
 def download(task_id):
     format_type = request.args.get('format', 'csv').lower()
     job = jobs.get(task_id)
-    if not job or job['status'] != 'done':
-        return "Not found", 404
-        
+    if not job or job.get('status') != 'done':
+        return "<h3>Session Expired</h3><p>Your conversion task was not found. This usually happens if the server was restarted or the link expired.</p><p><a href='/directional'>&larr; Return to Directional Tool</a></p>", 404
+
     csv_path = job['filepath']
     
     if format_type == 'csv':
