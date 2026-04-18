@@ -193,38 +193,52 @@
                 
                 // Polling loop
                 const pollInterval = setInterval(async () => {
-                    const statusRes = await fetch(`/directional/status/${task_id}`);
-                    const statusData = await statusRes.json();
-                    
-                    if (statusData.status === 'done') {
-                        clearInterval(pollInterval);
-                        clearInterval(processingTimer);
-                        timerDiv.style.display = 'none';
-                        btn.classList.remove('loading');
+                    try {
+                        const statusRes = await fetch(`/directional/status/${task_id}`);
+                        if (!statusRes.ok) {
+                            throw new Error(`Server returned ${statusRes.status}. The conversion engine may have crashed or restarted.`);
+                        }
+                        
+                        const statusData = await statusRes.json();
+                        
+                        if (statusData.status === 'done') {
+                            clearInterval(pollInterval);
+                            clearInterval(processingTimer);
+                            timerDiv.style.display = 'none';
+                            btn.classList.remove('loading');
 
-                        const downloadUrl = `/directional/download/${task_id}`;
-                        const viewerUrl = `/directional/viewer/${task_id}`;
-                        const targetBasis = statusData.target_basis || document.getElementById('target_basis').value.toUpperCase();
-                        const curveCount = formatCompactNumber(statusData.curve_count);
-                        const sampleCount = formatCompactNumber(statusData.sample_count);
-                        const depthMin = formatDepth(statusData.depth_min);
-                        const depthMax = formatDepth(statusData.depth_max);
+                            const downloadUrl = `/directional/download/${task_id}`;
+                            const viewerUrl = `/directional/viewer/${task_id}`;
+                            const targetBasis = statusData.target_basis || document.getElementById('target_basis').value.toUpperCase();
+                            const curveCount = formatCompactNumber(statusData.curve_count);
+                            const sampleCount = formatCompactNumber(statusData.sample_count);
+                            const depthMin = formatDepth(statusData.depth_min);
+                            const depthMax = formatDepth(statusData.depth_max);
 
-                        resultTitle.textContent = `${targetBasis} log ready`;
-                        resultSummary.textContent = `${curveCount} curve tracks across ${sampleCount} samples from ${depthMin} to ${depthMax} ${targetBasis}.`;
-                        downloadLink.href = downloadUrl;
-                        viewerLink.href = viewerUrl;
-                        resultPanel.classList.remove('hidden');
-                        resultPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                            resultTitle.textContent = `${targetBasis} log ready`;
+                            resultSummary.textContent = `${curveCount} curve tracks across ${sampleCount} samples from ${depthMin} to ${depthMax} ${targetBasis}.`;
+                            downloadLink.href = downloadUrl;
+                            viewerLink.href = viewerUrl;
+                            resultPanel.classList.remove('hidden');
+                            resultPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
-                        triggerDownload(downloadUrl);
-                    } else if (statusData.status === 'error') {
+                            triggerDownload(downloadUrl);
+                        } else if (statusData.status === 'error') {
+                            clearInterval(pollInterval);
+                            clearInterval(processingTimer);
+                            timerDiv.style.display = 'none';
+                            btn.classList.remove('loading');
+                            
+                            errorDiv.textContent = statusData.error || 'An error occurred during conversion.';
+                            errorDiv.classList.remove('hidden');
+                        }
+                    } catch (pollErr) {
                         clearInterval(pollInterval);
                         clearInterval(processingTimer);
                         timerDiv.style.display = 'none';
                         btn.classList.remove('loading');
                         
-                        errorDiv.textContent = statusData.error || 'An error occurred during conversion.';
+                        errorDiv.textContent = pollErr.message || 'Lost connection to the conversion server.';
                         errorDiv.classList.remove('hidden');
                     }
                 }, 3000);

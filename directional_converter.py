@@ -154,6 +154,10 @@ class DirectionalSurvey:
 
         # Include stop if it lands close to a step.
         count = int(np.floor((grid_stop - grid_start) / step)) + 1
+        
+        if count > 200_000:
+            raise ValueError(f"Target depth grid is too large ({count} samples). This is typically caused by uploading an invalid survey file (e.g. a log instead of a survey table), resulting in hallucinated depths. Please check your survey file.")
+            
         grid = grid_start + np.arange(count, dtype=float) * step
         return grid
 
