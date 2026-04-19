@@ -146,6 +146,7 @@
             position: relative;
             height: calc(100vh - 180px); /* Adjust based on header/toolbar height */
             border-top: 1px solid #e9ecef;
+            background: #fff;
         }
         .viewer-pane {
             flex: 1;
@@ -599,7 +600,7 @@ overlayToggle.addEventListener('change', (e) => {
         opacityControl.style.display = 'none';
         
         // Reset transforms on all containers
-        document.querySelectorAll('.wellioviz_container').forEach(c => {
+        document.querySelectorAll('#well-plot > div').forEach(c => {
             c.dataset.tx = 0;
             c.dataset.ty = 0;
             c.style.transform = '';
@@ -615,14 +616,14 @@ function applyOverlayStyles() {
     if (overlayToggle.checked) {
         wp.style.opacity = opacitySlider.value / 100;
         document.querySelectorAll('#well-plot svg').forEach(svg => svg.style.backgroundColor = 'transparent');
-        document.querySelectorAll('.wellioviz_container').forEach(c => {
+        document.querySelectorAll('#well-plot > div').forEach(c => {
             c.style.backgroundColor = 'transparent';
             c.style.cursor = 'grab';
         });
     } else {
         wp.style.opacity = '1';
         document.querySelectorAll('#well-plot svg').forEach(svg => svg.style.backgroundColor = '');
-        document.querySelectorAll('.wellioviz_container').forEach(c => {
+        document.querySelectorAll('#well-plot > div').forEach(c => {
             c.style.backgroundColor = '';
             c.style.cursor = '';
         });
@@ -633,7 +634,7 @@ document.getElementById('well-plot').addEventListener('mousedown', (e) => {
     if (!overlayToggle.checked) return;
     
     // Find the nearest curve container to drag independently
-    const container = e.target.closest('.wellioviz_container');
+    const container = e.target.closest('#well-plot > div');
     if (!container) return;
     
     e.preventDefault(); // Prevent text selection
