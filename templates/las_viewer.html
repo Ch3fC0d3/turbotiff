@@ -1140,6 +1140,22 @@ function renderPlot() {
     }
 
     const plotDiv = document.getElementById('well-plot');
+    const plotWrapper = document.getElementById('plotWrapper');
+    
+    // State preservation for Overlay Mode panning
+    const prevZoom = window._prevZoomLevel || zoomLevel;
+    const existingTransforms = [];
+    if (plotDiv.children.length > 0) {
+        Array.from(plotDiv.children).forEach(child => {
+            if (!child.classList.contains('custom-gridline')) {
+                existingTransforms.push({
+                    tx: parseFloat(child.dataset.tx) || 0,
+                    ty: parseFloat(child.dataset.ty) || 0
+                });
+            }
+        });
+    }
+
     plotDiv.innerHTML = '';
 
     try {
@@ -1272,6 +1288,32 @@ function renderPlot() {
 
         wviz.multipleLogPlot('well-plot', allTemplates);
         clearError();
+
+        // Re-apply preserved panning states with active anchoring on viewport center
+        const centerY = plotWrapper.scrollTop + plotWrapper.clientHeight / 2;
+        const headerHeight = 40;
+        
+        let childIdx = 0;
+        Array.from(plotDiv.children).forEach(child => {
+            if (child.classList.contains('custom-gridline')) return;
+            const oldT = existingTransforms[childIdx];
+            if (oldT) {
+                let newTy = oldT.ty;
+                // If zoom scale changed, adjust ty so the depth at screen center stays pinned
+                if (prevZoom !== zoomLevel && zoomLevel > 0 && prevZoom > 0) {
+                    const yOldCurve = centerY - oldT.ty - margins.top - headerHeight;
+                    const yNewCurve = yOldCurve * (zoomLevel / prevZoom);
+                    newTy = centerY - yNewCurve - margins.top - headerHeight;
+                }
+                
+                child.dataset.tx = oldT.tx;
+                child.dataset.ty = newTy;
+                child.style.transform = `translate(${oldT.tx}px, ${newTy}px)`;
+            }
+            childIdx++;
+        });
+        
+        window._prevZoomLevel = zoomLevel;
 
         applyOverlayStyles();
         
