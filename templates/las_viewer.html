@@ -162,6 +162,10 @@
             height: 100%;
             z-index: 10;
             background: transparent !important;
+            pointer-events: none; /* Let scrolls pass through to imagePane */
+        }
+        .viewer-pane.overlay-mode #well-plot > div {
+            pointer-events: auto; /* Re-enable pointer events for the curves so they can be dragged */
         }
         #imagePane {
             border-right: 1px solid #e9ecef;
