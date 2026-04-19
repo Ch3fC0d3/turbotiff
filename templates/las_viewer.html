@@ -564,6 +564,12 @@ document.getElementById('imageInput').addEventListener('change', function(e) {
         document.getElementById('imageContent').style.display = 'block';
         document.getElementById('imageControls').style.display = 'flex';
         URL.revokeObjectURL(url);
+        
+        const overlayToggle = document.getElementById('overlayToggle');
+        if (!overlayToggle.checked) {
+            overlayToggle.checked = true;
+            overlayToggle.dispatchEvent(new Event('change'));
+        }
     };
     img.src = url;
 });
@@ -1130,6 +1136,12 @@ function checkLibs() {
                 document.getElementById('imagePlaceholder').style.display = 'none';
                 document.getElementById('imageContent').style.display = 'block';
                 document.getElementById('imageControls').style.display = 'flex';
+
+                const overlayToggle = document.getElementById('overlayToggle');
+                if (!overlayToggle.checked) {
+                    overlayToggle.checked = true;
+                    overlayToggle.dispatchEvent(new Event('change'));
+                }
             };
             img.onerror = () => {
                 console.warn('[LAS Viewer] Image failed to load:', imageRef);
