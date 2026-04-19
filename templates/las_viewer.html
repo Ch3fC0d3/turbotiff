@@ -1059,11 +1059,12 @@ document.getElementById('plotWrapper').addEventListener('wheel', function(e) {
 
 // ── Render ─────────────────────────────────────────────────────────────────
 function drawCustomGridlines(depthSpan, startDepth, stopDepth, pxPerUnit, zoomLevel, topMargin) {
-    const plotWrapper = document.getElementById('well-plot');
-    if (!plotWrapper) return;
+    const pane = document.getElementById('plotWrapper');
+    const wellPlot = document.getElementById('well-plot');
+    if (!pane || !wellPlot) return;
     
     // Remove existing custom gridlines if any
-    const existingGrids = plotWrapper.querySelectorAll('.custom-gridline');
+    const existingGrids = pane.querySelectorAll('.custom-gridline');
     existingGrids.forEach(el => el.remove());
     
     // We only want gridlines inside the data area, which starts below the header
@@ -1080,6 +1081,20 @@ function drawCustomGridlines(depthSpan, startDepth, stopDepth, pxPerUnit, zoomLe
     // Find the first clean multiple of `interval`
     let currentDepth = Math.ceil(minDepth / interval) * interval;
     
+    // Apply container for lines to avoid flex issues and scroll properly
+    const gridContainer = document.createElement('div');
+    gridContainer.className = 'custom-gridline'; // tag it so it gets deleted next render
+    gridContainer.style.position = 'absolute';
+    gridContainer.style.top = '0';
+    gridContainer.style.left = '0';
+    gridContainer.style.right = '0';
+    gridContainer.style.pointerEvents = 'none';
+    gridContainer.style.zIndex = '5';
+    // This allows the container to scroll with the plot
+    
+    // Since well-plot might have a translateY transform from Sync, we should read it, or just put the grid inside well-plot but give well-plot position relative.
+    wellPlot.style.position = 'relative';
+
     while (currentDepth <= maxDepth) {
         // Calculate pixel offset from top of data area
         // depth difference * pixels per unit * zoom level
@@ -1087,15 +1102,13 @@ function drawCustomGridlines(depthSpan, startDepth, stopDepth, pxPerUnit, zoomLe
         const yOffset = topMargin + headerHeight + (depthDiff * pxPerUnit * zoomLevel);
         
         const line = document.createElement('div');
-        line.className = 'custom-gridline';
         line.style.position = 'absolute';
         line.style.left = '0';
         line.style.right = '0';
         line.style.top = yOffset + 'px';
         line.style.height = '1px';
-        line.style.backgroundColor = 'rgba(232, 232, 232, 0.4)'; // faint gray
+        line.style.backgroundColor = 'rgba(150, 150, 150, 0.4)'; // faint gray
         line.style.pointerEvents = 'none';
-        line.style.zIndex = '0'; // Keep it behind the SVGs if possible
         
         // Add a faint depth label
         const label = document.createElement('span');
@@ -1104,14 +1117,17 @@ function drawCustomGridlines(depthSpan, startDepth, stopDepth, pxPerUnit, zoomLe
         label.style.left = '5px'; // Just inside the left edge
         label.style.top = '-14px'; // Just above the line
         label.style.fontSize = '10px';
-        label.style.color = '#adb5bd';
+        label.style.color = '#7a8288';
         label.style.fontWeight = 'bold';
         
         line.appendChild(label);
-        plotWrapper.appendChild(line);
+        gridContainer.appendChild(line);
         
         currentDepth += interval;
     }
+    
+    // Append to well-plot so it naturally shifts when applyVerticalShift transforms well-plot
+    wellPlot.appendChild(gridContainer);
 }
 
 function renderPlot() {
