@@ -427,6 +427,7 @@
 let lasData = null;
 let zoomLevel = 1.0;
 let activeCurves = new Set();
+let reversedCurves = new Set();
 const CURVE_COLORS = ['#1971c2','#2f9e44','#c2255c','#e67700','#7950f2','#0c8599','#862e9c','#d63031','#00b894','#fdcb6e'];
 const MAX_CURVES = 10;
 let isSyncing = false; // Semaphore to prevent scroll loops
@@ -887,8 +888,24 @@ function buildCurveChips() {
         chip.dataset.curve = name;
         chip.style.borderColor = color;
         chip.style.backgroundColor = color + '18';
-        chip.innerHTML = `<span class="curve-chip-dot" style="background:${color}"></span>${name}`;
-        chip.addEventListener('click', () => toggleCurve(name, chip));
+        
+        chip.innerHTML = `
+            <span class="curve-chip-dot" style="background:${color}"></span>
+            <span class="curve-name">${name}</span>
+            <span class="curve-flip" title="Reverse X-Axis" style="margin-left:6px; font-weight:bold; cursor:pointer; opacity:${reversedCurves.has(name) ? '1' : '0.4'}">⇄</span>
+        `;
+        
+        chip.querySelector('.curve-name').addEventListener('click', () => toggleCurve(name, chip));
+        chip.querySelector('.curve-chip-dot').addEventListener('click', () => toggleCurve(name, chip));
+        
+        chip.querySelector('.curve-flip').addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (reversedCurves.has(name)) reversedCurves.delete(name);
+            else reversedCurves.add(name);
+            e.target.style.opacity = reversedCurves.has(name) ? '1' : '0.4';
+            renderPlot(); // Rerender to apply new scale
+        });
+        
         container.appendChild(chip);
     });
 
@@ -1038,6 +1055,19 @@ function renderPlot() {
         const allTemplates = curvesToPlot.map((curveName, idx) => {
             const color = CURVE_COLORS[idx % CURVE_COLORS.length];
             const unit = lasData.CURVE_INFORMATION?.[curveName]?.UNIT || '';
+            
+            let cMin = 'autocalculate';
+            let cMax = 'autocalculate';
+            
+            if (reversedCurves.has(curveName)) {
+                // Calculate actual bounds, ignoring null values
+                const vals = curves[curveName].map(v => parseFloat(v)).filter(v => !isNaN(v) && v !== -999.25);
+                if (vals.length > 0) {
+                    cMin = Math.max(...vals);
+                    cMax = Math.min(...vals);
+                }
+            }
+
             return [{
                 curve_box: {
                     div_id: 'placeholder_overwritten',
@@ -1072,7 +1102,7 @@ function renderPlot() {
                         }],
                         curve_units: [unit],
                         depth_limits: [{ min: 'autocalculate', max: 'autocalculate' }],
-                        curve_limits: [{ curve_name: curveName, min: 'autocalculate', max: 'autocalculate' }],
+                        curve_limits: [{ curve_name: curveName, min: cMin, max: cMax }],
                         data: rowData,
                         depth_curve_name: depthName,
                         data_id: [curveName],
