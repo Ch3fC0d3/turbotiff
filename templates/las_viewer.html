@@ -429,6 +429,7 @@ let zoomLevel = 1.0;
 let activeCurves = new Set();
 let reversedCurves = new Set();
 const CURVE_COLORS = ['#1971c2','#2f9e44','#c2255c','#e67700','#7950f2','#0c8599','#862e9c','#d63031','#00b894','#fdcb6e'];
+let customCurveColors = {};
 const MAX_CURVES = 10;
 let isSyncing = false; // Semaphore to prevent scroll loops
 let lasDepthRange = { top: null, bottom: null };
@@ -882,7 +883,7 @@ function buildCurveChips() {
     container.querySelectorAll('.curve-chip').forEach(el => el.remove());
 
     curvesToShow.forEach((name, idx) => {
-        const color = CURVE_COLORS[idx % CURVE_COLORS.length];
+        const color = customCurveColors[name] || CURVE_COLORS[idx % CURVE_COLORS.length];
         const chip = document.createElement('span');
         chip.className = 'curve-chip active';
         chip.dataset.curve = name;
@@ -1053,7 +1054,7 @@ function renderPlot() {
         const trackWidth = 200;
 
         const allTemplates = curvesToPlot.map((curveName, idx) => {
-            const color = CURVE_COLORS[idx % CURVE_COLORS.length];
+            const color = customCurveColors[curveName] || CURVE_COLORS[idx % CURVE_COLORS.length];
             const unit = lasData.CURVE_INFORMATION?.[curveName]?.UNIT || '';
             
             let cMin = 'autocalculate';
@@ -1151,6 +1152,15 @@ function checkLibs() {
         const sessionLas = sessionStorage.getItem('lasViewerContent');
         const sessionImg = sessionStorage.getItem('lasViewerImage');
         const sessionDepths = sessionStorage.getItem('lasViewerDepths');
+        const sessionColors = sessionStorage.getItem('lasViewerColors');
+        
+        if (sessionColors) {
+            try {
+                customCurveColors = JSON.parse(sessionColors);
+            } catch (e) {
+                console.warn('Failed to parse lasViewerColors from session:', e);
+            }
+        }
 
         if (sessionLas) {
              console.log('[LAS Viewer] Found session LAS data');

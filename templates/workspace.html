@@ -3156,6 +3156,33 @@
                 if (lastDepthConfig) {
                      sessionStorage.setItem('lasViewerDepths', JSON.stringify(lastDepthConfig));
                 }
+
+                // Try to pass current curve colors
+                try {
+                    const config = buildDigitizeConfigFromInputs();
+                    if (config && Array.isArray(config.curves)) {
+                        const colorMap = {
+                            'red': '#dc2626',
+                            'blue': '#2563eb',
+                            'green': '#16a34a',
+                            'black': '#111827',
+                            'cyan': '#06b6d4',
+                            'magenta': '#d946ef',
+                            'yellow': '#eab308',
+                            'orange': '#f97316',
+                            'purple': '#a855f7'
+                        };
+                        const colors = {};
+                        config.curves.forEach(c => {
+                            if (c.name && c.mode && colorMap[c.mode]) {
+                                colors[c.name.toUpperCase()] = colorMap[c.mode];
+                            }
+                        });
+                        sessionStorage.setItem('lasViewerColors', JSON.stringify(colors));
+                    }
+                } catch(e) {
+                    console.warn('Failed to extract colors for LAS Viewer:', e);
+                }
             } catch (e) {
                 console.warn('Failed to save data for LAS Viewer:', e);
             }
