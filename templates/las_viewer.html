@@ -369,7 +369,14 @@
             <button class="zoom-btn" id="btnMatchScale" onclick="matchImageScale()" title="Match LAS zoom to Image scale" style="margin-left:8px; font-size:0.8em; padding:4px 8px;">Match Scale</button>
 
             <div class="toolbar-divider"></div>
-            
+
+            <label style="font-size:0.85em; font-weight:600; color:#e2e8f0; margin-left: 8px;" title="Fine-tune LAS vertical stretch">LAS Scale:
+                <input type="number" id="lasScaleInput" value="100" step="1" style="width: 60px" class="depth-input">
+                <span style="font-size:0.9em; font-weight:normal;">%</span>
+            </label>
+
+            <div class="toolbar-divider"></div>
+
             <label class="sync-toggle" title="Overlay Curves onto Image" style="color:#4ecca3;">
                 <input type="checkbox" id="overlayToggle"> Overlay Curves
             </label>
@@ -596,7 +603,6 @@ overlayToggle.addEventListener('change', (e) => {
         document.getElementById('well-plot').style.paddingLeft = `${paneWidth}px`; // Shift curves to the right
         opacityControl.style.display = 'inline-flex';
         document.getElementById('syncScroll').checked = true;
-        matchImageScale(); // Auto-match scale when overlaying
     } else {
         plotWrapper.classList.remove('overlay-mode');
         imagePane.style.flex = '';
@@ -793,12 +799,8 @@ function syncImageToLas() {
     isSyncing = true;
 
     try {
-        const state = getSyncState();
-        if (!state) return;
-
-        const currentDepth = imgScrollToDepth(imagePane.scrollTop, imagePane.clientHeight, state);
-        const targetScroll = depthToLasScroll(currentDepth, plotWrapper.clientHeight, state);
-        plotWrapper.scrollTop = targetScroll;
+        const offset = parseFloat(document.getElementById('syncOffset').value) || 0;
+        plotWrapper.scrollTop = imagePane.scrollTop + offset;
     } finally {
         setTimeout(() => isSyncing = false, 10);
     }
@@ -813,12 +815,8 @@ function syncLasToImage() {
     isSyncing = true;
 
     try {
-        const state = getSyncState();
-        if (!state) return;
-
-        const currentDepth = lasScrollToDepth(plotWrapper.scrollTop, plotWrapper.clientHeight, state);
-        const targetScroll = depthToImgScroll(currentDepth, imagePane.clientHeight, state);
-        imagePane.scrollTop = targetScroll;
+        const offset = parseFloat(document.getElementById('syncOffset').value) || 0;
+        imagePane.scrollTop = plotWrapper.scrollTop - offset;
     } finally {
         setTimeout(() => isSyncing = false, 10);
     }
@@ -830,6 +828,15 @@ plotWrapper.addEventListener('scroll', syncLasToImage);
 document.getElementById('syncOffset').addEventListener('input', syncImageToLas);
 document.getElementById('imgTopDepth').addEventListener('change', syncImageToLas);
 document.getElementById('imgBotDepth').addEventListener('change', syncImageToLas);
+
+document.getElementById('lasScaleInput').addEventListener('change', function(e) {
+    let val = parseFloat(e.target.value);
+    if (!isNaN(val) && val > 0) {
+        zoomLevel = val / 100.0;
+        document.getElementById('zoomLabel').textContent = Math.round(zoomLevel * 100) + '%';
+        renderPlot();
+    }
+});
 
 function matchImageScale() {
     const state = getSyncState();
@@ -851,17 +858,12 @@ function matchImageScale() {
     
     // LAS base is 5 px/unit. We want 5 * zoom = imgPxPerUnitDisplayed
     const targetZoom = imgPxPerUnitDisplayed / 5;
-    
+
     zoomLevel = targetZoom;
     document.getElementById('zoomLabel').textContent = Math.round(zoomLevel * 100) + '%';
-    
+    document.getElementById('lasScaleInput').value = Math.round(zoomLevel * 100);
+
     renderPlot();
-    
-    // Re-sync after render
-    setTimeout(() => {
-        // Trigger a scroll event to align
-        imagePane.dispatchEvent(new Event('scroll'));
-    }, 100);
 }
 
 // ── Curve chips ────────────────────────────────────────────────────────────
