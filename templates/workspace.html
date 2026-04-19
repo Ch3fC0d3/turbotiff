@@ -11510,7 +11510,10 @@
             if (Array.isArray(lastDigitizedDepth) && lastDigitizedDepth.length > 0 &&
                 lastDigitizedCurves && typeof lastDigitizedCurves === 'object' &&
                 Object.keys(lastDigitizedCurves).length > 0) {
-                finalLasContent = buildLasString(lastDepthConfig, lastNullValue);
+                const rebuilt = buildLasFromDigitized(lastDigitizedDepth, lastDigitizedCurves, lastDepthConfig, lastNullValue);
+                if (rebuilt && typeof rebuilt === 'string' && rebuilt.trim().length) {
+                    finalLasContent = rebuilt;
+                }
             }
             
             // 1. Upload original image to GCS if we have it
@@ -11991,6 +11994,81 @@
             if (Object.keys(curvesObj).length) {
                 lastDigitizedCurves = curvesObj;
             }
+            
+            // --- TURBOTIFF STATE RESTORATION ---
+            try {
+                const lines = lastLasContent.split(/\r?\n/);
+                let stateB64 = '';
+                let inState = false;
+                for (const line of lines) {
+                    if (line.includes('TURBOTIFF_STATE_START')) inState = true;
+                    else if (line.includes('TURBOTIFF_STATE_END')) inState = false;
+                    else if (inState && line.startsWith('# ')) {
+                        stateB64 += line.substring(2).trim();
+                    }
+                }
+                
+                if (stateB64) {
+                    const stateBlob = JSON.parse(decodeURIComponent(escape(atob(stateB64))));
+                    if (stateBlob.config) {
+                        const cfg = stateBlob.config;
+                        if (cfg.depth) {
+                            if (cfg.depth.top_px !== undefined) document.getElementById('topPx').value = cfg.depth.top_px;
+                            if (cfg.depth.bottom_px !== undefined) document.getElementById('bottomPx').value = cfg.depth.bottom_px;
+                            if (cfg.depth.top_depth !== undefined) document.getElementById('topDepth').value = cfg.depth.top_depth;
+                            if (cfg.depth.bottom_depth !== undefined) document.getElementById('bottomDepth').value = cfg.depth.bottom_depth;
+                            if (cfg.depth.unit !== undefined) {
+                                const unitEl = document.getElementById('depthUnit');
+                                if (unitEl) unitEl.value = cfg.depth.unit;
+                            }
+                        }
+                        if (Array.isArray(cfg.curves)) {
+                            document.getElementById('numCurves').value = cfg.curves.length;
+                            window.detectedTracks = cfg.curves.map(c => [c.left_px, c.right_px]);
+                            generateCurveInputs(window.detectedTracks);
+                            
+                            cfg.curves.forEach((c, i) => {
+                                if (c.left_px !== undefined) { const el = document.getElementById(`leftPx${i}`); if(el) el.value = c.left_px; }
+                                if (c.right_px !== undefined) { const el = document.getElementById(`rightPx${i}`); if(el) el.value = c.right_px; }
+                                if (c.scale_min !== undefined) { const el = document.getElementById(`leftVal${i}`); if(el) el.value = c.scale_min; }
+                                if (c.scale_max !== undefined) { const el = document.getElementById(`rightVal${i}`); if(el) el.value = c.scale_max; }
+                                if (c.unit !== undefined) { 
+                                    const el1 = document.getElementById(`lasUnit${i}`); if(el1) el1.value = c.unit;
+                                    const el2 = document.getElementById(`unit${i}`); if(el2) el2.value = c.unit;
+                                }
+                                if (c.las_mnemonic !== undefined) {
+                                    const el1 = document.getElementById(`mnemonic${i}`); if(el1) el1.value = c.las_mnemonic;
+                                }
+                                if (c.type !== undefined) {
+                                    const el2 = document.getElementById(`type${i}`); if(el2) el2.value = c.type;
+                                }
+                                if (c.mode !== undefined) { const el = document.getElementById(`mode${i}`); if(el) el.value = c.mode; }
+                                if (c.name !== undefined) { const el = document.getElementById(`name${i}`); if(el) el.value = c.name; }
+                                if (c.scale_type !== undefined) { const el = document.getElementById(`scaleType${i}`); if(el) el.value = c.scale_type; }
+                            });
+                            
+                            if (typeof populateEditCurveSelectFromConfig === 'function') {
+                                populateEditCurveSelectFromConfig(cfg.curves);
+                            }
+                            
+                            setTimeout(() => {
+                                renderDepthOverlays();
+                                refreshTrackOverlaysFromCurves();
+                                setCalibrationTab('calibPanel-main');
+                            }, 50);
+                        }
+                    }
+                    if (stateBlob.curveTraces) {
+                        window.lastCurveTraces = stateBlob.curveTraces;
+                        setTimeout(() => {
+                            renderCurveTraceOverlays(window.lastCurveTraces);
+                        }, 100);
+                    }
+                }
+            } catch (e) {
+                console.error("Failed to restore Turbotiff internal state from LAS:", e);
+            }
+            // ---------------------------------
         }
 
         function buildLasFromDigitized(depths, curves, depthCfg, nullSentinel) {
@@ -12051,6 +12129,29 @@
 
             const headerCols = ['DEPTH'].concat(curveNames.map((n) => n.toUpperCase()));
             const header = headerCols.map((c) => c.padStart(10, ' ')).join(' ');
+            
+            // --- TURBOTIFF STATE INJECTION ---
+            try {
+                const fullConfig = (typeof buildDigitizeConfigFromInputs === 'function') ? buildDigitizeConfigFromInputs() : null;
+                if (fullConfig) {
+                    const stateBlob = {
+                        config: fullConfig,
+                        curveTraces: window.lastCurveTraces || (typeof lastCurveTraces !== 'undefined' ? lastCurveTraces : null)
+                    };
+                    const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(stateBlob))));
+                    const chunks = b64.match(/.{1,80}/g) || [];
+                    if (chunks.length > 0) {
+                        lines.push('~O' + eol);
+                        lines.push('# TURBOTIFF_STATE_START' + eol);
+                        chunks.forEach(c => lines.push('# ' + c + eol));
+                        lines.push('# TURBOTIFF_STATE_END' + eol);
+                    }
+                }
+            } catch (e) {
+                console.warn("Failed to inject turbotiff state:", e);
+            }
+            // ---------------------------------
+
             lines.push('~A ' + header + eol);
 
             for (let i = 0; i < depths.length; i++) {
