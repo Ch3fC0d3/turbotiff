@@ -196,6 +196,16 @@ APP_BUILD_TIME = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
 app = Flask(__name__)
 
 from directional_app import directional_bp
+
+@directional_bp.before_request
+def require_directional_access():
+    user = _current_user(require_access=True)
+    if not user:
+        return redirect(url_for('login', next=request.url))
+    if not auth_billing.can_access_workspace(user):
+        flash('Full-service users cannot access the self-serve tools. Upgrade to a self-serve plan to use this feature.', 'warning')
+        return redirect(url_for('dashboard'))
+
 app.register_blueprint(directional_bp, url_prefix='/directional')
 
 # Basic security config
@@ -8863,6 +8873,35 @@ def get_log_image(log_id):
         print(f"[get_log_image] GCS fetch failed for {log_id}: {exc}")
         return "Image fetch failed", 500
 
+
+@app.route('/api/logs/<log_id>/rename', methods=['POST'])
+@login_required()
+def rename_log(log_id):
+    """Rename a saved log."""
+    user = _current_user(require_access=True)
+    if not user:
+        return jsonify({'success': False, 'error': 'Not authorized'}), 401
+
+    data = request.json
+    new_name = (data.get('name') or '').strip()
+    if not new_name:
+        return jsonify({'success': False, 'error': 'Name cannot be empty'}), 400
+
+    log_data = auth_billing.get_user_log(config.AUTH_DB_PATH, log_id, user['id'])
+    if not log_data:
+        return jsonify({'success': False, 'error': 'Log not found'}), 404
+
+    try:
+        with auth_billing.get_db(config.AUTH_DB_PATH) as conn:
+            conn.execute(
+                "UPDATE user_logs SET name = ?, updated_at = ? WHERE id = ? AND user_id = ?",
+                (new_name, datetime.now(timezone.utc).isoformat(), log_id, user['id'])
+            )
+            conn.commit()
+        return jsonify({'success': True, 'name': new_name})
+    except Exception as exc:
+        print(f"[RENAME LOG] Failed for {log_id}: {exc}")
+        return jsonify({'success': False, 'error': str(exc)}), 500
 
 @app.route('/api/logs/<log_id>', methods=['DELETE'])
 @login_required()

@@ -30,6 +30,7 @@
         </div>
         
         <div class="flex items-center gap-4 ml-auto">
+            {% if user.subscription_status != 'managed_only' %}
             <a href="/directional" class="text-sm font-medium transition-colors ml-2 px-3 py-1.5 rounded-full" style="background: rgba(16, 185, 129, 0.2); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.4);">
                 🎯 Directional Tool
             </a>
@@ -37,14 +38,21 @@
                 Workspace
             </a>
             <div class="h-6 w-px bg-slate-700 mx-2"></div>
+            {% endif %}
+            <a href="/managed-conversion" class="text-sm font-medium text-cyan-300 hover:text-cyan-200 transition-colors ml-2 px-3 py-1.5 rounded-full" style="background: rgba(6, 182, 212, 0.1); border: 1px solid rgba(6, 182, 212, 0.3);">
+                ✨ Managed Conversion
+            </a>
+            <div class="h-6 w-px bg-slate-700 mx-2"></div>
             {% if user.is_admin %}
             <a href="/admin" class="text-sm font-medium text-amber-500 hover:text-amber-400 transition-colors">Admin</a>
             <div class="h-6 w-px bg-slate-700 mx-2"></div>
             {% endif %}
+            {% if user.subscription_status != 'managed_only' %}
             <a href="/workspace" class="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600 transition-colors">
                 <i data-lucide="plus" class="h-4 w-4"></i> New Log
             </a>
             <div class="h-6 w-px bg-slate-700 mx-2"></div>
+            {% endif %}
             <a href="/account" class="text-sm font-medium text-slate-300 hover:text-white transition-colors">Manage Billing</a>
             <a href="/logout" class="text-sm font-medium text-slate-300 hover:text-white transition-colors ml-2">Logout</a>
         </div>
@@ -118,9 +126,11 @@
                         <button onclick="viewLog('{{ log.id }}')" class="flex-1 inline-flex justify-center items-center gap-2 rounded-md bg-emerald-900/10 px-3 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-900/16 ring-1 ring-inset ring-emerald-700/25 transition-colors" title="View LAS">
                             <i data-lucide="line-chart" class="h-4 w-4"></i> View LAS
                         </button>
+                        {% if user.subscription_status != 'managed_only' %}
                         <a href="/workspace?log_id={{ log.id }}" class="inline-flex items-center justify-center rounded-md bg-white/75 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-white ring-1 ring-inset ring-stone-400/55 transition-colors" title="Edit in Workspace">
                             <i data-lucide="edit-3" class="h-4 w-4"></i>
                         </a>
+                        {% endif %}
                         {% if log.original_image_path %}
                         <button onclick="openImage('{{ log.original_image_path }}')" class="inline-flex items-center justify-center rounded-md bg-white/75 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-white ring-1 ring-inset ring-stone-400/55 transition-colors" title="View Original Image">
                             <i data-lucide="image" class="h-4 w-4"></i>
@@ -129,6 +139,9 @@
                         <a href="/api/logs/{{ log.id }}/download" class="inline-flex items-center justify-center rounded-md bg-white/75 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-white ring-1 ring-inset ring-stone-400/55 transition-colors" title="Download LAS">
                             <i data-lucide="download" class="h-4 w-4"></i>
                         </a>
+                        <button type="button" data-action="rename-log" data-log-id="{{ log.id }}" data-log-name="{{ log.name }}" class="inline-flex items-center justify-center rounded-md bg-white/75 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-white ring-1 ring-inset ring-stone-400/55 transition-colors" title="Rename Log">
+                            <i data-lucide="edit-2" class="h-4 w-4"></i>
+                        </button>
                         <button type="button" data-action="delete-log" data-log-id="{{ log.id }}" data-log-name="{{ log.name }}" class="inline-flex items-center justify-center rounded-md bg-white/75 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 hover:text-red-800 ring-1 ring-inset ring-stone-400/55 hover:ring-red-300 transition-colors" title="Delete LAS">
                             <i data-lucide="trash-2" class="h-4 w-4"></i>
                         </button>
@@ -143,12 +156,23 @@
                     <i data-lucide="folder-open" class="h-6 w-6 text-slate-400"></i>
                 </div>
                 <h3 class="mt-4 text-sm font-semibold text-white">No logs saved</h3>
-                <p class="mt-1 text-sm text-slate-400">Get started by digitizing a new well log image.</p>
+                <p class="mt-1 text-sm text-slate-400">
+                    {% if user.subscription_status == 'managed_only' %}
+                        Submit a log for full-service conversion.
+                    {% else %}
+                        Get started by digitizing a new well log image.
+                    {% endif %}
+                </p>
                 <div class="mt-6">
-                    <a href="/workspace" class="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600">
-                        <i data-lucide="plus" class="h-4 w-4"></i>
-                        Digitize New Log
+                    {% if user.subscription_status == 'managed_only' %}
+                    <a href="/managed-conversion" class="inline-flex items-center gap-2 rounded-md bg-cyan-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-cyan-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-600">
+                        ✨ Request Conversion
                     </a>
+                    {% else %}
+                    <a href="/workspace" class="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600">
+                        <i data-lucide="plus" class="h-4 w-4"></i> Digitize New Log
+                    </a>
+                    {% endif %}
                 </div>
             </div>
             {% endif %}
@@ -166,11 +190,43 @@
         // Delegated click handler — works even when the click lands on the
         // inner <i> icon, and avoids inline-JS quoting issues with log names.
         document.addEventListener('click', (event) => {
-            const btn = event.target.closest('[data-action="delete-log"]');
-            if (!btn) return;
-            event.preventDefault();
-            deleteLog(btn.dataset.logId, btn.dataset.logName);
+            const delBtn = event.target.closest('[data-action="delete-log"]');
+            if (delBtn) {
+                event.preventDefault();
+                deleteLog(delBtn.dataset.logId, delBtn.dataset.logName);
+                return;
+            }
+
+            const renBtn = event.target.closest('[data-action="rename-log"]');
+            if (renBtn) {
+                event.preventDefault();
+                renameLog(renBtn.dataset.logId, renBtn.dataset.logName);
+                return;
+            }
         });
+
+        async function renameLog(logId, currentName) {
+            const newName = prompt(`Enter a new name for "${currentName}":`, currentName);
+            if (!newName || newName.trim() === '' || newName.trim() === currentName) {
+                return;
+            }
+            try {
+                const res = await fetch(`/api/logs/${encodeURIComponent(logId)}/rename`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: newName.trim() })
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok || !data.success) {
+                    alert(`Failed to rename: ${(data && data.error) || res.statusText || 'unknown error'}`);
+                    return;
+                }
+                window.location.reload();
+            } catch (err) {
+                console.error('Rename log error:', err);
+                alert(`Failed to rename log: ${err.message || err}`);
+            }
+        }
 
         async function deleteLog(logId, logName) {
             const label = logName || 'this log';
