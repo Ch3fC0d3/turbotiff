@@ -318,6 +318,11 @@
         </div>
         <div style="display: flex; gap: 15px; align-items: center;">
             <a href="/directional" class="back-btn" style="background: rgba(16, 185, 129, 0.2); color: #10b981; border-color: rgba(16, 185, 129, 0.4);" onclick="openDirectionalToolWithData(event)">🎯 Directional MD-TVD Converter</a>
+            {% if log_data and log_data.id %}
+            <a href="/workspace?log_id={{ log_data.id }}" class="back-btn" style="background: rgba(59, 130, 246, 0.2); color: #3b82f6; border-color: rgba(59, 130, 246, 0.4);">✏️ Edit in Workspace</a>
+            {% else %}
+            <a href="/workspace" class="back-btn" style="background: rgba(59, 130, 246, 0.2); color: #3b82f6; border-color: rgba(59, 130, 246, 0.4);">✏️ Edit in Workspace</a>
+            {% endif %}
             <a href="/dashboard" class="back-btn">← Back to Dashboard</a>
         </div>
     </div>

@@ -8901,17 +8901,23 @@ def workspace():
     user = _current_user(require_access=True)
     if not user:
         return redirect(url_for('login'))
-        
+
     if not auth_billing.can_access_workspace(user):
         flash('Full-service users cannot access the self-serve workspace. Upgrade to a self-serve plan to use this feature.', 'warning')
         return redirect(url_for('dashboard'))
+
+    log_id = request.args.get('log_id')
+    log_data = None
+    if log_id:
+        log_data = auth_billing.get_user_log(config.AUTH_DB_PATH, log_id, user['id'])
 
     response = make_response(render_template('workspace.html',
                            user=user,
                            app_version=APP_VERSION,
                            build_time=APP_BUILD_TIME,
                            vision_available=VISION_API_AVAILABLE,
-                           impersonating=bool(session.get('impersonate_user_id'))))
+                           impersonating=bool(session.get('impersonate_user_id')),
+                           log_data=log_data))
     response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
     response.headers['Pragma'] = 'no-cache'
     response.headers['Expires'] = '0'

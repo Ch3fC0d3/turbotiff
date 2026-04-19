@@ -12351,5 +12351,86 @@
             panel.innerHTML = parts.join('');
         }
     </script>
+
+{% if log_data %}
+<script>
+document.addEventListener('DOMContentLoaded', async () => {
+    try {
+        const logData = {{ log_data | tojson | safe }};
+        const imgPath = {{ ('/api/logs/' ~ log_data.id ~ '/image') | tojson | safe }};
+        
+        showStatus('Loading saved log...', 'info');
+        
+        // Fetch image and convert to data URL for canvas compatibility
+        const response = await fetch(imgPath);
+        if (!response.ok) throw new Error('Failed to fetch image');
+        const blob = await response.blob();
+        
+        const dataUrl = await new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.readAsDataURL(blob);
+        });
+        
+        uploadedImage = dataUrl;
+        uploadedImagePath = imgPath;
+        lastLasContent = logData.las_content || null;
+        lastLasFilename = (logData.name || 'digitized_log').replace(/ /g, '_') + '.las';
+        
+        const imgEl = document.getElementById('imagePreview');
+        imgEl.onload = () => {
+            imageWidth = imgEl.naturalWidth || imgEl.width;
+            imageHeight = imgEl.naturalHeight || imgEl.height;
+            
+            const dimsEl = document.getElementById('imageDims');
+            if (dimsEl) {
+                dimsEl.textContent = `${imageWidth} × ${imageHeight} pixels`;
+            }
+            
+            const previewStep = document.getElementById('previewStep');
+            const configStep = document.getElementById('configStep');
+            const workspace = document.getElementById('workspace');
+            const uploadStep = document.getElementById('uploadStep');
+            
+            if (previewStep) previewStep.classList.remove('hidden');
+            if (configStep) configStep.classList.remove('hidden');
+            if (workspace) workspace.classList.remove('hidden');
+            if (uploadStep) uploadStep.classList.add('hidden');
+            
+            setCalibrationTab('calibPanel-main');
+            
+            const topPxInput = document.getElementById('topPx');
+            const bottomPxInput = document.getElementById('bottomPx');
+            const topDepthInput = document.getElementById('topDepth');
+            const bottomDepthInput = document.getElementById('bottomDepth');
+            
+            if (topPxInput) topPxInput.value = 0;
+            if (bottomPxInput) bottomPxInput.value = imageHeight - 1;
+            if (topDepthInput) topDepthInput.value = logData.depth_start || 1000;
+            if (bottomDepthInput) bottomDepthInput.value = logData.depth_end || 2000;
+            
+            if (lastLasContent) {
+                ensureDigitizedFromLas();
+                lastDepthConfig = getDepthConfigFromInputs();
+                renderDigitizationSummary(
+                    lastDepthConfig,
+                    lastDigitizedDepth,
+                    lastDigitizedCurves,
+                    lastNullValue
+                );
+            }
+            
+            showStatus('Log loaded successfully.', 'success');
+        };
+        imgEl.src = uploadedImage;
+        
+    } catch(e) {
+        console.error("Error preloading log data", e);
+        showStatus('Failed to load saved log data.', 'error');
+    }
+});
+</script>
+{% endif %}
+
 </body>
 </html>
