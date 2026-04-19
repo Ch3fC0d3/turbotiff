@@ -1345,6 +1345,9 @@
             <p style="font-size: 1.15em; letter-spacing: 0.3px; opacity: 0.92;">Convert legacy well log images to standard LAS files using Computer Vision</p>
             <div class="header-actions">
                 <a href="/directional" class="directional-btn" style="background: rgba(16, 185, 129, 0.2); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.4); border-radius: 20px; padding: 6px 14px; text-decoration: none; font-size: 0.9em; font-weight: 600; display: inline-flex; align-items: center; transition: all 0.2s ease;" onclick="openDirectionalToolWithData(event)">🎯 Directional Tool</a>
+                {% if log_data %}
+                <a href="/las_viewer?log_id={{ log_data.id }}" class="dashboard-btn" style="background: rgba(234, 179, 8, 0.2); color: #eab308; border-color: rgba(234, 179, 8, 0.4);">📈 Return to Viewer</a>
+                {% endif %}
                 <a href="/dashboard" class="dashboard-btn">🏠 Dashboard</a>
                 <a href="/las_viewer" class="las-viewer-btn" onclick="openLasViewerWithData(event)">📈 LAS Viewer</a>
                 <a href="/account" class="account-btn">Manage Billing</a>
@@ -12520,11 +12523,19 @@ document.addEventListener('DOMContentLoaded', async () => {
                     lastNullValue
                 );
             }
+
+            showStatus('Log loaded successfully. Ready to edit.', 'success');
             
-            showStatus('Log loaded successfully.', 'success');
+            // Auto scroll and expand step 5 for immediate editing
+            setTimeout(() => {
+                const editsTab = document.getElementById('manualEditStep');
+                if (editsTab) {
+                    editsTab.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+            }, 500);
         };
         imgEl.src = uploadedImage;
-        
+
     } catch(e) {
         console.error("Error preloading log data", e);
         showStatus('Failed to load saved log data.', 'error');
