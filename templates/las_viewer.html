@@ -866,6 +866,9 @@ function matchImageScale() {
     document.getElementById('lasScaleInput').value = Math.round(zoomLevel * 100);
 
     renderPlot();
+    
+    // Once plot is rendered, automatically align it vertically!
+    setTimeout(alignLasToImage, 100);
 }
 
 // ── Curve chips ────────────────────────────────────────────────────────────
@@ -931,8 +934,39 @@ document.getElementById('imgWidthSlider').addEventListener('input', function(e) 
     if (img) {
         img.style.width = val + '%';
         img.style.maxWidth = 'none'; // Override default max-width
+        alignLasToImage(); // Re-align because scaling changes pixel offsets
     }
 });
+
+function alignLasToImage() {
+    const state = getSyncState();
+    if (!state || lasDepthRange.top === null) return;
+    
+    const depthRange = state.imgBotD - state.imgTopD;
+    const pxRange = state.imgBotPx - state.imgTopPx;
+    if (Math.abs(depthRange) < 0.1) return;
+    
+    const pxPerDepthOrig = pxRange / depthRange;
+    const startDepthPxOrig = state.imgTopPx + (lasDepthRange.top - state.imgTopD) * pxPerDepthOrig;
+    const startDepthPxDisplayed = startDepthPxOrig * state.scale;
+    
+    const headerEstimate = 40; // Approx height of wellioviz track headers
+    const plotDiv = document.getElementById('well-plot');
+    
+    let padTop = 0;
+    let newShift = 0;
+    
+    if (startDepthPxDisplayed > headerEstimate) {
+        padTop = startDepthPxDisplayed - headerEstimate;
+    } else {
+        newShift = headerEstimate - startDepthPxDisplayed;
+    }
+    
+    plotDiv.style.paddingTop = padTop + 'px';
+    document.getElementById('syncOffset').value = Math.round(newShift);
+    
+    syncImageToLas(); // Force scroll update
+}
 
 // ── Zoom ───────────────────────────────────────────────────────────────────
 function changeZoom(delta) {
