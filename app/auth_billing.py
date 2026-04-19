@@ -100,6 +100,12 @@ def init_db(db_path: str) -> None:
         except sqlite3.OperationalError:
             pass
 
+        # Safe migration if cropped_image_path is missing
+        try:
+            conn.execute("ALTER TABLE user_logs ADD COLUMN cropped_image_path TEXT")
+        except sqlite3.OperationalError:
+            pass
+
         # Safe migration if updated_at is missing
         try:
             conn.execute("ALTER TABLE user_logs ADD COLUMN updated_at TEXT")

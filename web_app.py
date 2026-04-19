@@ -8757,13 +8757,14 @@ def save_log():
         depth_unit = data.get('depth_unit', 'FT')
         las_content = data.get('las_content', '')
         original_image_path = data.get('original_image_path', None)
+        cropped_image_path = data.get('cropped_image_path', None)
 
         with auth_billing.get_db(config.AUTH_DB_PATH) as conn:
             conn.execute("""
-                INSERT INTO user_logs (id, user_id, name, curve_count, depth_start, depth_end, depth_unit, las_content, original_image_path, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO user_logs (id, user_id, name, curve_count, depth_start, depth_end, depth_unit, las_content, original_image_path, cropped_image_path, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
-                log_id, user['id'], name, curve_count, depth_start, depth_end, depth_unit, las_content, original_image_path,
+                log_id, user['id'], name, curve_count, depth_start, depth_end, depth_unit, las_content, original_image_path, cropped_image_path,
                 datetime.now(timezone.utc).isoformat()
             ))
             conn.commit()
@@ -8797,8 +8798,8 @@ def download_log(log_id):
 @app.route('/api/logs/<log_id>/image', methods=['GET'])
 @login_required()
 def get_log_image(log_id):
-    """Serve the original image for a saved log, regardless of how the
-    original_image_path was stored: inline data URL, /api/images/<file>
+    """Serve the cropped image (if available) or original image for a saved log, regardless of how the
+    image path was stored: inline data URL, /api/images/<file>
     server path, an absolute http(s) URL, or a GCS object key.
     """
     user = _current_user(require_access=True)
@@ -8809,7 +8810,8 @@ def get_log_image(log_id):
     if not log_data:
         return "Log not found", 404
 
-    path = (log_data.get('original_image_path') or '').strip()
+    # Prefer cropped_image_path if present, else original_image_path
+    path = (log_data.get('cropped_image_path') or log_data.get('original_image_path') or '').strip()
     if not path:
         return "No image stored for this log", 404
 

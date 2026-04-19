@@ -11550,6 +11550,12 @@
 
             // 2. Save log to account DB
             try {
+                // If uploadedImage is a data URL and original is not, it means we're working on a cropped/modified image
+                let croppedImagePath = uploadedImage;
+                if (uploadedImage === uploadedImagePath) {
+                    croppedImagePath = null; // No separate cropped image
+                }
+                
                 const response = await fetch('/api/logs', {
                     method: 'POST',
                     headers: {
@@ -11562,7 +11568,8 @@
                         depth_end: bottomDepth,
                         depth_unit: depthUnit,
                         las_content: finalLasContent,
-                        original_image_path: gcsKey || uploadedImagePath
+                        original_image_path: gcsKey || uploadedImagePath,
+                        cropped_image_path: croppedImagePath
                     })
                 });
 
@@ -11648,6 +11655,11 @@
                 }
             }
             
+            let croppedImagePath = uploadedImage;
+            if (uploadedImage === uploadedImagePath) {
+                croppedImagePath = null;
+            }
+
             fetch('/api/logs', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -11658,7 +11670,8 @@
                     depth_end: bottomDepth,
                     depth_unit: depthUnit,
                     las_content: finalLasContent,
-                    original_image_path: uploadedImagePath
+                    original_image_path: uploadedImagePath,
+                    cropped_image_path: croppedImagePath
                 })
             })
             .then(r => r.json())
