@@ -834,9 +834,11 @@ document.getElementById('imgBotDepth').addEventListener('change', syncImageToLas
 document.getElementById('lasScaleInput').addEventListener('change', function(e) {
     let val = parseFloat(e.target.value);
     if (!isNaN(val) && val > 0) {
-        zoomLevel = val / 100.0;
-        document.getElementById('zoomLabel').textContent = Math.round(zoomLevel * 100) + '%';
-        renderPlot();
+        withCenterDepthLock(() => {
+            zoomLevel = val / 100.0;
+            document.getElementById('zoomLabel').textContent = Math.round(zoomLevel * 100) + '%';
+            renderPlot();
+        });
     }
 });
 
@@ -968,33 +970,24 @@ function alignLasToImage() {
     syncImageToLas(); // Force scroll update
 }
 
-// ── Zoom ───────────────────────────────────────────────────────────────────
-function changeZoom(delta) {
-    if (!lasData) return;
-    
-    // 1. Calculate current center depth before zoom
+// ── Center Depth Lock ────────────────────────────────────────────────────────
+function withCenterDepthLock(fn) {
+    if (!lasData) {
+        fn();
+        return;
+    }
     const wrapper = document.getElementById('plotWrapper');
     const scrollH = wrapper.scrollHeight - wrapper.clientHeight;
     let centerDepth = null;
-    
+
     if (scrollH > 0 && lasDepthRange.top !== null && lasDepthRange.bottom !== null) {
         const pct = wrapper.scrollTop / scrollH;
         centerDepth = lasDepthRange.top + (lasDepthRange.bottom - lasDepthRange.top) * pct;
     }
 
-    // 2. Apply Zoom
-    zoomLevel = Math.max(0.2, zoomLevel + delta);
-    document.getElementById('zoomLabel').textContent = Math.round(zoomLevel * 100) + '%';
-    document.getElementById('zoomOut').disabled = zoomLevel <= 0.2;
-    
-    // 3. Render
-    renderPlot();
+    fn();
 
-    // 4. Restore scroll position to keep centerDepth in view
     if (centerDepth !== null) {
-        // Recalculate new scroll height (approximated, or wait for render)
-        // Since renderPlot is synchronous in DOM update but layout might take a tick,
-        // we'll try immediate + timeout
         const restoreScroll = () => {
             const newScrollH = wrapper.scrollHeight - wrapper.clientHeight;
             if (newScrollH > 0) {
@@ -1005,6 +998,16 @@ function changeZoom(delta) {
         restoreScroll();
         setTimeout(restoreScroll, 10); // Ensure it sticks after layout reflow
     }
+}
+
+// ── Zoom ───────────────────────────────────────────────────────────────────
+function changeZoom(delta) {
+    withCenterDepthLock(() => {
+        zoomLevel = Math.max(0.2, zoomLevel + delta);
+        document.getElementById('zoomLabel').textContent = Math.round(zoomLevel * 100) + '%';
+        document.getElementById('zoomOut').disabled = zoomLevel <= 0.2;
+        renderPlot();
+    });
 }
 
 document.getElementById('plotWrapper').addEventListener('wheel', function(e) {
@@ -1256,16 +1259,28 @@ function checkLibs() {
         const imageRef = sessionImg || window.PRELOADED_IMAGE_CONTENT;
         if (imageRef) {
             console.log('[LAS Viewer] Loading image from', sessionImg ? 'session' : 'preloaded');
-            const img = document.getElementById('uploadedImage');
-            img.onload = () => {
+            if (sessionImg) {
+                const imgEl = document.getElementById('uploadedImage');
+                imgEl.onload = () => {
+                    alignLasToImage();
+                };
+                imgEl.src = sessionImg;
                 document.getElementById('imagePlaceholder').style.display = 'none';
                 document.getElementById('imageContent').style.display = 'block';
                 document.getElementById('imageControls').style.display = 'flex';
-            };
-            img.onerror = () => {
-                console.warn('[LAS Viewer] Image failed to load:', imageRef);
-            };
-            img.src = imageRef;
+            } else {
+                const img = document.getElementById('uploadedImage');
+                img.onload = () => {
+                    alignLasToImage();
+                    document.getElementById('imagePlaceholder').style.display = 'none';
+                    document.getElementById('imageContent').style.display = 'block';
+                    document.getElementById('imageControls').style.display = 'flex';
+                };
+                img.onerror = () => {
+                    console.warn('[LAS Viewer] Image failed to load:', imageRef);
+                };
+                img.src = imageRef;
+            }
         }
 
         if (sessionDepths) {
