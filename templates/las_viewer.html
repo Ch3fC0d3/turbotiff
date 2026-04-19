@@ -585,8 +585,8 @@ overlayToggle.addEventListener('change', (e) => {
         plotWrapper.classList.add('overlay-mode');
         opacityControl.style.display = 'inline-flex';
         document.getElementById('syncScroll').checked = true;
-        syncImageToLas();
         document.getElementById('well-plot').style.cursor = 'grab';
+        matchImageScale(); // Auto-match scale when overlaying
     } else {
         plotWrapper.classList.remove('overlay-mode');
         opacityControl.style.display = 'none';
