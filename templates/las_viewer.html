@@ -1058,6 +1058,62 @@ document.getElementById('plotWrapper').addEventListener('wheel', function(e) {
 }, { passive: false });
 
 // ── Render ─────────────────────────────────────────────────────────────────
+function drawCustomGridlines(depthSpan, startDepth, stopDepth, pxPerUnit, zoomLevel, topMargin) {
+    const plotWrapper = document.getElementById('well-plot');
+    if (!plotWrapper) return;
+    
+    // Remove existing custom gridlines if any
+    const existingGrids = plotWrapper.querySelectorAll('.custom-gridline');
+    existingGrids.forEach(el => el.remove());
+    
+    // We only want gridlines inside the data area, which starts below the header
+    const headerHeight = 40; // approx
+    
+    // Determine a reasonable interval based on zoom
+    let interval = 100;
+    if (zoomLevel > 1.5) interval = 10;
+    else if (zoomLevel > 0.5) interval = 50;
+    
+    const minDepth = Math.min(startDepth, stopDepth);
+    const maxDepth = Math.max(startDepth, stopDepth);
+    
+    // Find the first clean multiple of `interval`
+    let currentDepth = Math.ceil(minDepth / interval) * interval;
+    
+    while (currentDepth <= maxDepth) {
+        // Calculate pixel offset from top of data area
+        // depth difference * pixels per unit * zoom level
+        const depthDiff = Math.abs(currentDepth - startDepth);
+        const yOffset = topMargin + headerHeight + (depthDiff * pxPerUnit * zoomLevel);
+        
+        const line = document.createElement('div');
+        line.className = 'custom-gridline';
+        line.style.position = 'absolute';
+        line.style.left = '0';
+        line.style.right = '0';
+        line.style.top = yOffset + 'px';
+        line.style.height = '1px';
+        line.style.backgroundColor = 'rgba(232, 232, 232, 0.4)'; // faint gray
+        line.style.pointerEvents = 'none';
+        line.style.zIndex = '0'; // Keep it behind the SVGs if possible
+        
+        // Add a faint depth label
+        const label = document.createElement('span');
+        label.textContent = currentDepth;
+        label.style.position = 'absolute';
+        label.style.left = '5px'; // Just inside the left edge
+        label.style.top = '-14px'; // Just above the line
+        label.style.fontSize = '10px';
+        label.style.color = '#adb5bd';
+        label.style.fontWeight = 'bold';
+        
+        line.appendChild(label);
+        plotWrapper.appendChild(line);
+        
+        currentDepth += interval;
+    }
+}
+
 function renderPlot() {
     if (!lasData) return;
 
@@ -1200,8 +1256,11 @@ function renderPlot() {
 
         wviz.multipleLogPlot('well-plot', allTemplates);
         clearError();
-        
+
         applyOverlayStyles();
+        
+        // --- Custom Full-Width Gridlines ---
+        drawCustomGridlines(depthSpan, startDepth, stopDepth, pxPerUnit, zoomLevel, margins.top);
 
         // Auto-match scale ONCE if calibration is fresh
         if (imageCalibration && !window._hasAutoMatchedScale) {
