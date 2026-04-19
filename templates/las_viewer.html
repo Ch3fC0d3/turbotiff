@@ -732,9 +732,12 @@ function getSyncState() {
     const naturalW = img.naturalWidth || 1;
     const scale = currentW / naturalW;
 
-    // Manual Offset (user correction)
-    const offset = parseFloat(document.getElementById('syncOffset').value) || 0;
-
+    // Auto-calculated physical offset from plotDiv dataset, plus user manual shift
+    const plotDiv = document.getElementById('well-plot');
+    const autoOffset = plotDiv ? (parseFloat(plotDiv.dataset.autoOffset) || 0) : 0;
+    const userOffset = parseFloat(document.getElementById('syncOffset').value) || 0;
+    const offset = autoOffset + userOffset;
+    
     return {
         imgTopD, imgBotD, imgTopPx, imgBotPx,
         lasTop, lasBot,
@@ -800,12 +803,32 @@ function depthToLasScroll(depth, containerH, state) {
 
 // ── Sync Scrolling ───────────────────────────────────────────────────────────
 function applyVerticalShift() {
-    const shift = parseFloat(document.getElementById('syncOffset').value) || 0;
+    const userOffset = parseFloat(document.getElementById('syncOffset').value) || 0;
     const plotDiv = document.getElementById('well-plot');
-    if (plotDiv) {
-        // Use margin-top to physically shift the plot up or down relative to the image
-        plotDiv.style.marginTop = shift + 'px';
+    const imageContent = document.getElementById('imageContent');
+    
+    if (!plotDiv || !imageContent) return;
+
+    const autoOffset = parseFloat(plotDiv.dataset.autoOffset) || 0;
+    
+    // Total physical shift
+    const totalOffset = autoOffset + userOffset;
+    
+    // Using transform translateY is bulletproof against scroll clipping and flexbox issues.
+    // Positive totalOffset moves the plot down relative to the image.
+    // Negative totalOffset moves the image down relative to the plot.
+    if (totalOffset >= 0) {
+        plotDiv.style.transform = `translateY(${totalOffset}px)`;
+        imageContent.style.transform = `translateY(0px)`;
+    } else {
+        plotDiv.style.transform = `translateY(0px)`;
+        imageContent.style.transform = `translateY(${Math.abs(totalOffset)}px)`;
     }
+    
+    // Clear out any old margin/padding logic to avoid conflicts
+    plotDiv.style.marginTop = '0px';
+    imageContent.style.marginTop = '0px';
+    plotDiv.style.paddingTop = '0px';
 }
 
 function syncImageToLas() {
@@ -972,18 +995,17 @@ function alignLasToImage() {
     const headerEstimate = 40; // Approx height of wellioviz track headers
     const plotDiv = document.getElementById('well-plot');
     
-    let padTop = 0;
-    let newShift = 0;
+    // Auto-calculated margin needed to perfectly align the first curve data point
+    // with the physical pixel on the image.
+    // E.g. if startDepthPxDisplayed is 200, we need to push the plot down by 200 - 40 = +160px.
+    // If startDepthPxDisplayed is 10, we need to push the plot down by 10 - 40 = -30px.
+    const autoOffset = startDepthPxDisplayed - headerEstimate;
     
-    if (startDepthPxDisplayed > headerEstimate) {
-        padTop = startDepthPxDisplayed - headerEstimate;
-    } else {
-        newShift = headerEstimate - startDepthPxDisplayed;
-    }
+    plotDiv.dataset.autoOffset = autoOffset;
     
-    plotDiv.style.paddingTop = padTop + 'px';
-    document.getElementById('syncOffset').value = Math.round(newShift);
+    // Do NOT overwrite syncOffset.value here, so user's manual shift is preserved on zoom.
     
+    applyVerticalShift();
     syncImageToLas(); // Force scroll update
 }
 
