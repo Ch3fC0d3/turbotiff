@@ -391,7 +391,7 @@
 
             <div class="toolbar-divider"></div>
             <span style="font-size:0.85em; font-weight:600; color:#e2e8f0;">Shift:</span>
-            <input type="number" id="syncOffset" value="0" step="10" style="width:50px" class="depth-input" title="Vertical offset correction (px)">
+            <input type="number" id="syncOffset" value="0" step="10" style="width:100px" class="depth-input" title="Vertical offset correction (px)">
         </div>
 
         <div class="curve-toggles" id="curveToggles" style="display:none;">
@@ -798,43 +798,55 @@ function depthToLasScroll(depth, containerH, state) {
     return y_plot;
 }
 
+// ── Sync Scrolling ───────────────────────────────────────────────────────────
+function applyVerticalShift() {
+    const shift = parseFloat(document.getElementById('syncOffset').value) || 0;
+    const plotDiv = document.getElementById('well-plot');
+    if (plotDiv) {
+        // Use margin-top to physically shift the plot up or down relative to the image
+        plotDiv.style.marginTop = shift + 'px';
+    }
+}
 
-// Sync from Image -> LAS
 function syncImageToLas() {
+    const imagePane = document.getElementById('imagePane');
+    const plotWrapper = document.getElementById('plotWrapper');
+    if (!imagePane || !plotWrapper) return;
     if (!document.getElementById('syncScroll').checked) return;
     if (isSyncing) return;
     isSyncing = true;
 
     try {
-        const offset = parseFloat(document.getElementById('syncOffset').value) || 0;
-        plotWrapper.scrollTop = imagePane.scrollTop + offset;
+        plotWrapper.scrollTop = imagePane.scrollTop;
     } finally {
         setTimeout(() => isSyncing = false, 10);
     }
 }
 
-imagePane.addEventListener('scroll', syncImageToLas);
+document.getElementById('imagePane').addEventListener('scroll', syncImageToLas);
 
 // Sync from LAS -> Image
 function syncLasToImage() {
+    const imagePane = document.getElementById('imagePane');
+    const plotWrapper = document.getElementById('plotWrapper');
+    if (!imagePane || !plotWrapper) return;
     if (!document.getElementById('syncScroll').checked) return;
     if (isSyncing) return;
     isSyncing = true;
 
     try {
-        const offset = parseFloat(document.getElementById('syncOffset').value) || 0;
-        imagePane.scrollTop = plotWrapper.scrollTop - offset;
+        imagePane.scrollTop = plotWrapper.scrollTop;
     } finally {
         setTimeout(() => isSyncing = false, 10);
     }
 }
 
-plotWrapper.addEventListener('scroll', syncLasToImage);
+document.getElementById('plotWrapper').addEventListener('scroll', syncLasToImage);
 
 // Live update triggers
-document.getElementById('syncOffset').addEventListener('input', syncImageToLas);
-document.getElementById('imgTopDepth').addEventListener('change', syncImageToLas);
-document.getElementById('imgBotDepth').addEventListener('change', syncImageToLas);
+document.getElementById('syncOffset').addEventListener('input', applyVerticalShift);
+document.getElementById('imgTopDepth').addEventListener('change', () => { alignLasToImage(); });
+document.getElementById('imgBotDepth').addEventListener('change', () => { alignLasToImage(); });
 
 document.getElementById('lasScaleInput').addEventListener('change', function(e) {
     let val = parseFloat(e.target.value);
