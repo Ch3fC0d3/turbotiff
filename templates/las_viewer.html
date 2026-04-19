@@ -279,7 +279,10 @@
         .placeholder-msg small { font-size: 0.82em; color: #adb5bd; }
 
         /* Fix wellioviz SVG text and hide unwanted header elements */
-        #well-plot text { fill: #333 !important; }
+        #well-plot text { 
+            fill: #333 !important; 
+            text-shadow: -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff, 1px 1px 0 #fff; /* Readable over images */
+        }
         #well-plot .tick text { font-size: 10px !important; }
         /* Force hide the header group or title rects if wellioviz generates them */
         #well-plot .header-component, 
@@ -564,12 +567,6 @@ document.getElementById('imageInput').addEventListener('change', function(e) {
         document.getElementById('imageContent').style.display = 'block';
         document.getElementById('imageControls').style.display = 'flex';
         URL.revokeObjectURL(url);
-        
-        const overlayToggle = document.getElementById('overlayToggle');
-        if (!overlayToggle.checked) {
-            overlayToggle.checked = true;
-            overlayToggle.dispatchEvent(new Event('change'));
-        }
     };
     img.src = url;
 });
@@ -588,12 +585,17 @@ const opacityControl = document.getElementById('opacityControl');
 
 overlayToggle.addEventListener('change', (e) => {
     if (e.target.checked) {
+        const paneWidth = imagePane.clientWidth;
         plotWrapper.classList.add('overlay-mode');
+        imagePane.style.flex = `0 0 ${paneWidth}px`; // Lock image pane width
+        document.getElementById('well-plot').style.paddingLeft = `${paneWidth}px`; // Shift curves to the right
         opacityControl.style.display = 'inline-flex';
         document.getElementById('syncScroll').checked = true;
         matchImageScale(); // Auto-match scale when overlaying
     } else {
         plotWrapper.classList.remove('overlay-mode');
+        imagePane.style.flex = '';
+        document.getElementById('well-plot').style.paddingLeft = '0px';
         opacityControl.style.display = 'none';
         
         // Reset transforms on all containers
@@ -1162,12 +1164,6 @@ function checkLibs() {
                 document.getElementById('imagePlaceholder').style.display = 'none';
                 document.getElementById('imageContent').style.display = 'block';
                 document.getElementById('imageControls').style.display = 'flex';
-
-                const overlayToggle = document.getElementById('overlayToggle');
-                if (!overlayToggle.checked) {
-                    overlayToggle.checked = true;
-                    overlayToggle.dispatchEvent(new Event('change'));
-                }
             };
             img.onerror = () => {
                 console.warn('[LAS Viewer] Image failed to load:', imageRef);
