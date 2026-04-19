@@ -600,11 +600,14 @@ overlayToggle.addEventListener('change', (e) => {
         opacityControl.style.display = 'none';
         
         // Reset transforms on all containers
-        document.querySelectorAll('#well-plot > div').forEach(c => {
-            c.dataset.tx = 0;
-            c.dataset.ty = 0;
-            c.style.transform = '';
-        });
+        const wp = document.getElementById('well-plot');
+        if (wp) {
+            Array.from(wp.children).forEach(c => {
+                c.dataset.tx = 0;
+                c.dataset.ty = 0;
+                c.style.transform = '';
+            });
+        }
     }
     applyOverlayStyles();
 });
@@ -613,17 +616,19 @@ opacitySlider.addEventListener('input', applyOverlayStyles);
 
 function applyOverlayStyles() {
     const wp = document.getElementById('well-plot');
+    if (!wp) return;
+    
     if (overlayToggle.checked) {
         wp.style.opacity = opacitySlider.value / 100;
         document.querySelectorAll('#well-plot svg').forEach(svg => svg.style.backgroundColor = 'transparent');
-        document.querySelectorAll('#well-plot > div').forEach(c => {
+        Array.from(wp.children).forEach(c => {
             c.style.backgroundColor = 'transparent';
             c.style.cursor = 'grab';
         });
     } else {
         wp.style.opacity = '1';
         document.querySelectorAll('#well-plot svg').forEach(svg => svg.style.backgroundColor = '');
-        document.querySelectorAll('#well-plot > div').forEach(c => {
+        Array.from(wp.children).forEach(c => {
             c.style.backgroundColor = '';
             c.style.cursor = '';
         });
@@ -633,13 +638,24 @@ function applyOverlayStyles() {
 document.getElementById('well-plot').addEventListener('mousedown', (e) => {
     if (!overlayToggle.checked) return;
     
-    // Find the nearest curve container to drag independently
-    const container = e.target.closest('#well-plot > div');
-    if (!container) return;
+    // Find the direct child of #well-plot to drag independently
+    let container = e.target;
+    const wp = document.getElementById('well-plot');
+    while (container && container.parentNode !== wp) {
+        container = container.parentNode;
+    }
+    
+    if (!container || container === wp || container === document.body) return;
     
     e.preventDefault(); // Prevent text selection
     
     draggingContainer = container;
+    
+    // Force absolute positioning for independent movement, relative to plotWrapper
+    if (getComputedStyle(container).position !== 'relative') {
+        container.style.position = 'relative';
+    }
+    
     const tx = parseFloat(container.dataset.tx || 0);
     const ty = parseFloat(container.dataset.ty || 0);
     
