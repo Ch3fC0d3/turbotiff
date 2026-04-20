@@ -10379,54 +10379,39 @@
                 }
             }
 
-            // Clip canvas to the visible viewport of the scroll container for crisp rendering
-            const scrollContainer = document.querySelector('.viewer-scroll');
-            const scrollTop = scrollContainer ? scrollContainer.scrollTop : 0;
-            const scrollLeft = scrollContainer ? scrollContainer.scrollLeft : 0;
-            const viewportH = scrollContainer ? scrollContainer.clientHeight : rect.height;
-            const viewportW = scrollContainer ? scrollContainer.clientWidth : rect.width;
-
-            const fullWidth = rect.width;
-            const fullHeight = rect.height;
-            const visibleMarginPx = 300;
-
-            // Visible region in full CSS overlay coordinates
-            const viewLeft = Math.max(0, scrollLeft - visibleMarginPx);
-            const viewTop = Math.max(0, scrollTop - visibleMarginPx);
-            const viewRight = Math.min(fullWidth, scrollLeft + viewportW + visibleMarginPx);
-            const viewBottom = Math.min(fullHeight, scrollTop + viewportH + visibleMarginPx);
-            let baseWidth = Math.max(1, viewRight - viewLeft);
-            let baseHeight = Math.max(1, viewBottom - viewTop);
+            // Use the full overlay size for the canvas so panning never causes a
+            // resize-clear or left/top repositioning race.
+            const baseWidth = rect.width;
+            const baseHeight = rect.height;
 
             // Account for device pixel ratio for crisp rendering
             const dpr = window.devicePixelRatio || 1;
             let renderScale = dpr;
 
-            // Safety caps on the now-small viewport canvas
+            // Safety cap: very large images at high DPR can exceed GPU texture limits
             const maxDim = 8192;
             const maxPixels = 32000000;
             if (baseWidth > 0 && baseHeight > 0) {
-                const capDimScale = Math.min(maxDim / baseWidth, maxDim / baseHeight);
-                const capPixScale = Math.sqrt(maxPixels / (baseWidth * baseHeight));
+                const capDimScale = Math.min(maxDim / (baseWidth * renderScale), maxDim / (baseHeight * renderScale));
+                const capPixScale = Math.sqrt(maxPixels / (baseWidth * renderScale * baseHeight * renderScale));
                 const capScale = Math.min(capDimScale, capPixScale);
-                if (Number.isFinite(capScale) && capScale > 0) {
-                    renderScale = Math.min(renderScale, capScale);
+                if (Number.isFinite(capScale) && capScale > 0 && capScale < 1) {
+                    renderScale = renderScale * capScale;
                 }
             }
             if (!Number.isFinite(renderScale) || renderScale <= 0) {
                 renderScale = 1;
             }
 
-            // Set canvas internal resolution to cover only the visible viewport
+            // Size canvas to cover the full overlay — no viewport clipping, no repositioning
             const desiredCanvasW = Math.max(1, Math.round(baseWidth * renderScale));
             const desiredCanvasH = Math.max(1, Math.round(baseHeight * renderScale));
             if (canvas.width !== desiredCanvasW) canvas.width = desiredCanvasW;
             if (canvas.height !== desiredCanvasH) canvas.height = desiredCanvasH;
             canvas.style.width = baseWidth + 'px';
             canvas.style.height = baseHeight + 'px';
-            // Position canvas at the scroll offset within the overlay
-            canvas.style.left = viewLeft + 'px';
-            canvas.style.top = viewTop + 'px';
+            canvas.style.left = '0px';
+            canvas.style.top = '0px';
 
             const ctx = canvas.getContext('2d');
             if (!ctx) {
@@ -10437,8 +10422,7 @@
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             const sx = baseWidth > 0 ? (canvas.width / baseWidth) : 1;
             const sy = baseHeight > 0 ? (canvas.height / baseHeight) : 1;
-            // Translate by viewport offset so full-overlay coordinates render correctly
-            ctx.setTransform(sx, 0, 0, sy, -viewLeft * sx, -viewTop * sy);
+            ctx.setTransform(sx, 0, 0, sy, 0, 0);
             const _snapCoord = (v, s, halfPx) => {
                 const vv = Number(v);
                 const ss = Number(s);
@@ -10660,15 +10644,11 @@
                     }
                     sortedPoints = decimated;
                 }
-                const minVisibleY = Math.max(0, (viewTop - visibleMarginPx) / scaleY);
-                const maxVisibleY = Math.min(h, (viewBottom + visibleMarginPx) / scaleY);
                 sortedPoints = sortedPoints.filter((pt) => {
                     if (!Array.isArray(pt) || pt.length < 2) return false;
-                    const y = pt[1];
-                    if (y < minVisibleY || y > maxVisibleY) return false;
                     const x = pt[0];
-                    const xDom = x * scaleX;
-                    return xDom >= (viewLeft - visibleMarginPx) && xDom <= (viewRight + visibleMarginPx);
+                    const y = pt[1];
+                    return Number.isFinite(x) && Number.isFinite(y) && x >= 0 && y >= 0 && x <= w && y <= h;
                 });
                 const collapseTraceSamplesByDepth = (pts, curveName) => {
                     if (!Array.isArray(pts) || pts.length <= 1) return Array.isArray(pts) ? pts : [];
