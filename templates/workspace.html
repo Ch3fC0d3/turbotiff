@@ -12005,6 +12005,14 @@
                     const walkY = (y - startY) * 2;
                     viewerScroll.scrollLeft = scrollLeft - walkX;
                     viewerScroll.scrollTop = scrollTop - walkY;
+                    // Re-render curve overlay immediately so it tracks the pan
+                    if (typeof scheduleCurveOverlayRedraw === 'function') {
+                        if (typeof _curveOverlayRaf !== 'undefined' && _curveOverlayRaf) {
+                            cancelAnimationFrame(_curveOverlayRaf);
+                            _curveOverlayRaf = null;
+                        }
+                        scheduleCurveOverlayRedraw();
+                    }
                 });
                 
                 viewerScroll.addEventListener('mouseup', function() {
