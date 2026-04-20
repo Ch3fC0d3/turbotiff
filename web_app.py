@@ -7804,25 +7804,19 @@ def index():
 def pricing():
     user = _current_user(require_access=False)
     self_service = {
-        'eyebrow': 'In-house workflow',
-        'title': 'Self-Service',
-        'description': 'Use TifLAS in-house to upload logs, extract curves, review results, and export LAS files yourself.',
-        'price_lines': [
-            '7-day free trial',
-            'Includes up to 3 free logs',
-            '$99/month',
-            '$999/year',
-        ],
+        'eyebrow': 'Pricing & Membership',
+        'title': 'Self-Serve Workspace',
+        'description': 'Access the AI digitization suite to convert your own well logs with high accuracy and speed. Includes a 7-day free trial.',
         'features': [
-            'TIFF, PNG, and PDF upload',
-            'Curve extraction workflow',
+            'Upload image and map depth limits',
+            'AI detects tracks and snaps to curves',
             'Review and correction tools',
             'LAS export',
             'Saved projects',
             'Account dashboard',
         ],
-        'cta': 'Start Free Trial' if not user else 'Open Member Account',
-        'href': '/signup' if not user else '/account',
+        'cta': 'Start Free Trial' if not user else 'Submit a Job',
+        'href': '/signup' if not user else '/submit-job',
     }
     managed_processing = {
         'eyebrow': 'Done-for-you option',
