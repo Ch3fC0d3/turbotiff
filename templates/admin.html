@@ -93,12 +93,13 @@
         <!-- Managed Jobs Section -->
         <div class="mb-6 rounded-lg border border-fuchsia-900/50 bg-slate-900 p-6 overflow-x-auto">
             <h2 class="mb-4 text-lg font-semibold border-b border-slate-800 pb-2 text-fuchsia-400">Managed Jobs</h2>
-            <table class="w-full text-left text-sm whitespace-nowrap">
+            <table class="w-full text-left text-sm">
                 <thead class="bg-slate-950 text-slate-400">
                     <tr>
                         <th class="px-4 py-2 font-medium">Date / Job ID</th>
                         <th class="px-4 py-2 font-medium">Company / Email</th>
                         <th class="px-4 py-2 font-medium">Details</th>
+                        <th class="px-4 py-2 font-medium">Message</th>
                         <th class="px-4 py-2 font-medium">Estimate</th>
                         <th class="px-4 py-2 font-medium">Status</th>
                         <th class="px-4 py-2 font-medium">Actions</th>
@@ -118,6 +119,13 @@
                         <td class="px-4 py-3 max-w-[200px] truncate" title="{{ job.project_name }} / {{ job.well_name }}">
                             <div>{{ job.well_name or 'Unnamed Well' }}</div>
                             <div class="text-xs text-slate-500">{{ job.estimated_curve_count }} curves &middot; {{ job.estimated_complexity }}</div>
+                        </td>
+                        <td class="px-4 py-3 max-w-[220px]">
+                            {% if job.notes %}
+                            <div class="text-xs text-slate-300 whitespace-pre-wrap break-words" title="{{ job.notes }}">{{ job.notes[:200] }}{% if job.notes|length > 200 %}…{% endif %}</div>
+                            {% else %}
+                            <span class="text-xs text-slate-600">—</span>
+                            {% endif %}
                         </td>
                         <td class="px-4 py-3">
                             ${{ "%.2f"|format(job.estimated_amount or 0) }}
@@ -144,7 +152,7 @@
                     </tr>
                     {% else %}
                     <tr>
-                        <td colspan="6" class="px-4 py-8 text-center text-slate-500">No managed jobs found.</td>
+                        <td colspan="7" class="px-4 py-8 text-center text-slate-500">No managed jobs found.</td>
                     </tr>
                     {% endfor %}
                 </tbody>

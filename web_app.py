@@ -8021,7 +8021,8 @@ def managed_job_success():
                         job.get("company_name") or "Unknown",
                         job.get("email") or "Unknown",
                         job_id,
-                        job.get("well_name") or "Unknown"
+                        job.get("well_name") or "Unknown",
+                        notes=job.get("notes") or "",
                     )
                 except Exception as mail_err:
                     print(f"Failed to send managed job notification to admin: {mail_err}")

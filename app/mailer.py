@@ -131,8 +131,9 @@ def send_password_reset(to: str, reset_url: str) -> bool:
     return send_email(to, subject, html, text)
 
 
-def send_managed_job_admin(admin_to: str, full_name: str, company: str, email: str, job_id: str, well_name: str) -> bool:
+def send_managed_job_admin(admin_to: str, full_name: str, company: str, email: str, job_id: str, well_name: str, notes: str = '') -> bool:
     subject = f"New TifLAS Managed Job: {company} - {well_name}"
+    notes_row = f'<tr style="background:#fff8e1;"><td style="padding:8px;color:#6b7280;vertical-align:top;">Message</td><td style="padding:8px;white-space:pre-wrap;">{notes}</td></tr>' if notes and notes.strip() else ''
     html = f"""
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
       <div style="background:#0f172a;padding:24px;text-align:center;">
@@ -146,6 +147,7 @@ def send_managed_job_admin(admin_to: str, full_name: str, company: str, email: s
           <tr><td style="padding:8px;color:#6b7280;">Company</td><td style="padding:8px;">{company}</td></tr>
           <tr style="background:#f1f5f9;"><td style="padding:8px;color:#6b7280;">Well Name</td><td style="padding:8px;">{well_name}</td></tr>
           <tr><td style="padding:8px;color:#6b7280;">Job ID</td><td style="padding:8px;">{job_id}</td></tr>
+          {notes_row}
         </table>
         <a href="https://tiflas.com/admin"
            style="display:inline-block;margin-top:16px;padding:12px 28px;background:#0f172a;color:#fff;text-decoration:none;border-radius:6px;font-weight:bold;">
@@ -154,7 +156,7 @@ def send_managed_job_admin(admin_to: str, full_name: str, company: str, email: s
       </div>
     </div>
     """
-    text = f"New Full-Service Job Submitted by {full_name} ({company}, {email}) for Well: {well_name}. Job ID: {job_id}."
+    text = f"New Full-Service Job Submitted by {full_name} ({company}, {email}) for Well: {well_name}. Job ID: {job_id}." + (f"\nMessage: {notes}" if notes and notes.strip() else "")
     return send_email(admin_to, subject, html, text)
 def send_log_saved(to: str, full_name: str, log_name: str, curve_count: int, depth_start: float, depth_end: float, depth_unit: str, log_id: str) -> bool:
     subject = f"Your TifLAS log \"{log_name}\" has been saved"
