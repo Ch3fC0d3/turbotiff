@@ -8131,6 +8131,63 @@ def login():
             
     return render_template('login.html', error=error, next_url=next_url)
 
+@app.route('/forgot-password', methods=['GET', 'POST'])
+def forgot_password():
+    """Send a password reset email."""
+    if request.method == 'POST':
+        email = request.form.get('email', '').strip().lower()
+        user = auth_billing.get_user_by_email(config.AUTH_DB_PATH, email)
+        if user:
+            token = secrets.token_urlsafe(32)
+            expires = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+            auth_billing.update_user_fields(config.AUTH_DB_PATH, user['id'],
+                                            reset_token=token, reset_token_expires=expires)
+            reset_url = f"{config.APP_BASE_URL}/reset-password?token={token}"
+            mailer.send_password_reset(email, reset_url)
+        flash('If that email is registered, a reset link has been sent.', 'success')
+        return redirect(url_for('forgot_password'))
+    return render_template('forgot_password.html')
+
+
+@app.route('/reset-password', methods=['GET', 'POST'])
+def reset_password():
+    """Validate reset token and set new password."""
+    token = request.args.get('token') or request.form.get('token', '')
+    if request.method == 'POST':
+        password = request.form.get('password', '')
+        confirm = request.form.get('confirm', '')
+        if not password or len(password) < 8:
+            flash('Password must be at least 8 characters.', 'error')
+            return render_template('reset_password.html', token=token, valid_token=True)
+        if password != confirm:
+            flash('Passwords do not match.', 'error')
+            return render_template('reset_password.html', token=token, valid_token=True)
+        with auth_billing.get_db(config.AUTH_DB_PATH) as conn:
+            row = conn.execute(
+                "SELECT id, reset_token_expires FROM users WHERE reset_token = ?", (token,)
+            ).fetchone()
+        if not row:
+            flash('Invalid or expired reset link.', 'error')
+            return render_template('reset_password.html', token=token, valid_token=False)
+        expires = row['reset_token_expires']
+        if not expires or datetime.fromisoformat(expires) < datetime.now(timezone.utc):
+            flash('This reset link has expired. Please request a new one.', 'error')
+            return render_template('reset_password.html', token=token, valid_token=False)
+        auth_billing.update_user_fields(config.AUTH_DB_PATH, row['id'],
+                                        password_hash=generate_password_hash(password),
+                                        reset_token=None, reset_token_expires=None)
+        flash('Password updated. You can now sign in.', 'success')
+        return redirect(url_for('login'))
+
+    with auth_billing.get_db(config.AUTH_DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT id, reset_token_expires FROM users WHERE reset_token = ?", (token,)
+        ).fetchone()
+    valid = bool(row and row['reset_token_expires'] and
+                 datetime.fromisoformat(row['reset_token_expires']) >= datetime.now(timezone.utc))
+    return render_template('reset_password.html', token=token, valid_token=valid)
+
+
 @app.route('/logout')
 def logout():
     """Handle user logout"""

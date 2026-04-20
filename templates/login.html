@@ -99,9 +99,12 @@
                             type="password"
                             autocomplete="current-password"
                             required
-                            class="focus:ring-primary-500 focus:border-primary-500 block w-full pl-10 sm:text-sm border-slate-700 bg-slate-950 text-white rounded-md py-2 border"
+                            class="focus:ring-primary-500 focus:border-primary-500 block w-full pl-10 pr-10 sm:text-sm border-slate-700 bg-slate-950 text-white rounded-md py-2 border"
                             placeholder="••••••••"
                         >
+                        <button type="button" onclick="togglePassword()" class="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-200">
+                            <i data-lucide="eye" id="pwd-eye" class="h-5 w-5"></i>
+                        </button>
                     </div>
                 </div>
 
@@ -119,7 +122,7 @@
                     </div>
 
                     <div class="text-sm">
-                        <a href="#" class="font-medium text-primary-300 hover:text-primary-200">
+                        <a href="/forgot-password" class="font-medium text-primary-300 hover:text-primary-200">
                             Forgot your password?
                         </a>
                     </div>
@@ -161,6 +164,18 @@
 
     <script>
         lucide.createIcons();
+        function togglePassword() {
+            const input = document.getElementById('password');
+            const icon = document.getElementById('pwd-eye');
+            if (input.type === 'password') {
+                input.type = 'text';
+                icon.setAttribute('data-lucide', 'eye-off');
+            } else {
+                input.type = 'password';
+                icon.setAttribute('data-lucide', 'eye');
+            }
+            lucide.createIcons();
+        }
     </script>
 </body>
 </html>

@@ -177,6 +177,13 @@ def init_db(db_path: str) -> None:
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_remember_tokens_user_id ON remember_tokens(user_id)")
 
+        # Migrations: add columns if they don't exist yet
+        existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+        if 'reset_token' not in existing_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN reset_token TEXT")
+        if 'reset_token_expires' not in existing_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN reset_token_expires TEXT")
+
 
 REMEMBER_TOKEN_DAYS = 30
 
