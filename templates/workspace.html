@@ -6610,7 +6610,7 @@
         const viewerScrollEl = document.querySelector('.viewer-scroll');
         let _curveOverlayRaf = null;
         function scheduleCurveOverlayRedraw(optsFactory) {
-            if (!lastCurveTraces) return;
+            if (!lastCurveTraces) { console.warn('[overlay] scheduleCurveOverlayRedraw skipped: lastCurveTraces is null'); return; }
             if (_curveOverlayRaf) return;
             _curveOverlayRaf = window.requestAnimationFrame(() => {
                 _curveOverlayRaf = null;
@@ -10338,6 +10338,7 @@
             const defaultStyle = (typeof getOverlayStyleFromUi === 'function') ? getOverlayStyleFromUi() : 'high';
 
             if (!overlay || !img || !curveTraces || !canvas) {
+                console.warn('[overlay] early exit: missing element', {overlay:!!overlay, img:!!img, curveTraces:!!curveTraces, canvas:!!canvas});
                 clearCurveTraceOverlays();
                 return;
             }
@@ -10351,6 +10352,7 @@
             // Use overlay box if available so canvas matches the scrolled container
             const rect = overlay.getBoundingClientRect();
             if (!rect.width || !rect.height) {
+                console.warn('[overlay] early exit: rect zero', rect.width, rect.height);
                 clearCurveTraceOverlays();
                 return;
             }
@@ -10360,6 +10362,7 @@
             let w = imageWidth || img.naturalWidth || img.width;
             let h = imageHeight || img.naturalHeight || img.height;
             if (!w || !h) {
+                console.warn('[overlay] early exit: no image dims', w, h);
                 clearCurveTraceOverlays();
                 return;
             }
@@ -10377,6 +10380,7 @@
                 } else {
                     tracesToRender = {};
                 }
+                console.log('[overlay] editMode tracesToRender keys:', Object.keys(tracesToRender), 'points:', activeTrace && activeTrace.points ? activeTrace.points.length : 0);
             }
 
             // Use the full overlay size for the canvas so panning never causes a
