@@ -348,12 +348,23 @@ def _current_user(require_access: bool = True):
         return None
     user = auth_billing.get_user_by_id(config.AUTH_DB_PATH, int(user_id))
     
-    # Auto-promote owner to admin so they don't get paywalled out of their own app
-    if user and user.get('email') == 'gabepell@hotmail.com' and not user.get('is_admin'):
-        with auth_billing.get_db(config.AUTH_DB_PATH) as conn:
-            conn.execute("UPDATE users SET is_admin = 1 WHERE id = ?", (user['id'],))
-        user['is_admin'] = 1
-    
+    # Auto-promote owner emails to admin with unlimited access
+    OWNER_EMAILS = {'gabepell@hotmail.com', 'gabriel@pellegrini.us'}
+    if user and user.get('email', '').lower() in OWNER_EMAILS:
+        needs_update = (not user.get('is_admin') or
+                        user.get('subscription_status') != 'active' or
+                        user.get('plan_code') != 'lifetime_comped')
+        if needs_update:
+            with auth_billing.get_db(config.AUTH_DB_PATH) as conn:
+                conn.execute(
+                    "UPDATE users SET is_admin = 1, subscription_status = 'active', plan_code = 'lifetime_comped' WHERE id = ?",
+                    (user['id'],)
+                )
+            user['is_admin'] = 1
+            user['subscription_status'] = 'active'
+            user['plan_code'] = 'lifetime_comped'
+        session['is_admin'] = 1
+
     # If standard auth, check banned status
     if user and user.get('is_banned') and not session.get('is_admin'):
         session.clear()
