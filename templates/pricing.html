@@ -219,7 +219,7 @@
                         <p class="mt-6 max-w-4xl text-lg leading-8 text-white/95 sm:text-[24px] sm:leading-[1.75]">
                             Enter the depth interval, the number of curves to extract, and the job complexity.
                             <div class="h-2 w-2 rounded-full bg-primary-500"></div>
-                            <span class="font-semibold text-white">$0.59 per 100 curve-feet</span> with a 
+                            <span class="font-semibold text-white">$0.49 per 100 curve-feet</span> with a 
                             <span class="font-semibold text-white">$29.99 minimum per log</span>
                         </p>
 
@@ -283,7 +283,7 @@
                         </div>
 
                         <div id="managed-total" class="mt-5 text-[56px] font-semibold leading-none text-white sm:text-[68px]">
-                            $33.93
+                            $29.99
                         </div>
 
                         <div class="mt-8 space-y-4">
@@ -304,7 +304,7 @@
                         </div>
 
                         <div id="managed-formula-note" class="mt-6 rounded-[24px] border border-white/10 bg-[#031835] px-6 py-6 text-[18px] leading-9 text-white/95">
-                            Formula: depth × curves ÷ 100 × $0.59 × complexity · Estimated above minimum.
+                            Formula: depth × curves ÷ 100 × $0.49 × complexity · Estimated above minimum.
                         </div>
 
                         <p class="mt-7 text-[16px] leading-8 text-slate-300">
@@ -417,13 +417,13 @@
                 complexityInput.value = complexity;
 
                 const hundredCurveFootUnits = (depthFeet * curveCount) / 100;
-                const rawTotal = hundredCurveFootUnits * 0.59 * multiplier;
+                const rawTotal = hundredCurveFootUnits * 0.49 * multiplier;
                 
                 const minimumApplied = rawTotal < 29.99;
                 const total = Math.max(29.99, rawTotal);
 
                 totalEl.textContent = `$${total.toFixed(2)}`;
-                formulaNoteEl.textContent = `Formula: depth × curves ÷ 100 × $0.59 × complexity · ${minimumApplied ? 'Minimum charge applied.' : 'Estimated above minimum.'}`;
+                formulaNoteEl.textContent = `Formula: depth × curves ÷ 100 × $0.49 × complexity · ${minimumApplied ? 'Minimum charge applied.' : 'Estimated above minimum.'}`;
             }
 
             depthInput.addEventListener('input', updateManagedCalculator);

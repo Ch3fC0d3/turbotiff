@@ -7823,7 +7823,7 @@ def pricing():
         'title': 'Full-Service Conversion',
         'description': 'Send us your logs and we’ll process them for you with review, correction, and final QA built into the workflow.',
         'price_lines': [
-            '$0.59 per 100 curve-feet',
+            '$0.49 per 100 curve-feet',
             '$29.99 minimum per log',
         ],
         'notes': [
