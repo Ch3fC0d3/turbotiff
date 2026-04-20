@@ -218,9 +218,9 @@
 
                         <p class="mt-6 max-w-4xl text-lg leading-8 text-white/95 sm:text-[24px] sm:leading-[1.75]">
                             Enter the depth interval, the number of curves to extract, and the job complexity.
-                            We’ll estimate the full-service conversion price using
-                            <span class="font-semibold text-white">$0.99 per 100 curve-feet</span> with a
-                            <span class="font-semibold text-white">$29.99 minimum per log</span>.
+                            <div class="h-2 w-2 rounded-full bg-primary-500"></div>
+                            <span class="font-semibold text-white">$0.59 per 100 curve-feet</span> with a 
+                            <span class="font-semibold text-white">$29.99 minimum per log</span>
                         </p>
 
                         <div class="mt-10 grid gap-6 md:grid-cols-3">
@@ -283,18 +283,18 @@
                         </div>
 
                         <div id="managed-total" class="mt-5 text-[56px] font-semibold leading-none text-white sm:text-[68px]">
-                            $40.99
+                            $33.93
                         </div>
 
                         <div class="mt-8 space-y-4">
                             <div class="flex items-center justify-between rounded-[22px] border border-white/10 bg-[#031835] px-6 py-5 text-[18px]">
                                 <span class="text-white/95">Billable curve-feet</span>
-                                <span id="managed-billable-curve-feet" class="font-semibold text-white">36</span>
+                                <span id="managed-billable-curve-feet" class="font-semibold text-white">5,000</span>
                             </div>
 
                             <div class="flex items-center justify-between rounded-[22px] border border-white/10 bg-[#031835] px-6 py-5 text-[18px]">
                                 <span class="text-white/95">100 curve-foot units</span>
-                                <span id="managed-curve-foot-units" class="font-semibold text-white">36.0</span>
+                                <span id="managed-curve-foot-units" class="font-semibold text-white">50.0</span>
                             </div>
 
                             <div class="flex items-center justify-between rounded-[22px] border border-white/10 bg-[#031835] px-6 py-5 text-[18px]">
@@ -304,7 +304,7 @@
                         </div>
 
                         <div id="managed-formula-note" class="mt-6 rounded-[24px] border border-white/10 bg-[#031835] px-6 py-6 text-[18px] leading-9 text-white/95">
-                            Formula: depth × curves ÷ 100 × $0.99 × complexity · Estimated above minimum.
+                            Formula: depth × curves ÷ 100 × $0.59 × complexity · Estimated above minimum.
                         </div>
 
                         <p class="mt-7 text-[16px] leading-8 text-slate-300">
@@ -417,15 +417,13 @@
                 complexityInput.value = complexity;
 
                 const hundredCurveFootUnits = (depthFeet * curveCount) / 100;
-                const rawTotal = hundredCurveFootUnits * 0.99 * multiplier;
-                const total = Math.max(29.99, rawTotal);
+                const rawTotal = hundredCurveFootUnits * 0.59 * multiplier;
+                
                 const minimumApplied = rawTotal < 29.99;
+                const total = Math.max(29.99, rawTotal);
 
                 totalEl.textContent = `$${total.toFixed(2)}`;
-                billableCurveFeetEl.textContent = numberFormatter.format(hundredCurveFootUnits);
-                curveFootUnitsEl.textContent = hundredCurveFootUnits.toFixed(1);
-                complexityMultiplierEl.textContent = `×${multiplier.toFixed(2)}`;
-                formulaNoteEl.textContent = `Formula: depth × curves ÷ 100 × $0.99 × complexity · ${minimumApplied ? 'Minimum charge applied.' : 'Estimated above minimum.'}`;
+                formulaNoteEl.textContent = `Formula: depth × curves ÷ 100 × $0.59 × complexity · ${minimumApplied ? 'Minimum charge applied.' : 'Estimated above minimum.'}`;
             }
 
             depthInput.addEventListener('input', updateManagedCalculator);
