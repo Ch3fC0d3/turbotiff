@@ -1,8 +1,15 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 180" width="520" height="180">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 580 180" width="580" height="180">
   <defs>
     <filter id="ts" x="-3%" y="-3%" width="106%" height="106%">
       <feDropShadow dx="2" dy="2" stdDeviation="2" flood-color="#000" flood-opacity="0.8"/>
     </filter>
+    <style>
+      @keyframes blinkF {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0; }
+      }
+      .blink-f { animation: blinkF 2.4s ease-in-out infinite; }
+    </style>
     
     <!-- Linear Gradients for 3D metallic text effect -->
     <linearGradient id="gradOrange" x1="0%" y1="0%" x2="0%" y2="100%">
@@ -73,11 +80,14 @@
     <!-- TIF text (Orange) -->
     <text x="15" y="125" font-family="'Arial Black', 'Impact', Arial, sans-serif" font-weight="900" font-size="92" fill="url(#gradOrange)" letter-spacing="-4" filter="url(#ts)">TIF</text>
 
+    <!-- Blinking extra F (Orange) — TIFF spelling easter egg -->
+    <text class="blink-f" x="167" y="125" font-family="'Arial Black', 'Impact', Arial, sans-serif" font-weight="900" font-size="92" fill="url(#gradOrange)" letter-spacing="-4" filter="url(#ts)">F</text>
+
     <!-- L text (Silver) -->
-    <text x="180" y="125" font-family="'Arial Black', 'Impact', Arial, sans-serif" font-weight="900" font-size="92" fill="url(#gradSilver)" letter-spacing="-2" filter="url(#ts)">L</text>
+    <text x="225" y="125" font-family="'Arial Black', 'Impact', Arial, sans-serif" font-weight="900" font-size="92" fill="url(#gradSilver)" letter-spacing="-2" filter="url(#ts)">L</text>
 
     <!-- AS text (Green) -->
-    <text x="240" y="125" font-family="'Arial Black', 'Impact', Arial, sans-serif" font-weight="900" font-size="92" fill="url(#gradGreen)" letter-spacing="-3" filter="url(#ts)">AS</text>
+    <text x="285" y="125" font-family="'Arial Black', 'Impact', Arial, sans-serif" font-weight="900" font-size="92" fill="url(#gradGreen)" letter-spacing="-3" filter="url(#ts)">AS</text>
 
     <!-- Subtitle (Bright Green) -->
     <text x="45" y="165" font-family="Arial, Helvetica, sans-serif" font-weight="600" font-size="34" fill="#69C21A" letter-spacing="0.5" filter="url(#ts)">Well Log Digitalization</text>
