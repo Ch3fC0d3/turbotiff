@@ -1649,18 +1649,21 @@
                                 <div class="depth-row">
                                     <div class="field">
                                         <label for="topDepth">Top depth value</label>
-                                        <input type="number" id="topDepth" placeholder="Top depth value" step="0.1" required>
+                                        <input type="number" id="topDepth" placeholder="Top depth value" step="0.1" required oninput="updateDepthSpan()">
                                     </div>
                                     <div class="field">
                                         <label for="bottomDepth">Bottom depth value</label>
-                                        <input type="number" id="bottomDepth" placeholder="Bottom depth value" step="0.1" required>
+                                        <input type="number" id="bottomDepth" placeholder="Bottom depth value" step="0.1" required oninput="updateDepthSpan()">
                                     </div>
+                                </div>
+                                <div id="depthSpanDisplay" style="display:none;margin:4px 0 2px 0;padding:5px 10px;border-radius:6px;background:rgba(34,211,238,0.08);border:1px solid rgba(34,211,238,0.2);font-size:0.82em;color:#67e8f9;">
+                                    Total span: <strong id="depthSpanValue"></strong>
                                 </div>
 
                                 <div class="grid mt-2">
                                     <div class="field">
                                         <label for="depthUnit">Depth unit</label>
-                                        <select id="depthUnit">
+                                        <select id="depthUnit" onchange="updateDepthSpan()">
                                             <option value="FT">Feet (FT)</option>
                                             <option value="M">Meters (M)</option>
                                         </select>
@@ -3591,6 +3594,23 @@
             const snappedDepth = Number(best.depth);
             if (!Number.isFinite(snappedY) || !Number.isFinite(snappedDepth)) return null;
             return { y_px: snappedY, depth: snappedDepth };
+        }
+
+        function updateDepthSpan() {
+            const top = parseFloat(document.getElementById('topDepth').value);
+            const bot = parseFloat(document.getElementById('bottomDepth').value);
+            const unit = (document.getElementById('depthUnit')?.value || 'FT').toUpperCase();
+            const display = document.getElementById('depthSpanDisplay');
+            const value = document.getElementById('depthSpanValue');
+            if (!display || !value) return;
+            if (Number.isFinite(top) && Number.isFinite(bot)) {
+                const span = Math.abs(bot - top);
+                const label = unit === 'M' ? 'meters' : 'feet';
+                value.textContent = span.toLocaleString(undefined, { maximumFractionDigits: 1 }) + ' ' + label;
+                display.style.display = 'block';
+            } else {
+                display.style.display = 'none';
+            }
         }
 
         function getDepthConfigFromInputs() {
