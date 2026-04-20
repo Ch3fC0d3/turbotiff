@@ -8853,7 +8853,22 @@ def save_log():
             conn.commit()
             
         print(f"[SAVE LOG] Successfully saved log {log_id} for user {user['id']}: {name}")
-        return jsonify({'success': True, 'log_id': log_id})
+
+        try:
+            mailer.send_log_saved(
+                to=user['email'],
+                full_name=user.get('full_name') or user['email'],
+                log_name=name,
+                curve_count=curve_count,
+                depth_start=depth_start,
+                depth_end=depth_end,
+                depth_unit=depth_unit,
+                log_id=log_id,
+            )
+        except Exception as mail_err:
+            print(f"[SAVE LOG] Email notification failed (non-fatal): {mail_err}")
+
+        return jsonify({'success': True, 'log_id': log_id, 'confirmed': True, 'log_name': name})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 

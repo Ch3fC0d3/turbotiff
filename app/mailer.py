@@ -156,6 +156,36 @@ def send_managed_job_admin(admin_to: str, full_name: str, company: str, email: s
     """
     text = f"New Full-Service Job Submitted by {full_name} ({company}, {email}) for Well: {well_name}. Job ID: {job_id}."
     return send_email(admin_to, subject, html, text)
+def send_log_saved(to: str, full_name: str, log_name: str, curve_count: int, depth_start: float, depth_end: float, depth_unit: str, log_id: str) -> bool:
+    subject = f"Your TifLAS log \"{log_name}\" has been saved"
+    depth_range = f"{depth_start:,.1f} – {depth_end:,.1f} {depth_unit}"
+    html = f"""
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
+      <div style="background:#0f172a;padding:24px;text-align:center;">
+        <img src="https://tiflas.com/static/images/logo.svg" alt="TifLAS" style="height:60px;">
+      </div>
+      <div style="padding:32px;background:#f8fafc;">
+        <h2 style="color:#0f172a;margin-top:0;">Log Saved Successfully ✓</h2>
+        <p style="color:#374151;">Hi {full_name}, your digitized log has been saved to your TifLAS account.</p>
+        <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+          <tr><td style="padding:8px;color:#6b7280;border-bottom:1px solid #e5e7eb;">Log Name</td><td style="padding:8px;font-weight:bold;border-bottom:1px solid #e5e7eb;">{log_name}</td></tr>
+          <tr style="background:#f1f5f9;"><td style="padding:8px;color:#6b7280;border-bottom:1px solid #e5e7eb;">Curves</td><td style="padding:8px;border-bottom:1px solid #e5e7eb;">{curve_count}</td></tr>
+          <tr><td style="padding:8px;color:#6b7280;">Depth Range</td><td style="padding:8px;">{depth_range}</td></tr>
+        </table>
+        <a href="https://tiflas.com/dashboard"
+           style="display:inline-block;margin-top:8px;padding:12px 28px;background:#0284c7;color:#fff;text-decoration:none;border-radius:6px;font-weight:bold;">
+          View My Logs
+        </a>
+      </div>
+      <div style="padding:16px 32px;background:#e2e8f0;font-size:12px;color:#6b7280;">
+        You received this email because you saved a log on TifLAS. <a href="https://tiflas.com" style="color:#0284c7;">tiflas.com</a>
+      </div>
+    </div>
+    """
+    text = f"Hi {full_name}, your log \"{log_name}\" ({curve_count} curves, {depth_range}) has been saved. View it at https://tiflas.com/dashboard"
+    return send_email(to, subject, html, text)
+
+
 def send_new_signup_admin(admin_to: str, new_user_email: str, full_name: str, company: str) -> bool:
     subject = f"New TifLAS signup: {full_name} ({company})"
     html = f"""
