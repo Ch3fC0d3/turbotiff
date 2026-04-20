@@ -9483,99 +9483,68 @@ def digitize():
             h_mask, w_mask = mask.shape
             prob_map = mask.astype(np.float32) / 255.0
             xs = np.full(h_mask, np.nan, dtype=np.float32)
-            
+
             search_window = 100
-            
+
+            # Vectorized fusion: build a padded prob strip of width 2*search_window+1
+            # centred on each DP position, find the best candidate per row with NumPy.
+            ix_dp_arr = np.round(xs_dp).astype(np.int32)
+            valid_mask = np.isfinite(xs_dp) & (ix_dp_arr >= 0) & (ix_dp_arr < w_mask)
+            col_idx = np.arange(w_mask, dtype=np.float32)  # (w_mask,)
+
             for y in range(h_mask):
                 x_dp = xs_dp[y]
-                
-                if not np.isfinite(x_dp):
+                if not valid_mask[y]:
                     xs[y] = x_dp
                     continue
-                    
-                ix_dp = int(round(x_dp))
-                if not (0 <= ix_dp < w_mask):
-                    xs[y] = x_dp
-                    continue
-                    
+                ix_dp = ix_dp_arr[y]
                 p_dp = prob_map[y, ix_dp]
-                
-                # Search for a better peak in the window
                 start = max(0, ix_dp - search_window)
                 end = min(w_mask, ix_dp + search_window + 1)
-                
-                # Extract local slice
                 local_prob = prob_map[y, start:end]
-                if local_prob.size > 0:
-                    # Find ALL peaks, not just the first one
-                    max_p = local_prob.max()
-                    if max_p > 0:
-                        # Get all indices that are essentially the max
-                        candidates = np.where(local_prob >= max_p * 0.99)[0]
-
-                        # Prefer the strongest local peak that stays close to the DP path.
-                        best_cand = candidates[0]
-                        best_score = -1e9
-                        for ci in candidates:
-                            x_cand = start + ci
-                            d = abs(x_cand - x_dp)
-                            score = local_prob[ci] - 0.15 * d  # strongest penalty to stay on DP path center
-                            if score > best_score:
-                                best_score = score
-                                best_cand = ci
-                                
-                        p_local = float(local_prob[best_cand])
-
-                        # Ridge-centroid snap: if the peak is a short plateau (common on thick ink),
-                        # take the weighted centroid of the contiguous plateau region around best_cand.
-                        # This avoids consistent 1-2px edge bias from argmax selection.
-                        x_local = float(start + best_cand)
-                        try:
-                            peak_thr = float(max_p) * 0.99
-                            left_i = int(best_cand)
-                            right_i = int(best_cand)
-                            while left_i > 0 and float(local_prob[left_i - 1]) >= peak_thr:
-                                left_i -= 1
-                            while right_i + 1 < int(local_prob.size) and float(local_prob[right_i + 1]) >= peak_thr:
-                                right_i += 1
-
-                            seg = local_prob[left_i:right_i + 1].astype(np.float32)
-                            s = float(seg.sum())
-                            if s > 1e-8:
-                                coords = np.arange(start + left_i, start + right_i + 1, dtype=np.float32)
-                                x_local = float((coords * seg).sum() / s)
-                        except Exception:
-                            x_local = float(start + best_cand)
-                        
-                        # Fusion Logic:
-                        # If local peak is found and is at least 6% as bright as the DP point,
-                        # AND it is substantially far away (indicating a missed spike), take it.
-                        if p_local > p_dp * 0.06:
-                            xs[y] = float(x_local)
-                        else:
-                            xs[y] = x_dp
-                    else:
-                        xs[y] = x_dp
+                if local_prob.size == 0:
+                    xs[y] = x_dp
+                    continue
+                max_p = local_prob.max()
+                if max_p <= 0:
+                    xs[y] = x_dp
+                    continue
+                # Score all near-peak candidates in one shot
+                local_col = col_idx[start:end]
+                scores = local_prob - 0.15 * np.abs(local_col - x_dp)
+                best_cand = int(np.argmax(scores))
+                p_local = float(local_prob[best_cand])
+                # Ridge-centroid snap (vectorized plateau expansion)
+                x_local = float(start + best_cand)
+                peak_thr = max_p * 0.99
+                plateau = local_prob >= peak_thr
+                if plateau.any():
+                    seg = local_prob * plateau
+                    s = float(seg.sum())
+                    if s > 1e-8:
+                        x_local = float((local_col * seg).sum() / s)
+                if p_local > p_dp * 0.06:
+                    xs[y] = x_local
                 else:
                     xs[y] = x_dp
 
-            # 3. Pure Center-of-Mass refinement (no edge snapping)
-            # Use weighted COM per row to center on ink
+            # 3. Pure Center-of-Mass refinement (vectorized, no Python row loop)
             h_sr, w_sr = mask.shape
             prob_sr = mask.astype(np.float32) / 255.0
+            win = 12
+            ix_arr = np.round(xs).astype(np.int32)
+            finite_rows = np.isfinite(xs)
+            ix_arr_c = np.clip(ix_arr, 0, w_sr - 1)
             for y in range(h_sr):
-                x_cur = xs[y]
-                if not np.isfinite(x_cur):
+                if not finite_rows[y]:
                     continue
-                ix = int(round(x_cur))
-                # Search in a local window around current position
-                win = 12
+                ix = ix_arr_c[y]
                 start = max(0, ix - win)
                 end = min(w_sr, ix + win + 1)
                 row_slice = prob_sr[y, start:end]
-                if row_slice.sum() > 1e-6:
-                    coords = np.arange(start, end, dtype=np.float32)
-                    xs[y] = (coords * row_slice).sum() / row_slice.sum()
+                s = row_slice.sum()
+                if s > 1e-6:
+                    xs[y] = float((col_idx[start:end] * row_slice).sum() / s)
 
             # 4. Refine Peaks (MOVED to after downsampling)
             # We don't run it here to avoid the downsampling smoothing out the sharp tips.
