@@ -60,6 +60,51 @@
                 files: []
             });
 
+            // Load saved user info from localStorage on mount
+            useEffect(() => {
+                const saved = localStorage.getItem('tiflas_managed_user_info');
+                if (saved) {
+                    try {
+                        const parsed = JSON.parse(saved);
+                        setFormData(prev => ({
+                            ...prev,
+                            companyName: parsed.companyName || prev.companyName,
+                            contactName: parsed.contactName || prev.contactName,
+                            email: parsed.email || prev.email,
+                            projectName: parsed.projectName || prev.projectName,
+                        }));
+                    } catch(e) {}
+                }
+
+                // Load any file that was dropped on the workspace managed area
+                try {
+                    const pending = sessionStorage.getItem('tiflas_managed_pending_file');
+                    if (pending) {
+                        const fileInfo = JSON.parse(pending);
+                        if (fileInfo && fileInfo.dataUrl) {
+                            fetch(fileInfo.dataUrl)
+                                .then(res => res.blob())
+                                .then(blob => {
+                                    const file = new File([blob], fileInfo.name, { type: fileInfo.type || blob.type });
+                                    setFormData(prev => ({ ...prev, files: [...prev.files, file] }));
+                                })
+                                .catch(() => {});
+                        }
+                        sessionStorage.removeItem('tiflas_managed_pending_file');
+                    }
+                } catch(e) {}
+            }, []);
+
+            // Save user info to localStorage when it changes
+            useEffect(() => {
+                localStorage.setItem('tiflas_managed_user_info', JSON.stringify({
+                    companyName: formData.companyName,
+                    contactName: formData.contactName,
+                    email: formData.email,
+                    projectName: formData.projectName,
+                }));
+            }, [formData.companyName, formData.contactName, formData.email, formData.projectName]);
+
             const [isSubmitting, setIsSubmitting] = useState(false);
             const [errorMsg, setErrorMsg] = useState(null);
 
@@ -272,12 +317,23 @@
                                     
                                     {formData.files.length > 0 && (
                                         <ul className="mt-4 space-y-2">
-                                            {formData.files.map((f, i) => (
-                                                <li key={i} className="flex items-center justify-between bg-slate-800 p-2 rounded border border-slate-700">
-                                                    <span className="text-sm truncate mr-4">{f.name} ({(f.size / 1024 / 1024).toFixed(2)} MB)</span>
-                                                    <button type="button" onClick={() => removeFile(i)} className="text-red-400 hover:text-red-300 text-sm">Remove</button>
-                                                </li>
-                                            ))}
+                                            {formData.files.map((f, i) => {
+                                                const isImage = f.type && f.type.startsWith('image/');
+                                                const previewUrl = isImage ? URL.createObjectURL(f) : null;
+                                                return (
+                                                    <li key={i} className="flex items-center justify-between bg-slate-800 p-2 rounded border border-slate-700">
+                                                        <div className="flex items-center min-w-0 flex-1">
+                                                            {previewUrl ? (
+                                                                <img src={previewUrl} alt={f.name} className="w-16 h-16 object-cover rounded mr-3 border border-slate-700" />
+                                                            ) : (
+                                                                <div className="w-16 h-16 flex items-center justify-center bg-slate-900 rounded mr-3 border border-slate-700 text-3xl">📄</div>
+                                                            )}
+                                                            <span className="text-sm truncate mr-4">{f.name} ({(f.size / 1024 / 1024).toFixed(2)} MB)</span>
+                                                        </div>
+                                                        <button type="button" onClick={() => removeFile(i)} className="text-red-400 hover:text-red-300 text-sm flex-shrink-0">Remove</button>
+                                                    </li>
+                                                );
+                                            })}
                                         </ul>
                                     )}
                                 </div>
