@@ -84,7 +84,7 @@
     <text class="blink-f" x="167" y="125" font-family="'Arial Black', 'Impact', Arial, sans-serif" font-weight="900" font-size="92" fill="url(#gradSilver)" letter-spacing="-4" filter="url(#ts)">F</text>
 
     <!-- L text (Silver) -->
-    <text x="225" y="125" font-family="'Arial Black', 'Impact', Arial, sans-serif" font-weight="900" font-size="92" fill="url(#gradSilver)" letter-spacing="-2" filter="url(#ts)">L</text>
+    <text x="225" y="125" font-family="'Arial Black', 'Impact', Arial, sans-serif" font-weight="900" font-size="92" fill="url(#gradGreen)" letter-spacing="-2" filter="url(#ts)">L</text>
 
     <!-- AS text (Green) -->
     <text x="285" y="125" font-family="'Arial Black', 'Impact', Arial, sans-serif" font-weight="900" font-size="92" fill="url(#gradGreen)" letter-spacing="-3" filter="url(#ts)">AS</text>
