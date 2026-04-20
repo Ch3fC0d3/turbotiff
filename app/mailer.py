@@ -131,6 +131,31 @@ def send_password_reset(to: str, reset_url: str) -> bool:
     return send_email(to, subject, html, text)
 
 
+def send_managed_job_admin(admin_to: str, full_name: str, company: str, email: str, job_id: str, well_name: str) -> bool:
+    subject = f"New TifLAS Managed Job: {company} - {well_name}"
+    html = f"""
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
+      <div style="background:#0f172a;padding:24px;text-align:center;">
+        <img src="https://tiflas.com/static/images/logo.svg" alt="TifLAS" style="height:60px;">
+      </div>
+      <div style="padding:32px;background:#f8fafc;">
+        <h2 style="color:#0f172a;">New Full-Service Job Submitted</h2>
+        <table style="width:100%;border-collapse:collapse;">
+          <tr><td style="padding:8px;color:#6b7280;">Name</td><td style="padding:8px;font-weight:bold;">{full_name}</td></tr>
+          <tr style="background:#f1f5f9;"><td style="padding:8px;color:#6b7280;">Email</td><td style="padding:8px;">{email}</td></tr>
+          <tr><td style="padding:8px;color:#6b7280;">Company</td><td style="padding:8px;">{company}</td></tr>
+          <tr style="background:#f1f5f9;"><td style="padding:8px;color:#6b7280;">Well Name</td><td style="padding:8px;">{well_name}</td></tr>
+          <tr><td style="padding:8px;color:#6b7280;">Job ID</td><td style="padding:8px;">{job_id}</td></tr>
+        </table>
+        <a href="https://tiflas.com/admin"
+           style="display:inline-block;margin-top:16px;padding:12px 28px;background:#0f172a;color:#fff;text-decoration:none;border-radius:6px;font-weight:bold;">
+          View in Admin Panel
+        </a>
+      </div>
+    </div>
+    """
+    text = f"New Full-Service Job Submitted by {full_name} ({company}, {email}) for Well: {well_name}. Job ID: {job_id}."
+    return send_email(admin_to, subject, html, text)
 def send_new_signup_admin(admin_to: str, new_user_email: str, full_name: str, company: str) -> bool:
     subject = f"New TifLAS signup: {full_name} ({company})"
     html = f"""

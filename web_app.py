@@ -7996,20 +7996,34 @@ def managed_job_success():
         if checkout_session.setup_intent:
             setup_intent = stripe.SetupIntent.retrieve(checkout_session.setup_intent)
             payment_method_id = setup_intent.payment_method
-            
+
             with auth_billing.get_db(config.AUTH_DB_PATH) as conn:
                 conn.execute("""
-                    UPDATE managed_jobs 
-                    SET stripe_payment_method_id = ?, 
+                    UPDATE managed_jobs
+                    SET stripe_payment_method_id = ?,
                         status = 'payment_method_saved',
                         updated_at = ?
                     WHERE id = ? AND stripe_checkout_session_id = ?
                 """, (
-                    payment_method_id, 
+                    payment_method_id,
                     datetime.now(timezone.utc).isoformat(),
-                    job_id, 
+                    job_id,
                     session_id
                 ))
+                job = conn.execute("SELECT * FROM managed_jobs WHERE id = ?", (job_id,)).fetchone()
+            
+            if job:
+                try:
+                    mailer.send_managed_job_admin(
+                        "gabriel@pellegrini.us",
+                        job.get("contact_name") or "Unknown",
+                        job.get("company_name") or "Unknown",
+                        job.get("email") or "Unknown",
+                        job_id,
+                        job.get("well_name") or "Unknown"
+                    )
+                except Exception as mail_err:
+                    print(f"Failed to send managed job notification to admin: {mail_err}")
     except Exception as e:
         print(f"Error completing managed job checkout: {e}")
         flash('Error verifying your payment method.', 'error')
