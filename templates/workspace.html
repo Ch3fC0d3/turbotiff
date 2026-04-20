@@ -2089,15 +2089,25 @@
             if (typeof renderCurveListView === 'function' && options.refreshList !== false) {
                 renderCurveListView();
             }
-            try {
-                if (editMode && lastDigitizedCurves && lastDigitizedDepth) {
-                    rebuildCurveTraceFromDigitized(nextId);
-                    if (lastCurveTraces) {
-                        renderCurveTraceOverlays(lastCurveTraces);
+            if (!options.skipRender) {
+                try {
+                    if (editMode && lastDigitizedCurves && lastDigitizedDepth) {
+                        rebuildCurveTraceFromDigitized(nextId);
+                        if (lastCurveTraces) {
+                            renderCurveTraceOverlays(lastCurveTraces);
+                        }
                     }
+                } catch (err) {
+                    console.warn('Failed to rebuild selected edit curve trace', err);
                 }
-            } catch (err) {
-                console.warn('Failed to rebuild selected edit curve trace', err);
+            } else {
+                try {
+                    if (editMode && lastDigitizedCurves && lastDigitizedDepth) {
+                        rebuildCurveTraceFromDigitized(nextId);
+                    }
+                } catch (err) {
+                    console.warn('Failed to rebuild selected edit curve trace', err);
+                }
             }
             return true;
         }
@@ -4645,7 +4655,7 @@
                 ensureDigitizedFromLas();
 
                 editMode = true;
-                setActiveEditCurve(id, { refreshList: false });
+                setActiveEditCurve(id, { refreshList: false, skipRender: true });
                 // Lock selection/track-drag modes while editing so the green
                 // selection area and track edges do not move.
                 panelSelectMode = false;
@@ -4658,6 +4668,11 @@
                 trackOverlayDrag = null;
                 curveEdgePick = null;
                 setEditModeUI();
+                // Re-render AFTER layout settles from edit-mode CSS class being added,
+                // otherwise canvas viewport coordinates are stale and curve disappears.
+                requestAnimationFrame(() => {
+                    if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
+                });
                 showStatus(`Edit mode on for curve ${id}. Click inside its track to nudge values at the nearest depth.`, 'info');
             } else {
                 editMode = false;
