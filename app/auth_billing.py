@@ -478,6 +478,17 @@ def admin_update_user_action(db_path: str, user_id: int, action: str) -> bool:
         return True
 
 
+def mass_unlock_users(db_path: str) -> int:
+    """Set all non-admin, non-banned users to active (lifetime_comped). Returns count updated."""
+    with get_db(db_path) as conn:
+        cur = conn.execute(
+            "UPDATE users SET subscription_status = 'active', plan_code = 'lifetime_comped' "
+            "WHERE is_admin = 0 AND (is_banned IS NULL OR is_banned = 0) "
+            "AND subscription_status != 'active'"
+        )
+        return cur.rowcount
+
+
 def update_user_fields(db_path: str, user_id: int, **fields: Any) -> None:
     if not fields:
         return

@@ -8485,7 +8485,14 @@ def admin_action():
                 return jsonify({'success': True})
             except Exception as e:
                 return jsonify({'success': False, 'error': str(e)})
-                
+
+    elif action == 'mass_unlock':
+        try:
+            updated = auth_billing.mass_unlock_users(config.AUTH_DB_PATH)
+            return jsonify({'success': True, 'updated': updated})
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)})
+
     return jsonify({'success': False, 'error': 'Invalid action'})
 
 
