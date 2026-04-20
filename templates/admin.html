@@ -272,7 +272,7 @@
                         <tbody class="divide-y divide-slate-800/50">
                             {% for l in logs %}
                             <tr class="hover:bg-slate-800/50 transition-colors">
-                                <td class="py-3 font-medium">{{ l.name }} <span class="text-slate-500 text-xs font-normal">({{ "%.2f"|format(l.size_bytes / 1024) }} KB)</span></td>
+                                <td class="py-3 font-medium">{{ l.name }} <span class="text-slate-500 text-xs font-normal">({{ "%.2f"|format((l.size_bytes or 0) / 1024) }} KB)</span></td>
                                 <td class="py-3 text-slate-400">{{ l.user_email }}</td>
                                 <td class="py-3">{{ l.curve_count }}</td>
                                 <td class="py-3 text-slate-400">{{ l.created_at[:10] }}</td>

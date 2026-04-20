@@ -344,7 +344,8 @@ def get_all_users_for_admin(db_path: str) -> List[Dict[str, Any]]:
 def get_all_logs_for_admin(db_path: str) -> List[Dict[str, Any]]:
     with get_db(db_path) as conn:
         rows = conn.execute("""
-            SELECT l.*, u.email as user_email
+            SELECT l.*, u.email as user_email,
+                   LENGTH(l.las_content) as size_bytes
             FROM user_logs l
             JOIN users u ON l.user_id = u.id
             ORDER BY l.created_at DESC
