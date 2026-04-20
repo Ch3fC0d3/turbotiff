@@ -272,6 +272,405 @@
         </div>
     </div>
 
+    <!-- Product Demo Section -->
+    <div id="demo" class="scroll-mt-24 py-16 lg:py-24 bg-slate-950 overflow-hidden">
+        <div class="relative mx-auto max-w-5xl px-4 sm:px-6 lg:px-8">
+
+            <!-- Background grid -->
+            <div class="absolute inset-0 pointer-events-none overflow-hidden" aria-hidden="true">
+                <div class="absolute inset-0" style="background-image:linear-gradient(rgba(255,255,255,0.04) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,0.04) 1px,transparent 1px);background-size:36px 36px;"></div>
+                <div class="absolute -top-24 left-1/3 h-72 w-72 rounded-full bg-cyan-500/8 blur-3xl"></div>
+                <div class="absolute bottom-0 right-0 h-80 w-80 rounded-full bg-orange-500/8 blur-3xl"></div>
+            </div>
+
+            <div class="relative">
+                <div class="text-center mb-8">
+                    <span class="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-300 mb-3">
+                        <i data-lucide="sparkles" class="h-3.5 w-3.5 text-cyan-300"></i>
+                        TifLAS product demo
+                    </span>
+                    <h2 class="text-3xl font-extrabold text-white sm:text-4xl">From scanned log to structured output</h2>
+                    <p class="mt-3 text-lg text-slate-400 max-w-2xl mx-auto">Header extraction, AI curve tracing, validation, and LAS export — step by step.</p>
+                </div>
+
+                <!-- Step nav -->
+                <div class="grid grid-cols-5 gap-2 mb-6" id="demo-steps"></div>
+
+                <!-- Main layout -->
+                <div class="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
+
+                    <!-- Fake log panel -->
+                    <div class="rounded-2xl overflow-hidden border border-slate-700 shadow-2xl" id="log-card">
+                        <!-- Log header -->
+                        <div class="bg-[#e8dcc0] border-b border-black/10 px-4 py-3">
+                            <div class="grid grid-cols-3 gap-3 text-[10px] text-slate-800">
+                                <div id="lh-name" style="opacity:0.6;transition:opacity 0.8s"><div class="font-bold uppercase tracking-widest">Well Name</div><div>Mesa Ridge Unit #12</div></div>
+                                <div id="lh-field" style="opacity:0.6;transition:opacity 0.8s"><div class="font-bold uppercase tracking-widest">Field</div><div>Red Basin</div></div>
+                                <div id="lh-scale" style="opacity:0.6;transition:opacity 0.8s"><div class="font-bold uppercase tracking-widest">Scale</div><div>1 in = 100 ft</div></div>
+                            </div>
+                        </div>
+                        <!-- Log body -->
+                        <div class="relative bg-[#f7f6ef]" style="height:500px">
+                            <!-- Track grid lines baked in -->
+                            <div class="absolute inset-0 pointer-events-none" id="track-grid"></div>
+
+                            <!-- Tracks layout: left 28% | depth 7% | middle 34% | right 31% -->
+                            <div class="absolute inset-0 flex">
+                                <!-- Left track -->
+                                <div class="relative border-r border-black/70" style="width:28%">
+                                    <div class="absolute inset-0" id="grid-left"></div>
+                                    <svg class="absolute inset-0 w-full h-full" viewBox="0 0 100 100" preserveAspectRatio="none">
+                                        <path id="l-orig-1" fill="none" stroke="#111" stroke-width="0.9" opacity="0.22" stroke-linecap="round"/>
+                                        <path id="l-orig-2" fill="none" stroke="#111" stroke-width="1.1" opacity="0.28" stroke-linecap="round"/>
+                                        <path id="l-ai-1" fill="none" stroke="#22d3ee" stroke-width="1.2" opacity="0" stroke-linecap="round" style="transition:opacity 1s ease"/>
+                                        <path id="l-ai-2" fill="none" stroke="#22d3ee" stroke-width="1.8" opacity="0" stroke-linecap="round" style="transition:opacity 1.2s ease"/>
+                                    </svg>
+                                </div>
+                                <!-- Depth track -->
+                                <div class="relative bg-white border-r border-black/70" style="width:7%" id="depth-track"></div>
+                                <!-- Middle track -->
+                                <div class="relative border-r border-black/70" style="width:34%">
+                                    <div class="absolute inset-0" id="grid-mid"></div>
+                                    <svg class="absolute inset-0 w-full h-full" viewBox="0 0 100 100" preserveAspectRatio="none">
+                                        <path id="m-orig-1" fill="none" stroke="#111" stroke-width="0.9" opacity="0.25" stroke-linecap="round"/>
+                                        <path id="m-orig-2" fill="none" stroke="#111" stroke-width="0.95" opacity="0.25" stroke-linecap="round"/>
+                                        <path id="m-ai-1" fill="none" stroke="#22d3ee" stroke-width="1.1" opacity="0" stroke-linecap="round" style="transition:opacity 1s ease"/>
+                                        <path id="m-ai-2" fill="none" stroke="#22d3ee" stroke-width="1.25" opacity="0" stroke-linecap="round" style="transition:opacity 1.2s ease"/>
+                                    </svg>
+                                </div>
+                                <!-- Right track -->
+                                <div class="relative" style="width:31%">
+                                    <div class="absolute inset-0" id="grid-right"></div>
+                                    <svg class="absolute inset-0 w-full h-full" viewBox="0 0 100 100" preserveAspectRatio="none">
+                                        <path id="r-orig-1" fill="none" stroke="#111" stroke-width="0.95" opacity="0.28" stroke-linecap="round"/>
+                                        <path id="r-ai-1" fill="none" stroke="#22d3ee" stroke-width="1.25" opacity="0" stroke-linecap="round" style="transition:opacity 1.1s ease"/>
+                                    </svg>
+                                </div>
+                            </div>
+
+                            <!-- Loading overlay -->
+                            <div id="ov-loading" class="absolute inset-0 z-20 flex flex-col items-center justify-center" style="background:rgba(2,6,23,0.88);backdrop-filter:blur(2px)">
+                                <div class="demo-spinner mb-4"></div>
+                                <div class="text-sm font-semibold text-cyan-100">Loading scanned log…</div>
+                                <div class="text-xs text-slate-400 mt-1">Preparing image, grid, and scan header</div>
+                            </div>
+                            <!-- Tracing overlay badge -->
+                            <div id="ov-tracing" class="absolute inset-0 z-10 pointer-events-none" style="display:none">
+                                <div class="absolute top-3 right-3 rounded-full border border-cyan-300/50 bg-cyan-300/10 px-3 py-1 text-xs font-medium text-cyan-300">AI trace active</div>
+                                <div id="scan-beam-trace" class="absolute inset-y-0 w-20 pointer-events-none" style="background:linear-gradient(90deg,transparent,rgba(34,211,238,0.12),transparent);filter:blur(16px);"></div>
+                            </div>
+                            <!-- Repair overlay -->
+                            <div id="ov-repair" class="absolute inset-0 z-10 pointer-events-none" style="display:none">
+                                <div class="absolute top-3 right-3 rounded-full border border-amber-300/60 px-3 py-1 text-xs font-semibold text-amber-300" style="background:rgba(252,211,77,0.12)">REPAIR MODE ACTIVE</div>
+                                <div id="scan-beam-repair" class="absolute inset-y-0 w-24 pointer-events-none" style="background:linear-gradient(90deg,transparent,rgba(245,158,11,0.14),transparent);filter:blur(18px);"></div>
+                                <div class="absolute bottom-4 left-4 rounded-xl border border-slate-700 px-4 py-3 font-mono text-[11px] leading-5 text-cyan-100 shadow-2xl" style="background:rgba(2,6,23,0.8)">
+                                    <div>repairing center-track trace conflicts...</div>
+                                    <div>correcting spike continuity...</div>
+                                    <div>verifying depth alignment...</div>
+                                    <div class="text-emerald-300">status: no blocking errors remain</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right panels -->
+                    <div class="flex flex-col gap-4">
+
+                        <!-- Header extraction card -->
+                        <div class="rounded-2xl border border-slate-700 bg-slate-900/80 p-4 shadow-xl backdrop-blur-xl" id="header-card">
+                            <div class="flex items-center gap-2 mb-3">
+                                <i data-lucide="scan-line" class="h-4 w-4 text-cyan-300 flex-shrink-0"></i>
+                                <div>
+                                    <div class="text-sm font-semibold text-white">Header Extraction</div>
+                                    <div class="text-xs text-slate-400">Scanned text mapped into structured fields</div>
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-1 gap-2" id="header-fields"></div>
+                        </div>
+
+                        <!-- Export card -->
+                        <div class="rounded-2xl border border-slate-700 bg-slate-900/80 p-4 shadow-xl backdrop-blur-xl" id="export-card">
+                            <div class="flex items-center gap-2 mb-3">
+                                <i data-lucide="file-down" class="h-4 w-4 text-orange-300 flex-shrink-0"></i>
+                                <div>
+                                    <div class="text-sm font-semibold text-white">Validation & Export</div>
+                                    <div class="text-xs text-slate-400" id="export-subtitle">Waiting for traced curves</div>
+                                </div>
+                            </div>
+                            <div id="export-body" class="rounded-xl border border-slate-700 bg-slate-950/60 p-3 text-xs text-slate-500">
+                                Validation will begin after curve tracing completes.
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+
+                <div class="text-center mt-6">
+                    <button onclick="demoReplay()" class="text-xs text-slate-500 hover:text-slate-300 border border-slate-700 hover:border-slate-500 rounded-full px-4 py-1.5 transition-colors">↺ Replay demo</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <style>
+        .demo-spinner {
+            width: 36px; height: 36px;
+            border-radius: 50%;
+            border: 2px solid rgba(34,211,238,0.2);
+            border-top-color: #22d3ee;
+            animation: demoSpin 1.2s linear infinite;
+        }
+        @keyframes demoSpin { to { transform: rotate(360deg); } }
+        .demo-step { transition: all 0.3s ease; cursor: pointer; border-radius: 0.75rem; border: 1px solid; padding: 0.5rem 0.625rem; text-align: left; font-size: 0.75rem; }
+        .demo-step.active { border-color: rgba(34,211,238,0.8); background: rgba(34,211,238,0.15); color: #fff; }
+        .demo-step.done   { border-color: rgba(34,211,238,0.3); background: rgba(34,211,238,0.06); color: #e2e8f0; }
+        .demo-step.idle   { border-color: rgba(255,255,255,0.1); background: rgba(255,255,255,0.03); color: #64748b; }
+        .demo-hfield { animation: demoFadeUp 0.6s ease forwards; opacity: 0; }
+        @keyframes demoFadeUp { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+        .demo-check { animation: demoFadeUp 0.5s ease forwards; opacity:0; }
+        #log-card { transition: box-shadow 0.5s ease; }
+        #log-card.glow-cyan { box-shadow: 0 0 42px rgba(34,211,238,0.22), 0 0 0 1px rgba(34,211,238,0.3); }
+        #log-card.glow-amber { box-shadow: 0 0 42px rgba(252,211,77,0.18), 0 0 0 1px rgba(252,211,77,0.25); }
+        #header-card { transition: box-shadow 0.5s ease; }
+        #header-card.glow-cyan { box-shadow: 0 0 40px rgba(34,211,238,0.18), 0 0 0 1px rgba(34,211,238,0.35); }
+        #export-card { transition: box-shadow 0.5s ease; }
+        #export-card.glow-amber { box-shadow: 0 0 40px rgba(252,211,77,0.14), 0 0 0 1px rgba(252,211,77,0.3); }
+    </style>
+
+    <script>
+    (function () {
+        /* ---- curve path builder ---- */
+        function buildPath(xBase, amp1, amp2, f1, f2, phase, spikeAmp) {
+            var pts = [];
+            for (var i = 0; i <= 42; i++) {
+                var y = (i / 42) * 100;
+                var wave = Math.sin(i * f1 + phase) * amp1 + Math.sin(i * f2 + phase * 1.3) * amp2;
+                var spike = spikeAmp ? Math.sign(Math.sin(i * 1.35 + phase)) * spikeAmp * (0.45 + 0.55 * Math.sin(i * 0.42 + phase)) : 0;
+                var x = Math.max(4, Math.min(96, xBase + wave + spike));
+                pts.push((i === 0 ? 'M' : 'L') + ' ' + x.toFixed(1) + ' ' + y.toFixed(1));
+            }
+            return pts.join(' ');
+        }
+
+        var leftGreen  = buildPath(58, 12, 8,   0.45, 1.55, 1.3,  6);
+        var leftBlue   = buildPath(63, 8,  4,   0.55, 1.15, 0.2,  0);
+        var midBlue    = buildPath(14, 3.5,1.5, 0.95, 1.85, 0.15, 1.5);
+        var midRed     = buildPath(48, 9,  4,   0.55, 1.1,  0.85, 18);
+        var rightBlack = buildPath(54, 10, 5,   0.72, 1.35, 0.6,  4);
+
+        /* ---- set SVG paths ---- */
+        function sd(id, d) { var el = document.getElementById(id); if (el) el.setAttribute('d', d); }
+        sd('l-orig-1', leftGreen);  sd('l-orig-2', leftBlue);
+        sd('l-ai-1',   leftGreen);  sd('l-ai-2',   leftBlue);
+        sd('m-orig-1', midBlue);    sd('m-orig-2', midRed);
+        sd('m-ai-1',   midBlue);    sd('m-ai-2',   midRed);
+        sd('r-orig-1', rightBlack); sd('r-ai-1',   rightBlack);
+
+        /* ---- draw track grids ---- */
+        function buildTrackGrid(containerId) {
+            var el = document.getElementById(containerId);
+            if (!el) return;
+            var html = '';
+            for (var c = 1; c <= 9; c++)
+                html += '<div style="position:absolute;top:0;bottom:0;left:' + (c*10) + '%;border-right:1px solid rgba(0,0,0,0.3)"></div>';
+            for (var c2 = 1; c2 <= 3; c2++)
+                html += '<div style="position:absolute;top:0;bottom:0;left:' + (c2*25) + '%;border-right:1px solid rgba(0,0,0,0.7)"></div>';
+            for (var r = 1; r <= 47; r++)
+                html += '<div style="position:absolute;left:0;right:0;top:' + ((r/48)*100).toFixed(2) + '%;border-top:1px solid rgba(0,0,0,0.28)"></div>';
+            for (var r2 = 1; r2 <= 11; r2++)
+                html += '<div style="position:absolute;left:0;right:0;top:' + ((r2/12)*100).toFixed(2) + '%;border-top:1px solid rgba(0,0,0,0.75)"></div>';
+            el.innerHTML = html;
+        }
+        buildTrackGrid('grid-left');
+        buildTrackGrid('grid-mid');
+        buildTrackGrid('grid-right');
+
+        /* ---- depth labels ---- */
+        (function() {
+            var el = document.getElementById('depth-track');
+            if (!el) return;
+            var html = '';
+            for (var i = 0; i < 12; i++) {
+                var depth = 2100 + i * 100;
+                var top = ((i + 0.5) / 12 * 100).toFixed(2);
+                html += '<div style="position:absolute;left:50%;top:' + top + '%;transform:translate(-50%,-50%) rotate(90deg);font-size:9px;font-weight:600;color:rgba(0,0,0,0.75);white-space:nowrap">' + depth + '</div>';
+                if (i > 0) html += '<div style="position:absolute;left:0;right:0;top:' + ((i/12)*100).toFixed(2) + '%;border-top:1px solid rgba(0,0,0,0.75)"></div>';
+            }
+            el.innerHTML = html;
+        })();
+
+        /* ---- data ---- */
+        var HEADER_FIELDS = [
+            { label: 'Well Name', value: 'Mesa Ridge Unit #12' },
+            { label: 'Field',     value: 'Red Basin' },
+            { label: 'County',    value: 'Apache' },
+            { label: 'State',     value: 'AZ' },
+            { label: 'Date',      value: '04/18/1978' },
+            { label: 'Scale',     value: '1 in = 100 ft' },
+        ];
+        var CHECKS = [
+            '2 trace gaps repaired',
+            '1 overlap normalized',
+            'Depth range aligned',
+            'Scale and units confirmed',
+        ];
+        var STEP_LABELS = [
+            'Scanned log loaded',
+            'Header text mapped into fields',
+            'Trace curves with AI',
+            'Validate and correct errors',
+            'Export LAS file',
+        ];
+
+        var stage = -1;
+        var timers = [];
+        var beamTimers = [];
+
+        function $(id) { return document.getElementById(id); }
+
+        /* ---- step buttons ---- */
+        (function() {
+            var c = $('demo-steps');
+            if (!c) return;
+            STEP_LABELS.forEach(function(label, i) {
+                var d = document.createElement('div');
+                d.className = 'demo-step idle';
+                d.id = 'dsb-' + i;
+                d.innerHTML = '<div style="font-size:9px;text-transform:uppercase;letter-spacing:0.12em;margin-bottom:2px;color:#94a3b8">Step ' + (i+1) + '</div><div>' + label + '</div>';
+                d.onclick = function() { showStep(i); };
+                c.appendChild(d);
+            });
+        })();
+
+        function updateSteps() {
+            STEP_LABELS.forEach(function(_, i) {
+                var b = $('dsb-' + i);
+                if (!b) return;
+                b.className = 'demo-step ' + (i === stage ? 'active' : i < stage ? 'done' : 'idle');
+            });
+        }
+
+        function setAICurves(on) {
+            ['l-ai-1','l-ai-2','m-ai-1','m-ai-2','r-ai-1'].forEach(function(id) {
+                var el = $(id); if (el) el.style.opacity = on ? '0.95' : '0';
+            });
+        }
+
+        function renderHeader(visible) {
+            var c = $('header-fields');
+            if (!c) return;
+            c.innerHTML = '';
+            HEADER_FIELDS.forEach(function(f, i) {
+                var d = document.createElement('div');
+                d.className = 'demo-hfield rounded-xl border border-slate-700 bg-slate-950/60 px-3 py-2.5';
+                d.style.animationDelay = visible ? (i * 0.2) + 's' : '0s';
+                d.innerHTML = '<div style="font-size:9px;text-transform:uppercase;letter-spacing:0.16em;color:#64748b">' + f.label + '</div>'
+                    + '<div style="font-size:12px;color:' + (visible ? '#fff' : '#64748b') + ';margin-top:2px">' + (visible ? f.value : '—') + '</div>';
+                if (!visible) d.style.opacity = '0.35';
+                c.appendChild(d);
+            });
+        }
+
+        function renderExport(s) {
+            var sub = $('export-subtitle'), body = $('export-body'), card = $('export-card');
+            card.classList.remove('glow-amber');
+            if (s < 3) {
+                sub.textContent = 'Waiting for traced curves';
+                body.innerHTML = '<span class="text-slate-500">Validation will begin after curve tracing completes.</span>';
+            } else if (s === 3) {
+                card.classList.add('glow-amber');
+                sub.textContent = 'Checking digitized log before export';
+                body.innerHTML = CHECKS.map(function(c, i) {
+                    return '<div class="demo-check flex items-center gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-2 py-1.5 mb-1.5 text-emerald-200" style="animation-delay:' + (i*0.45) + 's">'
+                        + '<i data-lucide="check-circle-2" class="h-3 w-3 flex-shrink-0"></i>' + c + '</div>';
+                }).join('') + '<div class="text-amber-200 border border-amber-400/20 bg-amber-400/10 rounded-lg px-2 py-1.5 mt-1">No blocking errors remain. Ready for LAS packaging.</div>';
+                lucide.createIcons();
+            } else {
+                card.classList.add('glow-amber');
+                sub.textContent = 'LAS export ready for download';
+                body.innerHTML = '<div class="text-slate-300 mb-2">mesa_ridge_unit_12.las <span class="text-slate-500 ml-1">LAS</span></div>'
+                    + '<div class="h-1.5 rounded-full bg-slate-800 overflow-hidden mb-2"><div id="exp-bar" class="h-full rounded-full" style="width:0%;transition:width 2.8s ease;background:linear-gradient(90deg,#22d3ee,#fb923c)"></div></div>'
+                    + '<div class="flex items-center gap-1.5 text-emerald-300 mt-2"><i data-lucide="check-circle-2" class="h-3 w-3"></i> LAS file exported successfully</div>';
+                lucide.createIcons();
+                setTimeout(function() { var b = $('exp-bar'); if (b) b.style.width = '100%'; }, 60);
+            }
+        }
+
+        function animateBeam(elId, duration) {
+            var el = $(elId);
+            if (!el) return;
+            var start = null;
+            function step(ts) {
+                if (!start) start = ts;
+                var pct = ((ts - start) % (duration * 1000)) / (duration * 1000);
+                el.style.left = (pct * 120 - 10) + '%';
+                beamTimers.push(requestAnimationFrame(step));
+            }
+            beamTimers.push(requestAnimationFrame(step));
+        }
+
+        function stopBeams() {
+            beamTimers.forEach(cancelAnimationFrame);
+            beamTimers = [];
+        }
+
+        function applyStage(s) {
+            stage = s;
+            updateSteps();
+            stopBeams();
+
+            /* log card glow */
+            var lc = $('log-card');
+            lc.classList.remove('glow-cyan','glow-amber');
+            if (s === 0 || s === 2) lc.classList.add('glow-cyan');
+            if (s === 3)            lc.classList.add('glow-amber');
+
+            /* header card glow */
+            var hc = $('header-card');
+            hc.classList.remove('glow-cyan');
+            if (s === 1) hc.classList.add('glow-cyan');
+
+            /* log header opacity */
+            ['lh-name','lh-field','lh-scale'].forEach(function(id) {
+                var el = $(id); if (el) el.style.opacity = s >= 1 ? '1' : '0.6';
+            });
+
+            /* overlays */
+            $('ov-loading').style.display = s === 0 ? 'flex' : 'none';
+            $('ov-tracing').style.display  = s === 2 ? 'block' : 'none';
+            $('ov-repair').style.display   = s === 3 ? 'block' : 'none';
+
+            /* scan beams */
+            if (s === 2) animateBeam('scan-beam-trace',  3.8);
+            if (s === 3) animateBeam('scan-beam-repair', 4.5);
+
+            setAICurves(s >= 2);
+            renderHeader(s >= 1);
+            renderExport(s);
+        }
+
+        window.showStep = function(i) {
+            timers.forEach(clearTimeout); timers = [];
+            applyStage(i);
+        };
+
+        window.demoReplay = function() {
+            timers.forEach(clearTimeout); timers = [];
+            applyStage(0);
+            timers = [
+                setTimeout(function() { applyStage(1); }, 3000),
+                setTimeout(function() { applyStage(2); }, 9800),
+                setTimeout(function() { applyStage(3); }, 15400),
+                setTimeout(function() { applyStage(4); }, 24600),
+            ];
+        };
+
+        renderHeader(false);
+        renderExport(0);
+        demoReplay();
+    })();
+    </script>
+
     <!-- Workflow Section -->
     <div id="workflow" class="scroll-mt-24 py-16 bg-slate-800 overflow-hidden lg:py-24">
         <div class="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
