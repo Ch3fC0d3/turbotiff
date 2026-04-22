@@ -4915,6 +4915,96 @@ def refine_to_stroke_centerline(mask, xs, threshold_ratio=0.5, window_size=None)
     return xs_ref
 
 
+def guard_trace_outliers_rolling_median(xs, window=21, max_deviation=45.0):
+    """NaN out trace points whose horizontal position is absurdly far from a
+    rolling median, then linearly interpolate across them.
+
+    This targets the "left-shooting spike" failure mode where the DP tracer
+    briefly jumps to a grid rail or noise column far from the real curve and
+    draws a visible horizontal line to the chart edge. The rolling median is
+    robust to a few bad points, so genuine excursions (which move gradually
+    over multiple rows) are preserved while isolated single-row jumps get
+    discarded.
+
+    Args:
+        xs: 1D array of x positions (may contain NaN).
+        window: Rolling window length (odd). Larger = smoother reference.
+        max_deviation: Maximum allowed |xs - rolling_median| in pixels.
+
+    Returns:
+        xs with outliers interpolated away.
+    """
+    if xs is None or not hasattr(xs, "size") or xs.size < 5:
+        return xs
+    try:
+        s = pd.Series(xs.astype(np.float32))
+    except Exception:
+        return xs
+    win = max(5, int(window) | 1)  # force odd
+    ref = s.rolling(win, min_periods=3, center=True).median()
+    valid = s.notna() & ref.notna()
+    if not valid.any():
+        return xs
+    deviation = (s - ref).abs()
+    outliers = valid & (deviation > float(max_deviation))
+    if not outliers.any():
+        return xs
+    s[outliers] = np.nan
+    s = s.interpolate(method="linear", limit_direction="both", limit=50)
+    return s.to_numpy(dtype=np.float32)
+
+
+def snap_black_trace_to_wide_darkest(roi_bgr, xs, search_radius=55, min_darkness_gain=0.12, neighbor_consistency=25.0):
+    """For each row, search a wide window around the current trace point for
+    a darker pixel and snap to it if it is clearly darker AND the shift stays
+    consistent with the local neighbors.
+
+    This helps catch missed excursions where the DP tracer straight-lines
+    across a real black peak because the direct path was locally cheaper.
+    The neighbor-consistency check prevents this from amplifying noise.
+    """
+    if roi_bgr is None or xs is None or not hasattr(xs, "size") or xs.size < 3:
+        return xs
+    try:
+        gray = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
+    except Exception:
+        return xs
+    h, w = gray.shape[:2]
+    if h < 3 or w < 3:
+        return xs
+
+    xs_out = xs.copy().astype(np.float32)
+    dark = (255.0 - gray.astype(np.float32)) / 255.0
+    r = max(6, int(search_radius))
+    neighbor_win = 5
+    for y in range(h):
+        x_curr = xs_out[y]
+        if not np.isfinite(x_curr):
+            continue
+        xi = int(round(x_curr))
+        x0 = max(0, xi - r)
+        x1 = min(w, xi + r + 1)
+        if x1 - x0 < 3:
+            continue
+        row = dark[y, x0:x1]
+        local_peak = int(np.argmax(row))
+        x_peak = x0 + local_peak
+        gain = float(row[local_peak]) - float(dark[y, xi])
+        if gain < float(min_darkness_gain):
+            continue
+        # Consistency: new point must not be far from neighbor median
+        lo = max(0, y - neighbor_win)
+        hi = min(h, y + neighbor_win + 1)
+        neighbors = xs_out[lo:hi]
+        finite = neighbors[np.isfinite(neighbors)]
+        if finite.size >= 3:
+            med = float(np.median(finite))
+            if abs(x_peak - med) > float(neighbor_consistency):
+                continue
+        xs_out[y] = float(x_peak)
+    return xs_out
+
+
 def refine_black_trace_to_dark_run_center(
     roi_bgr,
     xs,
@@ -9709,6 +9799,37 @@ def digitize():
                     hot_side=hot_side,
                     curve_type=curve_type,
                 )
+            except Exception:
+                pass
+
+            # Guard against spurious "left-shooting" / "right-shooting" jumps
+            # where DP briefly locked onto a grid rail or noise column and
+            # drew a horizontal line to the chart edge. Rolling-median
+            # deviation > ~45 px is almost never a real excursion on a log
+            # track because legitimate peaks are curved, not instantaneous.
+            try:
+                xs = guard_trace_outliers_rolling_median(xs, window=21, max_deviation=45.0)
+            except Exception:
+                pass
+
+            # Try to catch missed real excursions by searching a wider window
+            # for the darkest pixel and snapping to it when it is clearly
+            # darker than the current trace position.
+            try:
+                xs = snap_black_trace_to_wide_darkest(
+                    roi, xs,
+                    search_radius=55,
+                    min_darkness_gain=0.12,
+                    neighbor_consistency=25.0,
+                )
+            except Exception:
+                pass
+
+            # Second outlier pass: the wide-peak snap can occasionally latch
+            # onto a far-off rail if darkness happens to be maxed out there.
+            # Rerun the median guard with a tighter window to clean those up.
+            try:
+                xs = guard_trace_outliers_rolling_median(xs, window=15, max_deviation=35.0)
             except Exception:
                 pass
 
