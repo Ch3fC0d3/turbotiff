@@ -9850,9 +9850,9 @@ def digitize():
             try:
                 xs = snap_black_trace_to_wide_darkest(
                     roi, xs,
-                    search_radius=55,
-                    min_darkness_gain=0.12,
-                    neighbor_consistency=8.0,
+                    search_radius=20,
+                    min_darkness_gain=0.25,
+                    neighbor_consistency=6.0,
                 )
             except Exception:
                 pass
@@ -9869,6 +9869,20 @@ def digitize():
             # Real geology moves gradually. Cap |dx/dy| to ~6 px/row.
             try:
                 xs = guard_trace_velocity(xs, max_dx=6.0)
+            except Exception:
+                pass
+
+            # Median filter: remove 1-3 row horizontal glitches that survive
+            # the outlier guards. The colored pipeline already does this.
+            try:
+                from scipy.signal import medfilt
+                xs_filled = xs.copy()
+                nan_mask = ~np.isfinite(xs_filled)
+                if nan_mask.any() and np.isfinite(xs_filled).any():
+                    xs_filled[nan_mask] = np.nanmedian(xs_filled)
+                xs_smooth = medfilt(xs_filled, kernel_size=3)
+                valid_mask = np.isfinite(xs)
+                xs[valid_mask] = xs_smooth[valid_mask]
             except Exception:
                 pass
 
