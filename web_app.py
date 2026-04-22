@@ -4959,9 +4959,9 @@ def snap_black_trace_to_wide_darkest(roi_bgr, xs, search_radius=55, min_darkness
     a darker pixel and snap to it if it is clearly darker AND the shift stays
     consistent with the local neighbors.
 
-    This helps catch missed excursions where the DP tracer straight-lines
-    across a real black peak because the direct path was locally cheaper.
-    The neighbor-consistency check prevents this from amplifying noise.
+    Vectorized implementation: uses a (h, 2r+1) gather so we avoid a Python
+    loop over every scan line, which previously caused Railway worker
+    timeouts (503) on tall TIFFs.
     """
     if roi_bgr is None or xs is None or not hasattr(xs, "size") or xs.size < 3:
         return xs
@@ -4970,38 +4970,47 @@ def snap_black_trace_to_wide_darkest(roi_bgr, xs, search_radius=55, min_darkness
     except Exception:
         return xs
     h, w = gray.shape[:2]
-    if h < 3 or w < 3:
+    if h < 3 or w < 3 or xs.size != h:
         return xs
 
     xs_out = xs.copy().astype(np.float32)
     dark = (255.0 - gray.astype(np.float32)) / 255.0
     r = max(6, int(search_radius))
-    neighbor_win = 5
-    for y in range(h):
-        x_curr = xs_out[y]
-        if not np.isfinite(x_curr):
-            continue
-        xi = int(round(x_curr))
-        x0 = max(0, xi - r)
-        x1 = min(w, xi + r + 1)
-        if x1 - x0 < 3:
-            continue
-        row = dark[y, x0:x1]
-        local_peak = int(np.argmax(row))
-        x_peak = x0 + local_peak
-        gain = float(row[local_peak]) - float(dark[y, xi])
-        if gain < float(min_darkness_gain):
-            continue
-        # Consistency: new point must not be far from neighbor median
-        lo = max(0, y - neighbor_win)
-        hi = min(h, y + neighbor_win + 1)
-        neighbors = xs_out[lo:hi]
-        finite = neighbors[np.isfinite(neighbors)]
-        if finite.size >= 3:
-            med = float(np.median(finite))
-            if abs(x_peak - med) > float(neighbor_consistency):
-                continue
-        xs_out[y] = float(x_peak)
+
+    xi = np.round(xs_out).astype(np.int32)
+    finite_mask = np.isfinite(xs_out)
+    xi = np.where(finite_mask, xi, 0)
+    xi = np.clip(xi, 0, w - 1)
+
+    # Build a (h, 2r+1) column index matrix; out-of-bounds clamped to edge.
+    offsets = np.arange(-r, r + 1, dtype=np.int32)
+    cols = np.clip(xi[:, None] + offsets[None, :], 0, w - 1)  # (h, 2r+1)
+    rows = np.arange(h, dtype=np.int32)[:, None]
+    windows = dark[rows, cols]  # (h, 2r+1) darkness values
+
+    # Mask columns that were clamped (to avoid picking the edge as a "peak")
+    raw_cols = xi[:, None] + offsets[None, :]
+    in_bounds = (raw_cols >= 0) & (raw_cols < w)
+    windows = np.where(in_bounds, windows, -1.0)
+
+    peak_idx = np.argmax(windows, axis=1)  # (h,)
+    peak_col = xi + offsets[peak_idx]
+    peak_val = windows[rows[:, 0], peak_idx]
+    center_val = dark[rows[:, 0], xi]
+    gain = peak_val - center_val
+
+    # Neighbor consistency via rolling median (window ~11 rows)
+    try:
+        s_med = pd.Series(xs_out).rolling(11, min_periods=3, center=True).median().to_numpy()
+    except Exception:
+        s_med = xs_out.copy()
+
+    accept = (
+        finite_mask
+        & (gain >= float(min_darkness_gain))
+        & (np.abs(peak_col.astype(np.float32) - s_med) <= float(neighbor_consistency))
+    )
+    xs_out[accept] = peak_col[accept].astype(np.float32)
     return xs_out
 
 
