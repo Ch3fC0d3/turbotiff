@@ -6670,7 +6670,16 @@
                     event.preventDefault();
                     return;
                 }
-                if (normalizeCurveKey(clickedTrack.id) !== normalizeCurveKey(editCurveId)) {
+                // In edit mode, getTrackUnderImageX already restricts to the
+                // track matched to editCurveId (by id OR name OR displayName),
+                // so a non-null clickedTrack IS the selected curve. Compare
+                // against the same set of identifiers to avoid a spurious
+                // "locked to GR" warning when the track's internal id differs
+                // from its display mnemonic (e.g. id="curve_0" name="GR").
+                const target = normalizeCurveKey(editCurveId);
+                const trackIds = [clickedTrack.id, clickedTrack.name, clickedTrack.displayName];
+                const matchesSelected = trackIds.some(v => normalizeCurveKey(v) === target);
+                if (!matchesSelected) {
                     showStatus(`Edit mode is locked to ${editCurveId}. Change the curve in the dropdown first.`, 'info');
                     event.preventDefault();
                     return;
