@@ -4954,6 +4954,29 @@ def guard_trace_outliers_rolling_median(xs, window=21, max_deviation=45.0):
     return s.to_numpy(dtype=np.float32)
 
 
+def guard_trace_velocity(xs, max_dx=6.0):
+    """Cap row-to-row horizontal displacement and interpolate across spikes.
+
+    Micro-crests created by snap_black_trace_to_wide_darkest are typically
+    1-3 rows tall but jump 10-20 px horizontally. Real geological excursions
+    move gradually (e.g. 10 px over 5 rows = 2 px/row). Capping |dx/dy|
+    removes the micro-crests without clipping legitimate peaks.
+    """
+    if xs is None or not hasattr(xs, "size") or xs.size < 5:
+        return xs
+    try:
+        s = pd.Series(xs.astype(np.float32))
+    except Exception:
+        return xs
+    dx = s.diff().abs()
+    spikes = dx > float(max_dx)
+    if not spikes.any():
+        return xs
+    s[spikes] = np.nan
+    s = s.interpolate(method="linear", limit_direction="both", limit=10)
+    return s.to_numpy(dtype=np.float32)
+
+
 def snap_black_trace_to_wide_darkest(roi_bgr, xs, search_radius=55, min_darkness_gain=0.12, neighbor_consistency=25.0):
     """For each row, search a wide window around the current trace point for
     a darker pixel and snap to it if it is clearly darker AND the shift stays
@@ -9829,7 +9852,7 @@ def digitize():
                     roi, xs,
                     search_radius=55,
                     min_darkness_gain=0.12,
-                    neighbor_consistency=12.0,
+                    neighbor_consistency=8.0,
                 )
             except Exception:
                 pass
@@ -9839,6 +9862,13 @@ def digitize():
             # Rerun the median guard with a tighter window to clean those up.
             try:
                 xs = guard_trace_outliers_rolling_median(xs, window=15, max_deviation=15.0)
+            except Exception:
+                pass
+
+            # Velocity guard: micro-crests jump 10-20 px in 1-2 rows.
+            # Real geology moves gradually. Cap |dx/dy| to ~6 px/row.
+            try:
+                xs = guard_trace_velocity(xs, max_dx=6.0)
             except Exception:
                 pass
 
