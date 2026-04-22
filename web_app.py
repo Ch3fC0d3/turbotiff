@@ -8855,11 +8855,19 @@ def save_log():
         cropped_image_path = data.get('cropped_image_path', None)
 
         with auth_billing.get_db(config.AUTH_DB_PATH) as conn:
+            # If admin override user_id is 0, we must ensure it exists in the DB to avoid FK constraint errors.
+            if user['id'] == 0:
+                try:
+                    conn.execute("INSERT OR IGNORE INTO users (id, email, password_hash, full_name, company_name, contact_name, domain, phone, verification_token, is_verified, subscription_status, plan_code, stripe_customer_id, stripe_subscription_id, is_admin, created_at, updated_at, is_banned, log_count) VALUES (0, 'admin@tiflas.com', '', 'Admin User', '', '', '', '', '', 1, 'active', 'lifetime_comped', '', '', 1, ?, ?, 0, 0)", (datetime.now(timezone.utc).isoformat(), datetime.now(timezone.utc).isoformat()))
+                except Exception as e:
+                    print("Admin user init error:", e)
+
             conn.execute("""
-                INSERT INTO user_logs (id, user_id, name, curve_count, depth_start, depth_end, depth_unit, las_content, original_image_path, cropped_image_path, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO user_logs (id, user_id, name, curve_count, depth_start, depth_end, depth_unit, las_content, original_image_path, cropped_image_path, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 log_id, user['id'], name, curve_count, depth_start, depth_end, depth_unit, las_content, original_image_path, cropped_image_path,
+                datetime.now(timezone.utc).isoformat(),
                 datetime.now(timezone.utc).isoformat()
             ))
             conn.commit()

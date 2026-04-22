@@ -8,16 +8,18 @@
     <link rel="stylesheet" href="/static/home_backdrop.css">
 </head>
 <body class="site-backdrop min-h-screen bg-slate-950 text-slate-100">
-    <div class="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
-        <div class="mb-6 flex items-center justify-between gap-4">
+    <div class="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+        <div class="mb-6 flex flex-col sm:flex-row items-start sm:items-center justify-between">
             <div>
-                <h1 class="text-2xl font-bold text-amber-500">Admin Panel</h1>
-                <p class="mt-1 text-sm text-slate-300">
-                    Manage users and view digitized logs across the platform.
-                </p>
+                <a href="/">
+                    <img src="/static/images/logo.svg" alt="TifLAS Logo" class="h-10 w-auto mb-4">
+                </a>
+                <h1 class="text-2xl font-bold">Admin Panel</h1>
+                <p class="mt-1 text-sm text-slate-300">Manage users and global settings.</p>
             </div>
             <div class="flex gap-2">
                 <a href="/dashboard" class="rounded-md border border-slate-700 px-3 py-2 text-sm hover:bg-slate-800">Back to Dashboard</a>
+                <a href="/workspace" class="rounded-md border border-slate-700 px-3 py-2 text-sm hover:bg-slate-800">Work Area</a>
                 <a href="/logout" class="rounded-md border border-slate-700 px-3 py-2 text-sm hover:bg-slate-800">Logout</a>
             </div>
         </div>
