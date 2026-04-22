@@ -5700,7 +5700,7 @@
             // sigma in depth units (ft). Wider when smoothMode is on.
             const sigmaDepth = smoothMode ? Math.max(5.0, localSpacing * 6.0) : Math.max(1.0, localSpacing * 2.0);
             // Reduce Y motion when smoothing is enabled to avoid stair-steps; keep X dominant.
-            const yWeight = smoothMode ? 0.2 : 1.0;
+            const yWeight = smoothMode ? 0.8 : 1.0;
 
             const depthCfg = lastDepthConfig || getDepthConfigFromInputs();
 
@@ -6041,13 +6041,28 @@
             // Get the image data
             const img = document.getElementById('imagePreview');
             if (!img || !img.src) {
-                // Fallback to simple color snap
-                const snapped = snapToCurveColor(currentX, currentY, targetTrack.leftX, targetTrack.rightX, { mode: trackModeForSnap });
-                if (snapped.x !== currentX) {
-                    pts[pIdx][0] = snapped.x;
-                    const newVal = pixelToTrackValue(snapped.x, targetTrack);
-                    if (Number.isFinite(newVal) && state.depthIndex >= 0 && state.depthIndex < entry.values.length) {
-                        entry.values[state.depthIndex] = newVal;
+                // Fallback to simple color snap for all dragged neighbors
+                const indicesToSnap = new Set([pIdx]);
+                if (state.neighbors) {
+                    state.neighbors.forEach(n => {
+                        const localPIdx = findPointIndexByDepthIndex(pts, n.depthIndex);
+                        if (localPIdx >= 0) indicesToSnap.add(localPIdx);
+                    });
+                }
+                
+                for (const localIdx of indicesToSnap) {
+                    const snapX = pts[localIdx][0];
+                    const snapY = pts[localIdx][1];
+                    const snapDIdx = pts[localIdx][2];
+                    if (isDepthIndexPinned(state.curveId, snapDIdx)) continue;
+                    
+                    const snapped = snapToCurveColor(snapX, snapY, targetTrack.leftX, targetTrack.rightX, { mode: trackModeForSnap });
+                    if (snapped.x !== snapX) {
+                        pts[localIdx][0] = snapped.x;
+                        const newVal = pixelToTrackValue(snapped.x, targetTrack);
+                        if (Number.isFinite(newVal) && snapDIdx >= 0 && snapDIdx < entry.values.length) {
+                            entry.values[snapDIdx] = newVal;
+                        }
                     }
                 }
                 return;
