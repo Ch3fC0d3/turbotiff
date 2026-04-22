@@ -9817,7 +9817,7 @@ def digitize():
             # deviation > ~45 px is almost never a real excursion on a log
             # track because legitimate peaks are curved, not instantaneous.
             try:
-                xs = guard_trace_outliers_rolling_median(xs, window=21, max_deviation=45.0)
+                xs = guard_trace_outliers_rolling_median(xs, window=21, max_deviation=20.0)
             except Exception:
                 pass
 
@@ -9829,7 +9829,7 @@ def digitize():
                     roi, xs,
                     search_radius=55,
                     min_darkness_gain=0.12,
-                    neighbor_consistency=25.0,
+                    neighbor_consistency=12.0,
                 )
             except Exception:
                 pass
@@ -9838,7 +9838,7 @@ def digitize():
             # onto a far-off rail if darkness happens to be maxed out there.
             # Rerun the median guard with a tighter window to clean those up.
             try:
-                xs = guard_trace_outliers_rolling_median(xs, window=15, max_deviation=35.0)
+                xs = guard_trace_outliers_rolling_median(xs, window=15, max_deviation=15.0)
             except Exception:
                 pass
 
