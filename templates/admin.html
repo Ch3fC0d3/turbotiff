@@ -140,15 +140,22 @@
                                 {{ job.status }}
                             </span>
                         </td>
-                        <td class="px-4 py-3">
-                            {% if job.status == 'payment_method_saved' and job.stripe_payment_method_id %}
-                                <button onclick="chargeManagedJob('{{ job.id }}', '{{ job.estimated_amount }}')" class="rounded bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-emerald-500 transition-colors">
-                                    Charge & Complete
-                                </button>
-                            {% elif job.status == 'paid' %}
-                                <span class="text-xs text-indigo-400 font-medium">Charged: ${{ "%.2f"|format(job.actual_amount or 0) }}</span>
-                            {% else %}
-                                <span class="text-xs text-slate-500">Pending Setup</span>
+                        <td class="px-4 py-3 flex items-center gap-2">
+                            <div>
+                                {% if job.status == 'payment_method_saved' and job.stripe_payment_method_id %}
+                                    <button onclick="chargeManagedJob('{{ job.id }}', '{{ job.estimated_amount }}')" class="rounded bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-emerald-500 transition-colors">
+                                        Charge & Complete
+                                    </button>
+                                {% elif job.status == 'paid' %}
+                                    <span class="text-xs text-indigo-400 font-medium">Charged: ${{ "%.2f"|format(job.actual_amount or 0) }}</span>
+                                {% else %}
+                                    <span class="text-xs text-slate-500">Pending Setup</span>
+                                {% endif %}
+                            </div>
+                            {% if job.notes and 'Files: [' in job.notes %}
+                            <button onclick="downloadJobFiles('{{ job.id }}')" class="rounded bg-blue-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-blue-500 transition-colors" title="Download Uploaded Images">
+                                Files
+                            </button>
                             {% endif %}
                         </td>
                     </tr>
@@ -412,6 +419,32 @@
                 }
             } catch (e) {
                 alert('An error occurred: ' + e);
+            }
+        }
+        
+        async function downloadJobFiles(jobId) {
+            try {
+                const res = await fetch(`/api/admin/managed-jobs/${jobId}/files`);
+                const data = await res.json();
+                if (data.success) {
+                    if (data.urls.length === 0) {
+                        alert("No files attached to this job.");
+                        return;
+                    }
+                    data.urls.forEach(file => {
+                        const a = document.createElement('a');
+                        a.href = file.url;
+                        a.download = file.filename;
+                        a.target = "_blank";
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                    });
+                } else {
+                    alert('Failed to get files: ' + data.error);
+                }
+            } catch (e) {
+                alert('Request failed: ' + e);
             }
         }
     </script>

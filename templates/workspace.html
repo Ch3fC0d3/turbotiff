@@ -5728,6 +5728,7 @@
                     weight = Math.exp(-(depthDelta * depthDelta) / (2 * sigmaDepth * sigmaDepth));
                     if (weight < 0.01) return;
                 }
+                }
 
                 let newX;
                 if (n.pointIndex === centerIndex) {

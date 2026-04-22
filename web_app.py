@@ -8146,19 +8146,36 @@ def managed_job_success():
                 ))
                 job = conn.execute("SELECT * FROM managed_jobs WHERE id = ?", (job_id,)).fetchone()
             
-            if job:
+            if job and config.MAIL_FROM:
+                file_keys = []
                 try:
-                    mailer.send_managed_job_admin(
-                        "gabriel@pellegrini.us",
-                        job.get("contact_name") or "Unknown",
-                        job.get("company_name") or "Unknown",
-                        job.get("email") or "Unknown",
-                        job_id,
-                        job.get("well_name") or "Unknown",
-                        notes=job.get("notes") or "",
-                    )
-                except Exception as mail_err:
-                    print(f"Failed to send managed job notification to admin: {mail_err}")
+                    notes = job['notes']
+                    if notes and "\n\nFiles: " in notes:
+                        files_str = notes.split("\n\nFiles: ")[-1]
+                        file_keys = json.loads(files_str)
+                except Exception as e:
+                    print(f"Error parsing files: {e}")
+                
+                file_urls = []
+                if file_keys and VISION_API_AVAILABLE:
+                    try:
+                        global credentials
+                        if 'credentials' in globals() and credentials:
+                            storage_client = storage.Client(credentials=credentials)
+                        else:
+                            storage_client = storage.Client()
+                        bucket = storage_client.bucket(config.GCS_UPLOADS_BUCKET)
+                        for fk in file_keys:
+                            blob = bucket.blob(fk)
+                            url = blob.generate_signed_url(version="v4", expiration=timedelta(days=7), method="GET")
+                            file_urls.append({'key': fk, 'url': url})
+                    except Exception as e:
+                        print(f"Error generating signed urls: {e}")
+                
+                try:
+                    mailer.send_managed_job_admin(config.MAIL_FROM, dict(job), file_urls)
+                except Exception as e:
+                    print(f"Failed to send admin notification: {e}")
     except Exception as e:
         print(f"Error completing managed job checkout: {e}")
         flash('Error verifying your payment method.', 'error')
@@ -8514,6 +8531,45 @@ def admin():
     impersonating_id = session.get('impersonate_user_id')
     
     return render_template('admin.html', user=user, users=users, logs=logs, managed_jobs=managed_jobs, stats=stats, settings=settings, impersonating_id=impersonating_id)
+
+
+@app.route('/api/admin/managed-jobs/<job_id>/files', methods=['GET'])
+@login_required()
+def admin_managed_job_files(job_id):
+    if not session.get('is_admin'):
+        return jsonify({'success': False, 'error': 'Unauthorized'}), 403
+        
+    with auth_billing.get_db(config.AUTH_DB_PATH) as conn:
+        job = conn.execute("SELECT * FROM managed_jobs WHERE id = ?", (job_id,)).fetchone()
+        
+    if not job:
+        return jsonify({'success': False, 'error': 'Job not found'}), 404
+        
+    try:
+        notes = job['notes']
+        if not notes or "\n\nFiles: " not in notes:
+            return jsonify({'success': True, 'urls': []})
+            
+        files_str = notes.split("\n\nFiles: ")[-1]
+        file_keys = json.loads(files_str)
+        
+        urls = []
+        if file_keys and VISION_API_AVAILABLE:
+            global credentials
+            if 'credentials' in globals() and credentials:
+                storage_client = storage.Client(credentials=credentials)
+            else:
+                storage_client = storage.Client()
+            bucket = storage_client.bucket(config.GCS_UPLOADS_BUCKET)
+            for fk in file_keys:
+                blob = bucket.blob(fk)
+                url = blob.generate_signed_url(version="v4", expiration=timedelta(hours=1), method="GET")
+                filename = fk.split("/")[-1]
+                urls.append({'filename': filename, 'url': url})
+                
+        return jsonify({'success': True, 'urls': urls})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/admin/managed-jobs/charge', methods=['POST'])

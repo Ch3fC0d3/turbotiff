@@ -210,3 +210,52 @@ def send_new_signup_admin(admin_to: str, new_user_email: str, full_name: str, co
     </div>
     """
     return send_email(admin_to, subject, html)
+
+
+def send_managed_job_admin(admin_to: str, job_info: dict, file_urls: list) -> bool:
+    subject = f"New Managed Job: {job_info.get('company_name', 'Unknown')} - {job_info.get('well_name', 'Well')}"
+    
+    links_html = ""
+    for item in file_urls:
+        fk = item['key']
+        url = item['url']
+        filename = fk.split("/")[-1]
+        links_html += f'<li><a href="{url}">{filename}</a></li>'
+        
+    if not links_html:
+        links_html = "<li>No files attached.</li>"
+        
+    estimated_amount = job_info.get('estimated_amount')
+    estimated_amount_str = f"${float(estimated_amount):.2f}" if estimated_amount else "$0.00"
+
+    html = f"""
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
+      <div style="background:#0f172a;padding:24px;text-align:center;">
+        <img src="https://tiflas.com/static/images/logo.svg" alt="TifLAS" style="height:60px;">
+      </div>
+      <div style="padding:32px;background:#f8fafc;">
+        <h2 style="color:#0f172a;">New Managed Job Submitted</h2>
+        <table style="width:100%;border-collapse:collapse;">
+          <tr><td style="padding:8px;color:#6b7280;">Company</td><td style="padding:8px;font-weight:bold;">{job_info.get('company_name', 'N/A')}</td></tr>
+          <tr style="background:#f1f5f9;"><td style="padding:8px;color:#6b7280;">Contact</td><td style="padding:8px;">{job_info.get('contact_name', 'N/A')}</td></tr>
+          <tr><td style="padding:8px;color:#6b7280;">Email</td><td style="padding:8px;">{job_info.get('email', 'N/A')}</td></tr>
+          <tr style="background:#f1f5f9;"><td style="padding:8px;color:#6b7280;">Project</td><td style="padding:8px;">{job_info.get('project_name', 'N/A')}</td></tr>
+          <tr><td style="padding:8px;color:#6b7280;">Well Name</td><td style="padding:8px;">{job_info.get('well_name', 'N/A')}</td></tr>
+          <tr style="background:#f1f5f9;"><td style="padding:8px;color:#6b7280;">Est. Amount</td><td style="padding:8px;">{estimated_amount_str}</td></tr>
+        </table>
+        
+        <h3 style="margin-top:24px;color:#0f172a;">Uploaded Files</h3>
+        <ul>
+            {links_html}
+        </ul>
+        
+        <p style="margin-top:16px;color:#374151;"><strong>Notes:</strong><br>{job_info.get('notes', 'None').split('\n\nFiles:')[0]}</p>
+        
+        <a href="https://tiflas.com/admin"
+           style="display:inline-block;margin-top:16px;padding:12px 28px;background:#0f172a;color:#fff;text-decoration:none;border-radius:6px;font-weight:bold;">
+          View Admin Panel
+        </a>
+      </div>
+    </div>
+    """
+    return send_email(admin_to, subject, html)
