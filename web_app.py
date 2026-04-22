@@ -2193,13 +2193,6 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
     kernel = np.ones((3, 3), np.uint8)
     color_mask = cv2.morphologyEx(color_mask, cv2.MORPH_OPEN, kernel, 1)
     color_mask = cv2.morphologyEx(color_mask, cv2.MORPH_CLOSE, kernel, 1)
-
-    # For colored modes, slightly "enlarge" (dilate) the mask vertically and horizontally
-    # to bridge small gaps and prevent the DP tracer from jumping sideways to noise.
-    if mode in colored_modes:
-        dilate_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 5))
-        color_mask = cv2.dilate(color_mask, dilate_kernel, iterations=1)
-
     color_score = color_mask.astype(np.float32) / 255.0
 
     # Compute 1-pixel skeleton for black mode using ximgproc thinning.
@@ -9451,17 +9444,17 @@ def digitize():
         if mode in colored_modes:
             dp_smooth_lambda = 0.001
             dp_curv_lambda = 0.001
-            max_step_dp = 80  # Allow reasonable movement but limit crazy horizontal noise spikes
+            max_step_dp = 200  # Allow unlimited movement to follow gamma ray spikes
         else:
             curve_type_upper = curve_type.upper()
             if curve_type_upper == "GR":
                 dp_smooth_lambda = 0.001
                 dp_curv_lambda = 0.001
-                max_step_dp = 80
+                max_step_dp = 150
             else:
                 dp_smooth_lambda = 0.005
                 dp_curv_lambda = 0.001
-                max_step_dp = 80
+                max_step_dp = 150
 
         # Optional pixel-perfect skeleton tracer (preserve every bump)
         if ai_tracer.is_available() and trace_mode == "ai_tracer":
