@@ -227,6 +227,8 @@ def send_managed_job_admin(admin_to: str, job_info: dict, file_urls: list) -> bo
         
     estimated_amount = job_info.get('estimated_amount')
     estimated_amount_str = f"${float(estimated_amount):.2f}" if estimated_amount else "$0.00"
+    notes_text = str(job_info.get('notes') or 'None')
+    notes_body = notes_text.split("\n\nFiles:", 1)[0]
 
     html = f"""
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
@@ -249,7 +251,7 @@ def send_managed_job_admin(admin_to: str, job_info: dict, file_urls: list) -> bo
             {links_html}
         </ul>
         
-        <p style="margin-top:16px;color:#374151;"><strong>Notes:</strong><br>{job_info.get('notes', 'None').split('\n\nFiles:')[0]}</p>
+        <p style="margin-top:16px;color:#374151;"><strong>Notes:</strong><br>{notes_body}</p>
         
         <a href="https://tiflas.com/admin"
            style="display:inline-block;margin-top:16px;padding:12px 28px;background:#0f172a;color:#fff;text-decoration:none;border-radius:6px;font-weight:bold;">
