@@ -5017,12 +5017,23 @@
 
         function handleCurveAddPoint(xImg, yImg) {
             if (!editMode || !editCurveId) return;
-            if (!lastDigitizedDepth || !lastDigitizedCurves) return;
+            if (!lastDigitizedDepth || !lastDigitizedCurves) {
+                showStatus('Cannot add point: no digitized data loaded yet.', 'error');
+                return;
+            }
 
             const curveKey = editCurveDataKey || editCurveId;
-            if (!curveKey || !lastDigitizedCurves[curveKey]) return;
+            if (!curveKey || !lastDigitizedCurves[curveKey]) {
+                showStatus(`Cannot add point: curve "${curveKey || editCurveId}" not found in digitized data.`, 'error');
+                return;
+            }
             const targetTrack = findTrackByCurveId(editCurveId);
-            if (!targetTrack) return;
+            if (!targetTrack) {
+                const tracks = getTrackCalibrationsSnapshot();
+                const trackIds = tracks.map(t => t && (t.id || t.name || t.displayName)).filter(Boolean).join(', ') || '(none)';
+                showStatus(`Cannot add point: track for "${editCurveId}" not found. Available tracks: ${trackIds}.`, 'error');
+                return;
+            }
 
             const depthCfg = lastDepthConfig || getDepthConfigFromInputs();
             const depth = pixelToDepthFromConfig(yImg, depthCfg);
@@ -5409,12 +5420,22 @@
         function beginCurveEditInteraction(xImg, yImg) {
             if (!editMode || !editCurveId) return false;
             const curveKey = editCurveDataKey || editCurveId;
-            if (!lastDigitizedDepth || !lastDigitizedCurves || !curveKey || !lastDigitizedCurves[curveKey]) {
+            if (!lastDigitizedDepth || !lastDigitizedCurves || !curveKey) {
+                showStatus('Cannot edit: no digitized data loaded yet.', 'error');
+                return false;
+            }
+            if (!lastDigitizedCurves[curveKey]) {
+                showStatus(`Cannot edit: curve "${curveKey}" not found in digitized data. Available: ${Object.keys(lastDigitizedCurves).join(', ')}`, 'error');
                 return false;
             }
             rebuildCurveTraceFromDigitized(editCurveId);
             const targetTrack = findTrackByCurveId(editCurveId);
-            if (!targetTrack) return false;
+            if (!targetTrack) {
+                const tracks = getTrackCalibrationsSnapshot();
+                const trackIds = tracks.map(t => t && (t.id || t.name || t.displayName)).filter(Boolean).join(', ') || '(none)';
+                showStatus(`Cannot edit: track for "${editCurveId}" not found. Available tracks: ${trackIds}. Check curve calibration inputs.`, 'error');
+                return false;
+            }
             // Removed tight bounds check to allow edits outside track
 
             const activeTrace = getActiveCurveTracePoints(editCurveId);
