@@ -12216,9 +12216,15 @@
                         }
                     }
                     if (stateBlob.curveTraces) {
+                        // Assign to the module-scope `lastCurveTraces` so the
+                        // scroll/pan redraw scheduler (scheduleCurveOverlayRedraw)
+                        // can see it. Previously this only set window.lastCurveTraces
+                        // which is a separate binding from the `let` declaration,
+                        // causing overlays to vanish on the first pan/scroll.
+                        lastCurveTraces = stateBlob.curveTraces;
                         window.lastCurveTraces = stateBlob.curveTraces;
                         setTimeout(() => {
-                            renderCurveTraceOverlays(window.lastCurveTraces);
+                            renderCurveTraceOverlays(lastCurveTraces);
                         }, 100);
                     }
                 }
