@@ -5721,12 +5721,30 @@
                     : null;
                 const depthDelta = (centerDepth != null && depth != null) ? Math.abs(depth - centerDepth) : Math.abs(n.pointIndex - centerIndex) * localSpacing;
                 
-                // Gaussian weight: exp(-Δdepth²/(2σ²))
-                const weight = Math.exp(-(depthDelta * depthDelta) / (2 * sigmaDepth * sigmaDepth));
-                if (weight < 0.01) return;
+                // Gaussian weight: exp(-depthDelta²/(2sigma²))
+                // For the exact center point, always use weight=1.0 so it follows the mouse exactly
+                let weight = 1.0;
+                if (n.pointIndex !== centerIndex) {
+                    weight = Math.exp(-(depthDelta * depthDelta) / (2 * sigmaDepth * sigmaDepth));
+                    if (weight < 0.01) return;
+                }
 
-                let newX = n.originalX + deltaX * weight;
-                let newY = n.originalY + deltaY * weight * yWeight;
+                let newX;
+                if (n.pointIndex === centerIndex) {
+                    // Center point follows mouse exactly
+                    newX = xImg;
+                } else {
+                    // Neighbors get weighted X motion
+                    newX = n.originalX + deltaX * weight;
+                }
+                let newY;
+                if (n.pointIndex === centerIndex) {
+                    // Center point follows mouse exactly
+                    newY = yImg;
+                } else {
+                    // Neighbors get weighted Y motion
+                    newY = n.originalY + deltaY * weight * yWeight;
+                }
 
                 if (imgW > 1) newX = Math.max(0, Math.min(imgW - 1, newX));
                 if (imgH > 1) newY = Math.max(0, Math.min(imgH - 1, newY));
