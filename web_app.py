@@ -5291,6 +5291,61 @@ def refine_black_trace_to_continuous_line(
     return xs_out
 
 
+def refine_black_trace_multi_pass(roi_bgr, xs, curve_type=None):
+    """Run staged black-trace refinement from broad grid rescue to tight pixel fit."""
+    if roi_bgr is None or xs is None or not hasattr(xs, "size") or xs.size < 3:
+        return xs
+
+    curve_type_upper = str(curve_type or "").upper()
+    if curve_type_upper == "GR":
+        stages = (
+            dict(search_radius=34, guide_window=45, vertical_window=17, min_line_score=0.030, min_score_gain=0.004, trend_pull_pixels=6.0, distance_weight=0.0025),
+            dict(search_radius=24, guide_window=31, vertical_window=13, min_line_score=0.038, min_score_gain=0.008, trend_pull_pixels=4.5, distance_weight=0.0040),
+            dict(search_radius=14, guide_window=17, vertical_window=9, min_line_score=0.044, min_score_gain=0.010, trend_pull_pixels=3.0, distance_weight=0.0060),
+        )
+        guards = ((25, 28.0, 9.0), (19, 22.0, 8.0), (13, 18.0, 7.0))
+    else:
+        stages = (
+            dict(search_radius=30, guide_window=45, vertical_window=17, min_line_score=0.034, min_score_gain=0.006, trend_pull_pixels=5.5, distance_weight=0.0030),
+            dict(search_radius=20, guide_window=31, vertical_window=13, min_line_score=0.042, min_score_gain=0.010, trend_pull_pixels=4.0, distance_weight=0.0045),
+            dict(search_radius=11, guide_window=15, vertical_window=9, min_line_score=0.048, min_score_gain=0.012, trend_pull_pixels=2.8, distance_weight=0.0070),
+        )
+        guards = ((23, 22.0, 8.0), (17, 17.0, 6.5), (11, 12.0, 5.5))
+
+    xs_ref = xs.copy().astype(np.float32)
+    for params, (guard_window, guard_deviation, max_dx) in zip(stages, guards):
+        try:
+            before = xs_ref.copy()
+            refined = refine_black_trace_to_continuous_line(roi_bgr, xs_ref, **params)
+            if refined is not None and hasattr(refined, "size") and refined.size == xs_ref.size:
+                xs_ref = refined.astype(np.float32)
+
+            if np.isfinite(xs_ref).any():
+                xs_ref = pd.Series(xs_ref).interpolate(
+                    method="linear",
+                    limit_direction="both",
+                    limit=max(25, int(xs_ref.size * 0.02)),
+                ).to_numpy(dtype=np.float32)
+
+            # A guard after each pass prevents a broad rescue from becoming a
+            # new grid shelf, while still allowing the next pass to recover.
+            xs_ref = guard_trace_outliers_rolling_median(
+                xs_ref,
+                window=guard_window,
+                max_deviation=guard_deviation,
+            )
+            xs_ref = guard_trace_velocity(xs_ref, max_dx=max_dx)
+
+            # If a pass made no material movement, the tighter next pass still
+            # runs, but this avoids carrying through accidental all-NaN output.
+            if not np.isfinite(xs_ref).any():
+                xs_ref = before
+        except Exception:
+            continue
+
+    return xs_ref
+
+
 def refine_black_trace_to_dark_run_center(
     roi_bgr,
     xs,
@@ -10154,22 +10209,14 @@ def digitize():
             except Exception:
                 pass
 
-            # Second pass: follow nearby ink that behaves like a continuous
-            # line over several rows instead of the darkest single-row crest.
-            # This avoids horizontal grid bars and filled blocks pulling the
-            # trace into shelf artifacts.
+            # Multi-pass line refinement: broad rescue, medium line follow,
+            # then tight pixel fit on the grid-removed residual map.
             try:
-                xs = refine_black_trace_to_continuous_line(
-                    roi,
-                    xs,
-                    search_radius=20,
-                    guide_window=31,
-                    vertical_window=13,
-                )
+                xs = refine_black_trace_multi_pass(roi, xs, curve_type=curve_type)
             except Exception:
                 pass
 
-            # Second outlier pass: the line-following pass is conservative,
+            # Final outlier pass: the staged line-following is conservative,
             # but keep the tighter guard as protection against noisy scans.
             try:
                 xs = guard_trace_outliers_rolling_median(xs, window=15, max_deviation=15.0)
