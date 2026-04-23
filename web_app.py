@@ -1773,6 +1773,103 @@ def build_black_prescan_grid_removed(gray_img):
         return gray_img, residual_score, grid_score, None
 
 
+def build_black_curve_candidate_score(residual_score, grid_score=None, residual_mask=None):
+    """Score black candidate ink by curve-like orientation and component shape.
+
+    Raw darkness alone lets horizontal grid bars, text, and compact blobs win.
+    This score keeps residual ink, but rewards local vertical continuity and
+    suppresses long horizontal structures before DP pathing sees them.
+    """
+    if residual_score is None:
+        return None
+    try:
+        residual = np.asarray(residual_score, dtype=np.float32)
+        if residual.ndim != 2 or residual.size == 0:
+            return None
+        h, w = residual.shape[:2]
+        if h < 3 or w < 3:
+            return np.clip(residual, 0.0, 1.0)
+
+        residual = np.nan_to_num(residual, nan=0.0, posinf=0.0, neginf=0.0)
+        residual = np.clip(residual, 0.0, None)
+        rmax = float(residual.max())
+        if rmax > 1.0:
+            residual = residual / rmax
+        residual = np.clip(residual, 0.0, 1.0)
+        if float(residual.max()) <= 0.0:
+            return residual
+
+        if residual_mask is not None and getattr(residual_mask, "shape", None) == residual.shape:
+            binary = np.asarray(residual_mask > 0, dtype=np.uint8)
+        else:
+            nonzero = residual[residual > 0]
+            if nonzero.size:
+                threshold = max(0.06, float(np.percentile(nonzero, 55)) * 0.45)
+            else:
+                threshold = 0.06
+            binary = (residual >= threshold).astype(np.uint8)
+
+        if not np.any(binary):
+            return residual
+
+        k_v_len = max(7, min(31, (h // 18) | 1))
+        k_h_len = max(9, min(35, (w // 7) | 1))
+        k_v = cv2.getStructuringElement(cv2.MORPH_RECT, (1, k_v_len))
+        k_h = cv2.getStructuringElement(cv2.MORPH_RECT, (k_h_len, 1))
+
+        residual_u8 = np.clip(residual * 255.0, 0, 255).astype(np.uint8)
+        vertical_open = cv2.morphologyEx(residual_u8, cv2.MORPH_OPEN, k_v).astype(np.float32) / 255.0
+        horizontal_open = cv2.morphologyEx((binary * 255).astype(np.uint8), cv2.MORPH_OPEN, k_h).astype(np.float32) / 255.0
+        horizontal_score = cv2.GaussianBlur(horizontal_open, (5, 5), 0)
+        vertical_support = cv2.blur(residual, (3, k_v_len))
+        vertical_score = np.maximum(vertical_support, cv2.GaussianBlur(vertical_open, (3, 3), 0))
+        vertical_score = np.clip(vertical_score, 0.0, 1.0)
+
+        candidate = residual * (0.38 + 0.62 * vertical_score)
+        candidate *= np.clip(1.0 - 0.90 * horizontal_score, 0.06, 1.0)
+
+        if grid_score is not None and getattr(grid_score, "shape", None) == residual.shape:
+            grid = np.clip(np.nan_to_num(grid_score.astype(np.float32), nan=0.0), 0.0, 1.0)
+            candidate *= np.clip(1.0 - 0.72 * grid, 0.08, 1.0)
+
+        n_labels, labels, stats, _centroids = cv2.connectedComponentsWithStats(binary, 8)
+        if n_labels > 1:
+            comp_score = np.zeros_like(candidate, dtype=np.float32)
+            min_good_span = max(8, min(36, h // 30))
+            for label in range(1, n_labels):
+                x, y, cw, ch, area = [int(v) for v in stats[label]]
+                if area <= 0 or cw <= 0 or ch <= 0:
+                    continue
+
+                aspect = float(cw) / float(max(1, ch))
+                fill = float(area) / float(max(1, cw * ch))
+                score = 0.25 + 0.75 * min(1.0, float(ch) / float(min_good_span))
+
+                # Long shallow components are usually horizontal grid bars or
+                # text underlines; real curve excursions should still have
+                # vertical continuity nearby.
+                if cw >= max(18, int(w * 0.18)) and ch <= max(4, int(h * 0.025)):
+                    score *= 0.05
+                elif aspect >= 6.0 and ch <= max(10, int(h * 0.05)):
+                    score *= 0.18
+
+                # Compact filled blobs are more likely labels/numbers than a
+                # curve ridge segment.
+                if fill >= 0.55 and cw <= max(18, int(w * 0.12)) and ch <= max(18, int(h * 0.08)):
+                    score *= 0.35
+
+                comp_score[labels == label] = np.float32(np.clip(score, 0.03, 1.0))
+
+            candidate *= 0.12 + 0.88 * comp_score
+
+        cmax = float(candidate.max())
+        if cmax > 0:
+            candidate = candidate / cmax
+        return np.clip(candidate, 0.0, 1.0).astype(np.float32)
+    except Exception:
+        return None
+
+
 def _trace_debug_image_data_url(img, max_side=900, ext='.jpg'):
     """Encode a debug image as a small browser-friendly data URL."""
     if img is None:
@@ -1913,12 +2010,17 @@ def build_black_trace_debug_export(curve_name, roi_bgr, prob_mask, xs, curve_typ
         grid_u8 = None
         if grid_score is not None:
             grid_u8 = np.clip(grid_score * 255.0, 0, 255).astype(np.uint8)
+        candidate_score = build_black_curve_candidate_score(residual_score, grid_score, residual_mask)
+        candidate_u8 = None
+        if candidate_score is not None:
+            candidate_u8 = np.clip(candidate_score * 255.0, 0, 255).astype(np.uint8)
 
         comp_img, component_stats = _component_debug_image_and_stats(residual_mask)
         overlay = _draw_trace_debug_overlay(roi_bgr, xs)
         prob_color = cv2.applyColorMap(np.asarray(prob_mask, dtype=np.uint8), cv2.COLORMAP_TURBO)
         residual_color = cv2.applyColorMap(residual_u8, cv2.COLORMAP_TURBO) if residual_u8 is not None else None
         grid_color = cv2.applyColorMap(grid_u8, cv2.COLORMAP_TURBO) if grid_u8 is not None else None
+        candidate_color = cv2.applyColorMap(candidate_u8, cv2.COLORMAP_TURBO) if candidate_u8 is not None else None
 
         finite = np.isfinite(xs)
         dx = np.diff(xs[finite].astype(np.float32)) if np.count_nonzero(finite) > 1 else np.asarray([], dtype=np.float32)
@@ -1946,6 +2048,7 @@ def build_black_trace_debug_export(curve_name, roi_bgr, prob_mask, xs, curve_typ
                 'residual_mask': _trace_debug_image_data_url(residual_mask, ext='.png'),
                 'residual_score': _trace_debug_image_data_url(residual_color, ext='.jpg'),
                 'grid_score': _trace_debug_image_data_url(grid_color, ext='.jpg'),
+                'candidate_score': _trace_debug_image_data_url(candidate_color, ext='.jpg'),
                 'components': _trace_debug_image_data_url(comp_img, ext='.jpg'),
             },
         }
@@ -2126,6 +2229,7 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
     detected_hue = None
     black_residual_score = None
     black_grid_score = None
+    black_candidate_score = None
     if mode in colored_modes:
         detected_hue = detect_dominant_curve_hue(roi_enhanced)
     
@@ -2501,14 +2605,37 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
     color_mask = cv2.morphologyEx(color_mask, cv2.MORPH_CLOSE, kernel, 1)
     color_score = color_mask.astype(np.float32) / 255.0
 
+    if mode not in colored_modes:
+        try:
+            residual_source = (
+                black_residual_score
+                if black_residual_score is not None and black_residual_score.size == color_score.size
+                else color_score
+            )
+            black_candidate_score = build_black_curve_candidate_score(
+                residual_source,
+                black_grid_score,
+                color_mask,
+            )
+            if black_candidate_score is not None and black_candidate_score.size == color_score.size:
+                color_score = np.clip(0.35 * color_score + 0.65 * black_candidate_score, 0.0, 1.0)
+        except Exception:
+            black_candidate_score = None
+
     # Compute 1-pixel skeleton for black mode using ximgproc thinning.
     # Applied AFTER grid removal so only curve pixels are thinned, not grid lines.
     skel_thin = None
     if mode not in colored_modes:
         try:
+            skeleton_mask = color_mask
+            if black_candidate_score is not None and black_candidate_score.size == color_score.size:
+                candidate_mask = ((black_candidate_score > 0.22).astype(np.uint8) * 255)
+                candidate_coverage = float(np.mean(candidate_mask > 0))
+                if 0.0005 <= candidate_coverage <= 0.40:
+                    skeleton_mask = candidate_mask
             if hasattr(cv2, 'ximgproc'):
                 skel_thin = cv2.ximgproc.thinning(
-                    color_mask, thinningType=cv2.ximgproc.THINNING_ZHANGSUEN
+                    skeleton_mask, thinningType=cv2.ximgproc.THINNING_ZHANGSUEN
                 )
         except Exception:
             skel_thin = None
@@ -2685,27 +2812,39 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
             # Skeleton gets the strongest single vote so thick black strokes
             # stay centered, but we lean more on the residual-dark score than
             # on raw corners to avoid snapping to grid intersections.
-            residual_score = black_residual_score if black_residual_score is not None and black_residual_score.size == color_score.size else color_score
+            residual_score = (
+                black_candidate_score
+                if black_candidate_score is not None and black_candidate_score.size == color_score.size
+                else black_residual_score
+                if black_residual_score is not None and black_residual_score.size == color_score.size
+                else color_score
+            )
             prob = (
                 0.18 * color_score +
-                0.38 * residual_score +
+                0.42 * residual_score +
                 0.08 * edge_enhanced +
                 0.14 * center_score +
                 0.06 * sobel_y_score +
                 0.02 * harris_score +
                 0.02 * diag_score +
-                0.12 * skel_score
+                0.08 * skel_score
             )
         else:
-            residual_score = black_residual_score if black_residual_score is not None and black_residual_score.size == color_score.size else color_score
+            residual_score = (
+                black_candidate_score
+                if black_candidate_score is not None and black_candidate_score.size == color_score.size
+                else black_residual_score
+                if black_residual_score is not None and black_residual_score.size == color_score.size
+                else color_score
+            )
             prob = (
                 0.22 * color_score +
-                0.42 * residual_score +
+                0.46 * residual_score +
                 0.10 * edge_enhanced +
                 0.14 * center_score +
                 0.06 * sobel_y_score +
-                0.03 * harris_score +
-                0.03 * diag_score
+                0.01 * harris_score +
+                0.01 * diag_score
             )
 
         if black_grid_score is not None and black_grid_score.size == prob.size:
@@ -2713,8 +2852,13 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
                 # Penalize long straight-line evidence, but keep a floor so the
                 # curve can survive where it legitimately crosses a grid line.
                 prob *= np.clip(1.0 - 0.92 * black_grid_score, 0.03, 1.0)
-                if black_residual_score is not None and black_residual_score.size == prob.size:
-                    prob = np.maximum(prob, 0.55 * black_residual_score)
+                lift_score = (
+                    black_candidate_score
+                    if black_candidate_score is not None and black_candidate_score.size == prob.size
+                    else black_residual_score
+                )
+                if lift_score is not None and lift_score.size == prob.size:
+                    prob = np.maximum(prob, 0.55 * lift_score)
             except Exception:
                 pass
 
@@ -2727,8 +2871,13 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
             cleaned_binary = preprocess_curve_track(roi_bgr, mode=mode)
             if cleaned_binary is not None and cleaned_binary.size == prob.size:
                 cleaned_score = cleaned_binary.astype(np.float32) / 255.0
-                if black_residual_score is not None and black_residual_score.size == prob.size:
-                    cleaned_score = np.maximum(cleaned_score, (black_residual_score > 0.10).astype(np.float32))
+                lift_score = (
+                    black_candidate_score
+                    if black_candidate_score is not None and black_candidate_score.size == prob.size
+                    else black_residual_score
+                )
+                if lift_score is not None and lift_score.size == prob.size:
+                    cleaned_score = np.maximum(cleaned_score, (lift_score > 0.10).astype(np.float32))
                 # Where cleaned_score == 0 (likely grid/border), push probability
                 # almost to zero; where == 1, keep prob as-is.
                 gate = 0.05 + 0.95 * cleaned_score
