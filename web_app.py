@@ -1773,6 +1773,191 @@ def build_black_prescan_grid_removed(gray_img):
         return gray_img, residual_score, grid_score, None
 
 
+def _trace_debug_image_data_url(img, max_side=900, ext='.jpg'):
+    """Encode a debug image as a small browser-friendly data URL."""
+    if img is None:
+        return None
+    try:
+        arr = np.asarray(img)
+        if arr.size == 0:
+            return None
+        if arr.dtype != np.uint8:
+            arr_f = arr.astype(np.float32)
+            arr_f = arr_f - float(np.nanmin(arr_f))
+            max_val = float(np.nanmax(arr_f))
+            if max_val > 0:
+                arr_f = arr_f / max_val
+            arr = np.clip(arr_f * 255.0, 0, 255).astype(np.uint8)
+        if arr.ndim == 2:
+            enc_img = arr
+        else:
+            enc_img = arr[:, :, :3]
+
+        h, w = enc_img.shape[:2]
+        scale = min(1.0, float(max_side) / float(max(h, w, 1)))
+        if scale < 1.0:
+            enc_img = cv2.resize(
+                enc_img,
+                (max(1, int(round(w * scale))), max(1, int(round(h * scale)))),
+                interpolation=cv2.INTER_AREA,
+            )
+
+        params = []
+        mime = 'image/jpeg'
+        if ext.lower() == '.png':
+            mime = 'image/png'
+            params = [int(cv2.IMWRITE_PNG_COMPRESSION), 6]
+        else:
+            params = [int(cv2.IMWRITE_JPEG_QUALITY), 82]
+
+        ok, buf = cv2.imencode(ext, enc_img, params)
+        if not ok:
+            return None
+        b64 = base64.b64encode(buf).decode('ascii')
+        return f"data:{mime};base64,{b64}"
+    except Exception:
+        return None
+
+
+def _draw_trace_debug_overlay(roi_bgr, xs, guide_radius=12):
+    if roi_bgr is None or xs is None or not hasattr(xs, "size"):
+        return None
+    try:
+        if roi_bgr.ndim == 2:
+            overlay = cv2.cvtColor(roi_bgr, cv2.COLOR_GRAY2BGR)
+        else:
+            overlay = roi_bgr.copy()
+        h, w = overlay.shape[:2]
+        band = overlay.copy()
+        for y in range(min(h, xs.size)):
+            x = xs[y]
+            if not np.isfinite(x):
+                continue
+            ix = int(np.clip(round(float(x)), 0, w - 1))
+            cv2.line(
+                band,
+                (max(0, ix - int(guide_radius)), y),
+                (min(w - 1, ix + int(guide_radius)), y),
+                (0, 180, 255),
+                1,
+            )
+        overlay = cv2.addWeighted(band, 0.32, overlay, 0.68, 0)
+
+        pts = []
+        for y in range(min(h, xs.size)):
+            x = xs[y]
+            if np.isfinite(x):
+                pts.append((int(np.clip(round(float(x)), 0, w - 1)), int(y)))
+            elif len(pts) > 1:
+                cv2.polylines(overlay, [np.asarray(pts, dtype=np.int32)], False, (255, 0, 255), 2, cv2.LINE_AA)
+                pts = []
+            else:
+                pts = []
+        if len(pts) > 1:
+            cv2.polylines(overlay, [np.asarray(pts, dtype=np.int32)], False, (255, 0, 255), 2, cv2.LINE_AA)
+        return overlay
+    except Exception:
+        return None
+
+
+def _component_debug_image_and_stats(binary_mask):
+    if binary_mask is None:
+        return None, []
+    try:
+        mask = (binary_mask > 0).astype(np.uint8)
+        if not np.any(mask):
+            return np.zeros((*mask.shape, 3), dtype=np.uint8), []
+        n_labels, labels, stats, _centroids = cv2.connectedComponentsWithStats(mask, 8)
+        comp_img = np.zeros((*mask.shape, 3), dtype=np.uint8)
+        rows = []
+        for label in range(1, n_labels):
+            x, y, w, h, area = [int(v) for v in stats[label]]
+            if area <= 0:
+                continue
+            color = (
+                int((37 * label) % 255),
+                int((91 * label) % 255),
+                int((157 * label) % 255),
+            )
+            comp_img[labels == label] = color
+            rows.append({
+                'label': int(label),
+                'area': int(area),
+                'x': x,
+                'y': y,
+                'w': w,
+                'h': h,
+                'aspect': float(w / max(1, h)),
+                'vertical_span': int(h),
+                'horizontal_span': int(w),
+            })
+        rows.sort(key=lambda r: r['area'], reverse=True)
+        return comp_img, rows[:25]
+    except Exception:
+        return None, []
+
+
+def build_black_trace_debug_export(curve_name, roi_bgr, prob_mask, xs, curve_type=None, mode=None):
+    """Build visual trace-debug artifacts for black curve failures."""
+    if roi_bgr is None or prob_mask is None or xs is None:
+        return None
+    try:
+        gray = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
+    except Exception:
+        return None
+    try:
+        grid_removed, residual_score, grid_score, residual_mask = build_black_prescan_grid_removed(gray)
+        residual_u8 = None
+        if residual_score is not None:
+            residual_u8 = np.clip(residual_score * 255.0, 0, 255).astype(np.uint8)
+        grid_u8 = None
+        if grid_score is not None:
+            grid_u8 = np.clip(grid_score * 255.0, 0, 255).astype(np.uint8)
+
+        comp_img, component_stats = _component_debug_image_and_stats(residual_mask)
+        overlay = _draw_trace_debug_overlay(roi_bgr, xs)
+        prob_color = cv2.applyColorMap(np.asarray(prob_mask, dtype=np.uint8), cv2.COLORMAP_TURBO)
+        residual_color = cv2.applyColorMap(residual_u8, cv2.COLORMAP_TURBO) if residual_u8 is not None else None
+        grid_color = cv2.applyColorMap(grid_u8, cv2.COLORMAP_TURBO) if grid_u8 is not None else None
+
+        finite = np.isfinite(xs)
+        dx = np.diff(xs[finite].astype(np.float32)) if np.count_nonzero(finite) > 1 else np.asarray([], dtype=np.float32)
+        metrics = {
+            'roi_shape': [int(v) for v in roi_bgr.shape[:2]],
+            'finite_rows': int(np.count_nonzero(finite)),
+            'nan_rows': int(xs.size - np.count_nonzero(finite)),
+            'max_abs_dx': float(np.nanmax(np.abs(dx))) if dx.size else 0.0,
+            'mean_abs_dx': float(np.nanmean(np.abs(dx))) if dx.size else 0.0,
+            'residual_mask_coverage': float(np.mean(residual_mask > 0)) if residual_mask is not None else None,
+            'component_count': int(len(component_stats)),
+        }
+
+        return {
+            'curve': curve_name,
+            'curve_type': curve_type,
+            'mode': mode,
+            'metrics': metrics,
+            'components_top': component_stats,
+            'images': {
+                'roi': _trace_debug_image_data_url(roi_bgr, ext='.jpg'),
+                'overlay': _trace_debug_image_data_url(overlay, ext='.jpg'),
+                'prob_map': _trace_debug_image_data_url(prob_color, ext='.jpg'),
+                'grid_removed': _trace_debug_image_data_url(grid_removed, ext='.jpg'),
+                'residual_mask': _trace_debug_image_data_url(residual_mask, ext='.png'),
+                'residual_score': _trace_debug_image_data_url(residual_color, ext='.jpg'),
+                'grid_score': _trace_debug_image_data_url(grid_color, ext='.jpg'),
+                'components': _trace_debug_image_data_url(comp_img, ext='.jpg'),
+            },
+        }
+    except Exception as exc:
+        return {
+            'curve': curve_name,
+            'curve_type': curve_type,
+            'mode': mode,
+            'error': str(exc),
+        }
+
+
 def enhance_curve_roi(roi_bgr):
     """
     Apply lightweight denoise + horizontal super-resolution to a curve ROI.
@@ -9726,6 +9911,7 @@ def digitize():
     cfg = data['config']
     preview_filters = data.get('preview_filters') or {}
     detected_text = data.get('detected_text') or {}
+    trace_debug_export = bool(data.get('trace_debug_export'))
     depth_cfg = cfg['depth']
     curves = (cfg['curves'] or [])[:6]
     gopt = cfg.get('global_options', {})
@@ -9759,6 +9945,7 @@ def digitize():
     
     curve_data = {}
     curve_traces = {}
+    curve_trace_debug = {}
     curve_warnings = []
 
     for c in curves:
@@ -10398,6 +10585,21 @@ def digitize():
                     trace_points.append([x_img, y_img])
 
         curve_traces[name] = trace_points
+
+        if trace_debug_export and mode not in colored_modes:
+            try:
+                dbg = build_black_trace_debug_export(
+                    name,
+                    roi,
+                    mask,
+                    xs,
+                    curve_type=curve_type,
+                    mode=mode,
+                )
+                if dbg:
+                    curve_trace_debug[name] = dbg
+            except Exception:
+                pass
     
     # Resample to fixed 0.5 ft step when using feet
     las_depth = base_depth
@@ -10492,6 +10694,7 @@ def digitize():
         'depth_warnings': depth_warnings,
         'curve_warnings': curve_warnings,
         'curve_traces': curve_traces,
+        'curve_trace_debug': curve_trace_debug if trace_debug_export else {},
         'ai_payload': ai_payload,
         'ai_summary': ai_summary,
         'digitized_depth': digitized_depth,
