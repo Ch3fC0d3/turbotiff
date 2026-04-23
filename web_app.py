@@ -5352,10 +5352,10 @@ def refine_black_trace_to_continuous_line(
     search_radius=18,
     guide_window=31,
     vertical_window=13,
-    min_line_score=0.045,
-    min_score_gain=0.015,
-    trend_pull_pixels=6.0,
-    distance_weight=0.005,
+    min_line_score=0.07,
+    min_score_gain=0.04,
+    trend_pull_pixels=3.0,
+    distance_weight=0.025,
 ):
     """Second pass for black traces: prefer continuous line support over row crests.
 
