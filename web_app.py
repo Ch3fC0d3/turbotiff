@@ -5037,6 +5037,134 @@ def snap_black_trace_to_wide_darkest(roi_bgr, xs, search_radius=55, min_darkness
     return xs_out
 
 
+def refine_black_trace_to_continuous_line(
+    roi_bgr,
+    xs,
+    search_radius=18,
+    guide_window=31,
+    vertical_window=13,
+    min_line_score=0.045,
+    min_score_gain=0.015,
+    trend_pull_pixels=6.0,
+    distance_weight=0.005,
+):
+    """Second pass for black traces: prefer continuous line support over row crests.
+
+    Horizontal grid bars and filled text can be the darkest thing in a single
+    row. This pass scores nearby candidates by residual curve ink that persists
+    across neighboring rows, so the first trace acts as a guide but one-row
+    dark shelves do not pull the output sideways.
+    """
+    if roi_bgr is None or xs is None or not hasattr(xs, "size") or xs.size < 3:
+        return xs
+
+    try:
+        gray = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
+    except Exception:
+        return xs
+
+    h, w = gray.shape[:2]
+    if h < 3 or w < 3:
+        return xs
+
+    xs_ref = xs.copy().astype(np.float32)
+    n = min(h, xs_ref.size)
+    valid = np.isfinite(xs_ref[:n])
+    if not np.any(valid):
+        return xs_ref
+
+    try:
+        filled = pd.Series(xs_ref[:n]).interpolate(method="linear", limit_direction="both").ffill().bfill()
+        if filled.isna().any():
+            return xs_ref
+        guide_win = max(9, int(guide_window) | 1)
+        guide_win = min(guide_win, n if n % 2 else n - 1)
+        if guide_win >= 5:
+            guide_series = filled.rolling(
+                guide_win,
+                min_periods=max(3, min(9, guide_win // 3)),
+                center=True,
+            ).median().bfill().ffill()
+        else:
+            guide_series = filled
+        raw_guide = filled.to_numpy(dtype=np.float32)
+        guide = guide_series.to_numpy(dtype=np.float32)
+    except Exception:
+        return xs_ref
+
+    try:
+        residual_score, grid_score = compute_black_curve_residual(gray)
+        if residual_score is None or residual_score.shape[:2] != (h, w):
+            return xs_ref
+        if grid_score is None or grid_score.shape[:2] != (h, w):
+            grid_score = np.zeros((h, w), dtype=np.float32)
+
+        k_y = max(5, int(vertical_window) | 1)
+        k_y = min(k_y, h if h % 2 else h - 1)
+        if k_y < 3:
+            return xs_ref
+
+        residual = np.clip(residual_score.astype(np.float32), 0.0, 1.0)
+        grid = np.clip(grid_score.astype(np.float32), 0.0, 1.0)
+        dark = (255.0 - gray.astype(np.float32)) / 255.0
+
+        vertical_support = cv2.blur(residual, (3, k_y))
+        local_residual = cv2.GaussianBlur(residual, (3, 3), 0)
+        grid_penalty = cv2.blur(grid, (3, k_y))
+        line_score = (
+            0.62 * vertical_support
+            + 0.28 * local_residual
+            + 0.10 * dark
+            - 0.42 * grid_penalty
+        )
+        line_score = np.clip(line_score, 0.0, 1.0).astype(np.float32)
+    except Exception:
+        return xs_ref
+
+    r = max(4, int(search_radius))
+    offsets = np.arange(-r, r + 1, dtype=np.int32)
+    rows = np.arange(n, dtype=np.int32)[:, None]
+    xi = np.clip(np.round(guide).astype(np.int32), 0, w - 1)
+    raw_cols = xi[:, None] + offsets[None, :]
+    in_bounds = (raw_cols >= 0) & (raw_cols < w)
+    cols = np.clip(raw_cols, 0, w - 1)
+
+    candidate_scores = line_score[rows, cols]
+    distance_penalty = np.abs(offsets.astype(np.float32))[None, :] * float(distance_weight)
+    candidate_scores = np.where(in_bounds, candidate_scores - distance_penalty, -1.0)
+
+    best_idx = np.argmax(candidate_scores, axis=1)
+    best_cols = cols[np.arange(n), best_idx]
+    best_scores = candidate_scores[np.arange(n), best_idx]
+    raw_xi = np.clip(np.round(raw_guide).astype(np.int32), 0, w - 1)
+    current_scores = line_score[np.arange(n), raw_xi]
+    trend_delta = np.abs(raw_guide - guide)
+
+    accept = (
+        valid
+        & (best_scores >= float(min_line_score))
+        & (
+            (best_scores >= (current_scores + float(min_score_gain)))
+            | (current_scores < float(min_line_score))
+            | (trend_delta >= float(trend_pull_pixels))
+        )
+    )
+
+    xs_out = xs_ref.copy()
+    for y in np.where(accept)[0]:
+        best_col = int(best_cols[y])
+        x0 = max(0, best_col - 2)
+        x1 = min(w, best_col + 3)
+        weights = np.clip(line_score[y, x0:x1], 0.0, 1.0) ** 2
+        if float(weights.sum()) > 1e-8:
+            xs_local = np.arange(x0, x1, dtype=np.float32)
+            xs_out[y] = float((xs_local * weights).sum() / weights.sum())
+        else:
+            xs_out[y] = float(best_col)
+
+    return xs_out
+
+
 def refine_black_trace_to_dark_run_center(
     roi_bgr,
     xs,
@@ -9900,22 +10028,23 @@ def digitize():
             except Exception:
                 pass
 
-            # Try to catch missed real excursions by searching a wider window
-            # for the darkest pixel and snapping to it when it is clearly
-            # darker than the current trace position.
+            # Second pass: follow nearby ink that behaves like a continuous
+            # line over several rows instead of the darkest single-row crest.
+            # This avoids horizontal grid bars and filled blocks pulling the
+            # trace into shelf artifacts.
             try:
-                xs = snap_black_trace_to_wide_darkest(
-                    roi, xs,
+                xs = refine_black_trace_to_continuous_line(
+                    roi,
+                    xs,
                     search_radius=20,
-                    min_darkness_gain=0.25,
-                    neighbor_consistency=6.0,
+                    guide_window=31,
+                    vertical_window=13,
                 )
             except Exception:
                 pass
 
-            # Second outlier pass: the wide-peak snap can occasionally latch
-            # onto a far-off rail if darkness happens to be maxed out there.
-            # Rerun the median guard with a tighter window to clean those up.
+            # Second outlier pass: the line-following pass is conservative,
+            # but keep the tighter guard as protection against noisy scans.
             try:
                 xs = guard_trace_outliers_rolling_median(xs, window=15, max_deviation=15.0)
             except Exception:
