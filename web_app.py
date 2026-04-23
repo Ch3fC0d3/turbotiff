@@ -58,7 +58,7 @@ import json
 from io import BytesIO, StringIO
 import base64
 import zipfile
-from typing import Dict, List, Tuple, Optional
+from typing import Any, Dict, List, Tuple, Optional
 import tempfile
 from datetime import datetime
 import uuid
@@ -11286,6 +11286,49 @@ def _write_capture_image(image_data, out_dir: Path, stem: str) -> Optional[Path]
         return None
 
 
+def _write_trace_debug_artifacts(trace_debug, out_dir: Path, stem: str) -> Dict[str, Any]:
+    """Persist trace-debug image layers next to a bad black segment capture."""
+    if not isinstance(trace_debug, dict):
+        return {}
+
+    debug_dir = out_dir / f'{stem}_trace_debug'
+    image_paths: Dict[str, str] = {}
+    meta_paths: Dict[str, str] = {}
+
+    images = trace_debug.get('images')
+    if isinstance(images, dict):
+        for name, image_data in images.items():
+            safe_name = _safe_capture_component(name, default='debug_image')
+            try:
+                debug_dir.mkdir(parents=True, exist_ok=True)
+                image_path = _write_capture_image(image_data, debug_dir, safe_name)
+                if image_path:
+                    image_paths[str(name)] = str(image_path)
+            except Exception:
+                continue
+
+    meta = {}
+    for key in ('curve', 'curve_type', 'mode', 'metrics', 'components_top', 'error'):
+        if key in trace_debug:
+            meta[key] = trace_debug.get(key)
+    if meta:
+        try:
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            meta_path = debug_dir / 'trace_debug.json'
+            meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding='utf-8')
+            meta_paths['trace_debug'] = str(meta_path)
+        except Exception:
+            pass
+
+    if not image_paths and not meta_paths:
+        return {}
+    return {
+        'debug_dir': str(debug_dir),
+        'images': image_paths,
+        'meta': meta_paths,
+    }
+
+
 @app.route('/api/save_bad_black_segment', methods=['POST'])
 def save_bad_black_segment():
     try:
@@ -11305,6 +11348,7 @@ def save_bad_black_segment():
             trace_points = []
 
         image_path = _write_capture_image(data.get('image'), out_dir, stem)
+        trace_debug_artifacts = _write_trace_debug_artifacts(data.get('trace_debug'), out_dir, stem)
         payload_path = out_dir / f'{stem}.json'
         summary_path = out_dir / 'captures.jsonl'
         user = _current_user(require_access=False)
@@ -11323,6 +11367,7 @@ def save_bad_black_segment():
             'notes': data.get('notes'),
             'trace_rows': len(trace_points),
             'image_path': str(image_path) if image_path else None,
+            'trace_debug_artifacts': trace_debug_artifacts or None,
             'user_id': user['id'] if user else None,
             'payload': data,
         }
@@ -11346,6 +11391,7 @@ def save_bad_black_segment():
             'notes': payload_record['notes'],
             'trace_rows': payload_record['trace_rows'],
             'image_path': payload_record['image_path'],
+            'trace_debug_artifacts': payload_record['trace_debug_artifacts'],
             'payload_path': str(payload_path),
             'user_id': payload_record['user_id'],
         }
