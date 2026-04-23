@@ -18,6 +18,7 @@ Main active files/functions:
 - `compute_prob_map`
 - `build_black_prescan_grid_removed`
 - `refine_black_trace_to_continuous_line`
+- `rerun_black_trace_in_guided_band`
 - `refine_black_trace_to_dark_run_center`
 - `guard_trace_outliers_rolling_median`
 - `guard_trace_velocity`
@@ -32,6 +33,7 @@ Main active files/functions:
 | `8069b98` | Remove grid before pixel tracing | Added `build_black_prescan_grid_removed`; black/white scans now build the probability map from grid-removed residual pixels instead of raw dark pixels. | Helped reduce raw grid entering the scan, but still not enough on difficult captures. | Active | Good direction. Avoid OR-ing broad raw-dark masks back into the residual mask because that reintroduces grid. |
 | `6901221` | Multiple broad-to-tight passes | Added `refine_black_trace_multi_pass`: broad rescue, medium line follow, tight pixel fit. | Looked worse in user screenshot; trace jumped into large false shelves and wrong branches. | Reverted by `d7d2730` | Do not repeat multi-pass broad rescue with weak constraints. More passes amplified mistakes instead of fixing them. |
 | `ec3a0da` | Trace debug export | Added black-curve debug artifacts to digitize responses and auto-capture payloads: ROI, overlay, probability map, grid-removed view, residual mask/score, grid score, component preview, and metrics. | Tooling change only; intended to make the next failure inspectable instead of tuning from screenshots. | Active | Use this before the next algorithm change. Check whether failures come from preprocessing, candidate components, or path selection. |
+| `99c9cdd` | Guided band rerun | Added `rerun_black_trace_in_guided_band`: after the first black trace and rolling outlier guard, build a smoothed corridor around the trace and rerun DP only inside that corridor. | Synthetic shelf sanity test improved bad shelf error from about 40 px / 29 px to under 1 px on both injected shelves. User screenshot validation still needed. | Active | This is a constrained second pass, unlike the reverted broad multi-pass rescue. If it fails, inspect debug exports to see whether the first guide lane itself is wrong. |
 
 ## Do Not Repeat Without A New Test
 
