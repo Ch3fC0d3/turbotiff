@@ -4977,82 +4977,6 @@ def guard_trace_velocity(xs, max_dx=6.0):
     return s.to_numpy(dtype=np.float32)
 
 
-def suppress_short_lateral_excursions(xs, curve_type=None, baseline_window=61, max_run=None, min_excursion=None, edge_jump=None):
-    """Remove brief sideways lock-ons that look like extra black-trace crests."""
-    if xs is None or not hasattr(xs, "size") or xs.size < 7:
-        return xs
-    try:
-        arr = np.asarray(xs, dtype=np.float32).copy()
-    except Exception:
-        return xs
-
-    valid = np.isfinite(arr)
-    if np.count_nonzero(valid) < 5:
-        return arr
-
-    curve_type_upper = str(curve_type or "").upper()
-    if max_run is None:
-        max_run = 18 if curve_type_upper == "GR" else 36
-    if min_excursion is None:
-        min_excursion = 12.0 if curve_type_upper == "GR" else 8.0
-    if edge_jump is None:
-        edge_jump = 6.0 if curve_type_upper == "GR" else 4.5
-
-    try:
-        filled = pd.Series(arr).interpolate(method="linear", limit_direction="both").ffill().bfill()
-        if filled.isna().any():
-            return arr
-
-        n = arr.size
-        win = max(9, int(baseline_window) | 1)
-        win = min(win, n if n % 2 else n - 1)
-        if win < 5:
-            return arr
-
-        min_periods = max(3, min(15, win // 4))
-        baseline = filled.rolling(win, min_periods=min_periods, center=True).median().bfill().ffill()
-        filled_np = filled.to_numpy(dtype=np.float32)
-        baseline_np = baseline.to_numpy(dtype=np.float32)
-    except Exception:
-        return arr
-
-    deviation = filled_np - baseline_np
-    candidate = valid & np.isfinite(baseline_np) & (np.abs(deviation) >= float(min_excursion))
-    if not candidate.any():
-        return arr
-
-    out = arr.copy()
-    n = arr.size
-    i = 0
-    while i < n:
-        if not bool(candidate[i]):
-            i += 1
-            continue
-
-        start = i
-        while i < n and bool(candidate[i]):
-            i += 1
-        end = i - 1
-        run_len = end - start + 1
-        if run_len > int(max_run):
-            continue
-
-        prev_jump = abs(float(filled_np[start] - filled_np[start - 1])) if start > 0 else 0.0
-        next_jump = abs(float(filled_np[end + 1] - filled_np[end])) if end + 1 < n else 0.0
-        abrupt_edge = prev_jump >= float(edge_jump) or next_jump >= float(edge_jump)
-        if not abrupt_edge:
-            continue
-
-        left_close = start == 0 or abs(float(filled_np[start - 1] - baseline_np[start - 1])) < float(min_excursion)
-        right_close = end + 1 >= n or abs(float(filled_np[end + 1] - baseline_np[end + 1])) < float(min_excursion)
-        if not (left_close or right_close):
-            continue
-
-        out[start:end + 1] = baseline_np[start:end + 1]
-
-    return out
-
-
 def snap_black_trace_to_wide_darkest(roi_bgr, xs, search_radius=55, min_darkness_gain=0.12, neighbor_consistency=25.0):
     """For each row, search a wide window around the current trace point for
     a darker pixel and snap to it if it is clearly darker AND the shift stays
@@ -10004,13 +9928,6 @@ def digitize():
             except Exception:
                 pass
 
-            # Remove short lateral shelves that jump away from the local trend
-            # and then reconnect, which creates the visible extra crests.
-            try:
-                xs = suppress_short_lateral_excursions(xs, curve_type=curve_type)
-            except Exception:
-                pass
-
             # Median filter: remove 1-3 row horizontal glitches that survive
             # the outlier guards. The colored pipeline already does this.
             try:
@@ -10065,12 +9982,6 @@ def digitize():
 
             try:
                 xs = recenter_black_trace_post_dp(roi, xs)
-            except Exception:
-                pass
-
-            try:
-                xs = suppress_short_lateral_excursions(xs, curve_type=curve_type)
-                xs = guard_trace_velocity(xs, max_dx=5.0)
             except Exception:
                 pass
 
