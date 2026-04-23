@@ -1669,6 +1669,110 @@ def compute_black_curve_residual(gray_img):
     return residual_score, grid_score
 
 
+def build_black_prescan_grid_removed(gray_img):
+    """Build a grid-removed grayscale image and residual scores for black logs."""
+    if gray_img is None or gray_img.size == 0:
+        return gray_img, None, None, None
+
+    h, w = gray_img.shape[:2]
+    if h < 3 or w < 3:
+        z = np.zeros((h, w), dtype=np.float32)
+        return gray_img, z, z, np.zeros((h, w), dtype=np.uint8)
+
+    try:
+        residual_score, grid_score = compute_black_curve_residual(gray_img)
+    except Exception:
+        residual_score = None
+        grid_score = None
+
+    try:
+        dark = (255 - gray_img).astype(np.uint8, copy=False)
+        dark = cv2.GaussianBlur(dark, (3, 3), 0)
+
+        grid_parts = []
+        # Use multiple scales: the fine kernels catch thin minor grid lines;
+        # the long kernels catch continuous track rails and major grid bars.
+        vertical_sizes = {
+            max(9, min(45, h // 10)),
+            max(21, min(95, h // 4)),
+            max(41, min(181, h // 2)),
+        }
+        horizontal_sizes = {
+            max(9, min(45, w // 10)),
+            max(21, min(95, w // 4)),
+            max(41, min(181, w // 2)),
+        }
+        for size in sorted(vertical_sizes):
+            if size >= 3:
+                kern = cv2.getStructuringElement(cv2.MORPH_RECT, (1, int(size)))
+                grid_parts.append(cv2.morphologyEx(dark, cv2.MORPH_OPEN, kern))
+        for size in sorted(horizontal_sizes):
+            if size >= 3:
+                kern = cv2.getStructuringElement(cv2.MORPH_RECT, (int(size), 1))
+                grid_parts.append(cv2.morphologyEx(dark, cv2.MORPH_OPEN, kern))
+
+        if grid_parts:
+            grid_u8 = grid_parts[0]
+            for part in grid_parts[1:]:
+                grid_u8 = cv2.max(grid_u8, part)
+            grid_u8 = cv2.dilate(grid_u8, np.ones((3, 3), np.uint8), iterations=1)
+        else:
+            grid_u8 = np.zeros_like(dark)
+
+        residual_u8 = cv2.subtract(dark, grid_u8)
+        if residual_score is not None and residual_score.shape[:2] == (h, w):
+            residual_from_score = np.clip(residual_score * 255.0, 0, 255).astype(np.uint8)
+            residual_u8 = cv2.max(residual_u8, residual_from_score)
+
+        residual_u8 = cv2.GaussianBlur(residual_u8, (3, 3), 0)
+        grid_removed_gray = (255 - residual_u8).astype(np.uint8)
+
+        residual_peak = int(residual_u8.max())
+        residual_floor = max(18, int(round(residual_peak * 0.20)))
+        _, residual_mask = cv2.threshold(
+            residual_u8,
+            residual_floor,
+            255,
+            cv2.THRESH_BINARY,
+        )
+        try:
+            if float(np.mean(residual_mask > 0)) < 0.003:
+                adaptive_mask = cv2.adaptiveThreshold(
+                    grid_removed_gray,
+                    255,
+                    cv2.ADAPTIVE_THRESH_MEAN_C,
+                    cv2.THRESH_BINARY_INV,
+                    21,
+                    4,
+                )
+                adaptive_floor = max(12, int(round(residual_floor * 0.75)))
+                adaptive_mask = cv2.bitwise_and(
+                    adaptive_mask,
+                    ((residual_u8 >= adaptive_floor).astype(np.uint8) * 255),
+                )
+                residual_mask = cv2.bitwise_or(residual_mask, adaptive_mask)
+            _, otsu_mask = cv2.threshold(
+                residual_u8,
+                0,
+                255,
+                cv2.THRESH_BINARY + cv2.THRESH_OTSU,
+            )
+            otsu_coverage = float(np.mean(otsu_mask > 0))
+            if 0.0005 <= otsu_coverage <= 0.20:
+                residual_mask = cv2.bitwise_or(residual_mask, otsu_mask)
+        except Exception:
+            pass
+
+        if grid_score is None or grid_score.shape[:2] != (h, w):
+            grid_score = grid_u8.astype(np.float32)
+            gmax = float(grid_score.max())
+            if gmax > 0:
+                grid_score /= gmax
+        return grid_removed_gray, residual_score, grid_score, residual_mask
+    except Exception:
+        return gray_img, residual_score, grid_score, None
+
+
 def enhance_curve_roi(roi_bgr):
     """
     Apply lightweight denoise + horizontal super-resolution to a curve ROI.
@@ -1828,6 +1932,7 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
     # Also apply CLAHE directly to grayscale for edge detection
     clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
     gray = clahe.apply(gray)
+    trace_gray = gray
 
     # 1) Base color/intensity mask
     # For colored modes, try to detect the actual curve hue for better tracking
@@ -2127,40 +2232,56 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
         # "black" or fallback: dark pixels relative to local background
         # Auto-detect if this is a black and white log for aggressive grid removal
         is_bw_log = detect_if_black_and_white_log(roi_bgr)
-        
-        # Apply aggressive grid removal to grayscale before thresholding if B&W detected
+
+        residual_mask = None
         gray_processed = gray
         if is_bw_log:
-            # Enhanced with Hough Transform for better preservation of jagged curves
-            gray_processed = suppress_grid_hough(gray_processed)
-            # Use original morphology as backup but less aggressive
-            gray_processed = remove_grid_lines_aggressive(gray_processed, aggressive=False)
+            # Pre-scan grid removal: build the black mask from residual curve
+            # pixels after straight grid energy has been modeled away.
+            try:
+                gray_processed, black_residual_score, black_grid_score, residual_mask = build_black_prescan_grid_removed(gray)
+                trace_gray = gray_processed
+            except Exception:
+                gray_processed = gray
+                trace_gray = gray
+                black_residual_score = None
+                black_grid_score = None
+                residual_mask = None
+        else:
+            try:
+                black_residual_score, black_grid_score = compute_black_curve_residual(gray)
+            except Exception:
+                black_residual_score = None
+                black_grid_score = None
 
-        # Build a grayscale residual where long straight grid energy is
-        # subtracted out before we threshold. This helps black-on-black scans
-        # where the curve and grid share the same color, but only the grid is
-        # strongly straight and repetitive.
-        try:
-            black_residual_score, black_grid_score = compute_black_curve_residual(gray_processed)
-        except Exception:
-            black_residual_score = None
-            black_grid_score = None
-        
-        color_mask = cv2.adaptiveThreshold(
+        raw_mask = cv2.adaptiveThreshold(
             gray_processed, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
             cv2.THRESH_BINARY_INV, 21, 4
         )
+        color_mask = raw_mask
 
         if black_residual_score is not None and black_residual_score.size == color_mask.size:
             try:
                 residual_u8 = np.clip(black_residual_score * 255.0, 0, 255).astype(np.uint8)
-                residual_mask = cv2.adaptiveThreshold(
+                residual_mask_from_score = cv2.adaptiveThreshold(
                     255 - residual_u8, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
                     cv2.THRESH_BINARY_INV, 21, 6
                 )
-                color_mask = cv2.bitwise_or(color_mask, residual_mask)
+                residual_mask = residual_mask_from_score if residual_mask is None else cv2.bitwise_or(residual_mask, residual_mask_from_score)
             except Exception:
                 pass
+
+        if residual_mask is not None:
+            residual_coverage = float(np.mean(residual_mask > 0))
+            if is_bw_log and 0.0005 <= residual_coverage <= 0.50:
+                # For B/W scans, do not OR the raw grid mask back in. Use the
+                # residual as the scan mask, with raw darkness only filling
+                # immediately adjacent residual pixels.
+                dilated_residual = cv2.dilate(residual_mask, np.ones((3, 3), np.uint8), iterations=1)
+                local_raw = cv2.bitwise_and(raw_mask, dilated_residual)
+                color_mask = cv2.bitwise_or(residual_mask, local_raw)
+            else:
+                color_mask = cv2.bitwise_or(color_mask, residual_mask)
 
         # Suppress colored pixels (grid/track lines are often red/green/blue).
         # In black mode we want low-saturation dark ink.
@@ -2210,10 +2331,11 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
     # 2) Enhanced edge detection using both Canny and Sobel.
     #    Canny finds strong edges; Sobel emphasizes horizontal gradients
     #    which helps track curves that move left/right.
-    edges_canny = cv2.Canny(gray, 40, 120)
+    edge_gray = trace_gray if mode not in colored_modes else gray
+    edges_canny = cv2.Canny(edge_gray, 40, 120)
     
     # Sobel for horizontal gradient (curve moving left/right)
-    sobel_x = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+    sobel_x = cv2.Sobel(edge_gray, cv2.CV_64F, 1, 0, ksize=3)
     sobel_x = np.abs(sobel_x)
     sobel_x = (sobel_x / (sobel_x.max() + 1e-6) * 255).astype(np.uint8)
     
@@ -2324,7 +2446,7 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
         # --- Vertical Derivative Boost ---
         # Calculate Sobel Y to detect horizontal changes (edges of horizontal lines/spikes)
         # Vertical grid rails have dy ~ 0. Wiggly curves (even steep ones) have higher dy components.
-        sobel_y = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+        sobel_y = cv2.Sobel(edge_gray, cv2.CV_64F, 0, 1, ksize=3)
         sobel_y = np.abs(sobel_y)
         # Normalize
         max_sy = sobel_y.max()
@@ -2337,7 +2459,7 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
         # Harris response is high at "corners" (jagged peaks) and low on straight edges (grid lines).
         # This is perfect for highlighting the high-frequency nature of GR curves.
         # blockSize=2 (local), ksize=3 (gradients), k=0.04 (sensitivity)
-        harris = cv2.cornerHarris(gray, 2, 3, 0.04)
+        harris = cv2.cornerHarris(edge_gray, 2, 3, 0.04)
         # Normalize strictly to 0-1
         harris = np.maximum(0, harris) # Clip negatives (flat regions)
         max_h = harris.max()
@@ -2380,34 +2502,34 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
             # on raw corners to avoid snapping to grid intersections.
             residual_score = black_residual_score if black_residual_score is not None and black_residual_score.size == color_score.size else color_score
             prob = (
-                0.12 * color_score +
-                0.22 * residual_score +
-                0.12 * edge_enhanced +
-                0.18 * center_score +
-                0.09 * sobel_y_score +
-                0.04 * harris_score +
-                0.03 * diag_score +
-                0.20 * skel_score
+                0.18 * color_score +
+                0.38 * residual_score +
+                0.08 * edge_enhanced +
+                0.14 * center_score +
+                0.06 * sobel_y_score +
+                0.02 * harris_score +
+                0.02 * diag_score +
+                0.12 * skel_score
             )
         else:
             residual_score = black_residual_score if black_residual_score is not None and black_residual_score.size == color_score.size else color_score
             prob = (
-                0.18 * color_score +
-                0.24 * residual_score +
-                0.18 * edge_enhanced +
-                0.22 * center_score +
-                0.10 * sobel_y_score +
-                0.04 * harris_score +
-                0.04 * diag_score
+                0.22 * color_score +
+                0.42 * residual_score +
+                0.10 * edge_enhanced +
+                0.14 * center_score +
+                0.06 * sobel_y_score +
+                0.03 * harris_score +
+                0.03 * diag_score
             )
 
         if black_grid_score is not None and black_grid_score.size == prob.size:
             try:
                 # Penalize long straight-line evidence, but keep a floor so the
                 # curve can survive where it legitimately crosses a grid line.
-                prob *= np.clip(1.0 - 0.82 * black_grid_score, 0.10, 1.0)
+                prob *= np.clip(1.0 - 0.92 * black_grid_score, 0.03, 1.0)
                 if black_residual_score is not None and black_residual_score.size == prob.size:
-                    prob = np.maximum(prob, 0.35 * black_residual_score)
+                    prob = np.maximum(prob, 0.55 * black_residual_score)
             except Exception:
                 pass
 
@@ -2420,6 +2542,8 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
             cleaned_binary = preprocess_curve_track(roi_bgr, mode=mode)
             if cleaned_binary is not None and cleaned_binary.size == prob.size:
                 cleaned_score = cleaned_binary.astype(np.float32) / 255.0
+                if black_residual_score is not None and black_residual_score.size == prob.size:
+                    cleaned_score = np.maximum(cleaned_score, (black_residual_score > 0.10).astype(np.float32))
                 # Where cleaned_score == 0 (likely grid/border), push probability
                 # almost to zero; where == 1, keep prob as-is.
                 gate = 0.05 + 0.95 * cleaned_score
@@ -5093,11 +5217,13 @@ def refine_black_trace_to_continuous_line(
         return xs_ref
 
     try:
-        residual_score, grid_score = compute_black_curve_residual(gray)
+        support_gray, residual_score, grid_score, _ = build_black_prescan_grid_removed(gray)
         if residual_score is None or residual_score.shape[:2] != (h, w):
             return xs_ref
         if grid_score is None or grid_score.shape[:2] != (h, w):
             grid_score = np.zeros((h, w), dtype=np.float32)
+        if support_gray is None or support_gray.shape[:2] != (h, w):
+            support_gray = gray
 
         k_y = max(5, int(vertical_window) | 1)
         k_y = min(k_y, h if h % 2 else h - 1)
@@ -5106,7 +5232,7 @@ def refine_black_trace_to_continuous_line(
 
         residual = np.clip(residual_score.astype(np.float32), 0.0, 1.0)
         grid = np.clip(grid_score.astype(np.float32), 0.0, 1.0)
-        dark = (255.0 - gray.astype(np.float32)) / 255.0
+        dark = (255.0 - support_gray.astype(np.float32)) / 255.0
 
         vertical_support = cv2.blur(residual, (3, k_y))
         local_residual = cv2.GaussianBlur(residual, (3, 3), 0)
