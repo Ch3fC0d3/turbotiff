@@ -17,6 +17,7 @@ Main active files/functions:
 - `web_app.py`
 - `compute_prob_map`
 - `build_black_prescan_grid_removed`
+- `build_black_curve_candidate_score`
 - `refine_black_trace_to_continuous_line`
 - `rerun_black_trace_in_guided_band`
 - `refine_black_trace_to_dark_run_center`
@@ -33,7 +34,8 @@ Main active files/functions:
 | `8069b98` | Remove grid before pixel tracing | Added `build_black_prescan_grid_removed`; black/white scans now build the probability map from grid-removed residual pixels instead of raw dark pixels. | Helped reduce raw grid entering the scan, but still not enough on difficult captures. | Active | Good direction. Avoid OR-ing broad raw-dark masks back into the residual mask because that reintroduces grid. |
 | `6901221` | Multiple broad-to-tight passes | Added `refine_black_trace_multi_pass`: broad rescue, medium line follow, tight pixel fit. | Looked worse in user screenshot; trace jumped into large false shelves and wrong branches. | Reverted by `d7d2730` | Do not repeat multi-pass broad rescue with weak constraints. More passes amplified mistakes instead of fixing them. |
 | `ec3a0da` | Trace debug export | Added black-curve debug artifacts to digitize responses and auto-capture payloads: ROI, overlay, probability map, grid-removed view, residual mask/score, grid score, component preview, and metrics. | Tooling change only; intended to make the next failure inspectable instead of tuning from screenshots. | Active | Use this before the next algorithm change. Check whether failures come from preprocessing, candidate components, or path selection. |
-| `99c9cdd` | Guided band rerun | Added `rerun_black_trace_in_guided_band`: after the first black trace and rolling outlier guard, build a smoothed corridor around the trace and rerun DP only inside that corridor. | Synthetic shelf sanity test improved bad shelf error from about 40 px / 29 px to under 1 px on both injected shelves. User screenshot validation still needed. | Active | This is a constrained second pass, unlike the reverted broad multi-pass rescue. If it fails, inspect debug exports to see whether the first guide lane itself is wrong. |
+| `99c9cdd` | Guided band rerun | Added `rerun_black_trace_in_guided_band`: after the first black trace and rolling outlier guard, build a smoothed corridor around the trace and rerun DP only inside that corridor. | Synthetic shelf sanity test improved bad shelf error, but the user screenshot looked essentially unchanged. | Active but low-impact | The first guide lane is already contaminated, so a band around it preserves the same mistake. Do not expect banding alone to solve this. |
+| `789230a` | Orientation-aware candidate score | Added `build_black_curve_candidate_score`; black probability maps now favor residual ink with vertical continuity and penalize long horizontal structures and compact text-like blobs before DP. Debug export now includes `candidate_score`. | Synthetic residual test kept curve-like pixels high (~0.90 mean) while suppressing horizontal shelf pixels (~0.17 mean). User screenshot validation still needed. | Active | This moves the fix earlier in the pipeline, where false evidence competes with the curve, instead of cleaning up after DP. |
 
 ## Do Not Repeat Without A New Test
 
