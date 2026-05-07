@@ -358,6 +358,7 @@
         </div>
 
         <div class="toolbar-group" id="imageControls" style="display:none; align-items: center; gap: 8px;">
+            <button class="zoom-btn" onclick="removeImage()" title="Remove Image" style="background: rgba(220, 38, 38, 0.2); color: #fca5a5; border-color: rgba(220, 38, 38, 0.4); padding: 4px 8px; margin-right: 8px;">✕ Remove</button>
             <span style="font-size:0.85em; font-weight:600; color:#e2e8f0;">Img Depth:</span>
             <input type="number" id="imgTopDepth" placeholder="Top" class="depth-input" title="Depth at top of image">
             <span style="color:#cbd5e1;">–</span>
@@ -575,6 +576,18 @@ document.getElementById('fileInput').addEventListener('change', async function(e
 });
 
 // ── Image Upload ───────────────────────────────────────────────────────────
+function removeImage() {
+    const img = document.getElementById('uploadedImage');
+    img.src = "";
+    document.getElementById('imageInput').value = "";
+    document.getElementById('imageContent').style.display = 'none';
+    document.getElementById('imageControls').style.display = 'none';
+    document.getElementById('imagePlaceholder').style.display = 'flex';
+    document.getElementById('syncScroll').checked = false;
+    document.getElementById('overlayToggle').checked = false;
+    clearOverlay();
+}
+
 document.getElementById('imageInput').addEventListener('change', function(e) {
     const file = e.target.files?.[0];
     if (!file) return;
