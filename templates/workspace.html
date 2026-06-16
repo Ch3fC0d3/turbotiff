@@ -7290,7 +7290,8 @@
         });
 
 
-        // 🚗 Easter egg: Konami Code → ↑↑↓↓←→←→BA opens Drive Trace Mode
+        // Easter egg: Konami Code -> Up Up Down Down Left Right Left Right B A opens Drive Trace Mode.
+        // Backup shortcut: Ctrl+Shift+D.
         (function () {
             const KONAMI = [
                 'ArrowUp','ArrowUp','ArrowDown','ArrowDown',
@@ -7299,16 +7300,26 @@
             ];
             let konamiIdx = 0;
             document.addEventListener('keydown', function (e) {
-                if (e.key === KONAMI[konamiIdx]) {
+                const key = e.key && e.key.length === 1 ? e.key.toLowerCase() : e.key;
+                if ((e.ctrlKey || e.metaKey) && e.shiftKey && key === 'd') {
+                    konamiIdx = 0;
+                    if (typeof openDriveTraceMode === 'function') {
+                        e.preventDefault();
+                        openDriveTraceMode();
+                    }
+                    return;
+                }
+                if (key === KONAMI[konamiIdx]) {
                     konamiIdx++;
                     if (konamiIdx === KONAMI.length) {
                         konamiIdx = 0;
                         if (typeof openDriveTraceMode === 'function') {
+                            e.preventDefault();
                             openDriveTraceMode();
                         }
                     }
                 } else {
-                    konamiIdx = (e.key === KONAMI[0]) ? 1 : 0;
+                    konamiIdx = (key === KONAMI[0]) ? 1 : 0;
                 }
             });
         })();
