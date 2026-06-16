@@ -11872,6 +11872,7 @@
                         preview_filters: previewFilters,
                         header_metadata: headerMetadata || null,
                         trace_debug_export: traceDebugExport,
+                        response_mode: traceDebugExport ? 'debug' : 'lean',
                     }),
                 });
 
@@ -11908,6 +11909,13 @@
                     lastLasFilename = data.filename || 'digitized_log.las';
                     lastDepthConfig = depthCfg;
                     lastNullValue = (config.global_options && typeof config.global_options.null === 'number') ? config.global_options.null : -999.25;
+                    if (!lastLasContent && Array.isArray(lastDigitizedDepth) && lastDigitizedDepth.length > 0 &&
+                        lastDigitizedCurves && typeof lastDigitizedCurves === 'object') {
+                        const rebuiltLas = buildLasFromDigitized(lastDigitizedDepth, lastDigitizedCurves, lastDepthConfig, lastNullValue);
+                        if (rebuiltLas && typeof rebuiltLas === 'string' && rebuiltLas.trim().length) {
+                            lastLasContent = rebuiltLas;
+                        }
+                    }
                     renderDigitizationSummary(
                         depthCfg,
                         lastDigitizedDepth,
