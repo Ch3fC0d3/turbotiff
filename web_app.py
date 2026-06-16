@@ -6728,6 +6728,11 @@ def crop_to_panel():
     crop = img[top:bottom, left:right]
     ch, cw, _ = crop.shape
 
+    image_filename = f"{uuid.uuid4().hex}.jpg"
+    image_path = Path(config.DATA_ROOT) / 'images' / image_filename
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(image_path), crop, [cv2.IMWRITE_JPEG_QUALITY, 90])
+
     ok, buf = cv2.imencode('.jpg', crop, [cv2.IMWRITE_JPEG_QUALITY, 90])
     if not ok:
         return jsonify({'success': False, 'error': 'Failed to encode crop'}), 500
@@ -6738,6 +6743,7 @@ def crop_to_panel():
     return jsonify({
         'success': True,
         'image': data_url,
+        'image_path': f'/api/images/{image_filename}',
         'width': int(cw),
         'height': int(ch),
     })
@@ -9901,17 +9907,40 @@ def digitize():
 
     data = request.json
 
-    # Decode image
-    img_data = data['image'].split(',')[1]
-    img_bytes = base64.b64decode(img_data)
-    nparr = np.frombuffer(img_bytes, np.uint8)
-    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    # Decode image. Prefer a server-side image path when the frontend has one;
+    # reposting full base64 logs can exceed proxy/serverless request limits.
+    image_path_ref = (data.get('image_path') or '').strip()
+    img = None
+    if image_path_ref.startswith('/api/images/'):
+        image_filename = image_path_ref.rsplit('/', 1)[-1].split('?', 1)[0]
+        disk_path = Path(config.DATA_ROOT) / 'images' / image_filename
+        if disk_path.exists():
+            img = cv2.imread(str(disk_path), cv2.IMREAD_COLOR)
+        else:
+            return jsonify({'error': f'Image file not found for digitize: {image_filename}'}), 400
+
+    if img is None:
+        image_data = data.get('image')
+        if not image_data or ',' not in image_data:
+            return jsonify({'error': 'Missing image data for digitize.'}), 400
+        img_data = image_data.split(',', 1)[1]
+        img_bytes = base64.b64decode(img_data)
+        nparr = np.frombuffer(img_bytes, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+    if img is None:
+        return jsonify({'error': 'Could not decode image for digitize.'}), 400
 
     # Extract config
     cfg = data['config']
     preview_filters = data.get('preview_filters') or {}
     detected_text = data.get('detected_text') or {}
-    trace_debug_export = bool(data.get('trace_debug_export'))
+    trace_debug_requested = bool(data.get('trace_debug_export'))
+    trace_debug_allowed = (
+        request.args.get('trace_debug') == '1'
+        or os.environ.get('TURBOTIFF_ALLOW_TRACE_DEBUG_EXPORT') == '1'
+    )
+    trace_debug_export = trace_debug_requested and trace_debug_allowed
     depth_cfg = cfg['depth']
     curves = (cfg['curves'] or [])[:6]
     gopt = cfg.get('global_options', {})
@@ -12756,6 +12785,18 @@ def api_corrections_stats():
     except Exception as exc:
         return jsonify({'success': False, 'error': str(exc)}), 500
 
+
+@app.route('/robots.txt')
+def static_from_root_robots():
+    return send_from_directory('static', 'robots.txt')
+
+@app.route('/sitemap.xml')
+def static_from_root_sitemap():
+    return send_from_directory('static', 'sitemap.xml')
+
+@app.route('/BingSiteAuth.xml')
+def static_from_root_bing():
+    return send_from_directory('templates', 'BingSiteAuth.xml')
 
 if __name__ == '__main__':
     # Create templates folder if it doesn't exist
