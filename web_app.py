@@ -9935,6 +9935,8 @@ def digitize():
     cfg = data['config']
     preview_filters = data.get('preview_filters') or {}
     detected_text = data.get('detected_text') or {}
+    response_mode = (data.get('response_mode') or 'lean').strip().lower()
+    include_heavy_response = response_mode in {'full', 'debug'}
     trace_debug_requested = bool(data.get('trace_debug_export'))
     trace_debug_allowed = (
         request.args.get('trace_debug') == '1'
@@ -10710,13 +10712,14 @@ def digitize():
                 'message': f'LAS validation failed: {exc}'
             }
 
-        # Build AI analysis payload (OCR + LAS stats + user curve config)
-        ai_payload = build_ai_analysis_payload(las_content, detected_text, curves)
-        ai_summary = call_hf_curve_analysis(ai_payload) if ai_payload else None
+        if include_heavy_response:
+            # Build AI analysis payload (OCR + LAS stats + user curve config)
+            ai_payload = build_ai_analysis_payload(las_content, detected_text, curves)
+            ai_summary = call_hf_curve_analysis(ai_payload) if ai_payload else None
 
     return jsonify({
         'success': True,
-        'las_content': las_content,
+        'las_content': las_content if include_heavy_response else None,
         'filename': build_las_filename_from_metadata(header_metadata, default_name='digitized_log.las'),
         'validation': validation,
         'outlier_warnings': outlier_warnings,
@@ -10724,8 +10727,8 @@ def digitize():
         'curve_warnings': curve_warnings,
         'curve_traces': curve_traces,
         'curve_trace_debug': curve_trace_debug if trace_debug_export else {},
-        'ai_payload': ai_payload,
-        'ai_summary': ai_summary,
+        'ai_payload': ai_payload if include_heavy_response else None,
+        'ai_summary': ai_summary if include_heavy_response else None,
         'digitized_depth': digitized_depth,
         'digitized_curves': digitized_curves,
     })
