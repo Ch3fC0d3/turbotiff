@@ -31,11 +31,13 @@ from flask import (
 )
 import math
 import os
+import atexit
 import random
 import re
 import shutil
 import string
 import sqlite3
+import threading
 from app import auth_billing
 from app import mailer
 from app import scale_detection
@@ -311,6 +313,235 @@ def restore_session_from_token():
 
 auth_billing.init_db(config.AUTH_DB_PATH)
 stripe.api_key = config.STRIPE_SECRET_KEY
+
+# ----------------------------
+# Persistent cache cleanup
+# ----------------------------
+def _env_bool(name: str, default: bool = True) -> bool:
+    raw = str(os.environ.get(name, "")).strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int, min_value: int = 0) -> int:
+    try:
+        return max(min_value, int(float(os.environ.get(name, default))))
+    except Exception:
+        return default
+
+
+CACHE_CLEANUP_ENABLED = _env_bool("TURBOTIFF_CACHE_CLEANUP_ENABLED", True)
+CACHE_IMAGE_TTL_SECONDS = _env_int("TURBOTIFF_CACHE_IMAGE_TTL_HOURS", 24, 1) * 3600
+CACHE_TEMP_TTL_SECONDS = _env_int("TURBOTIFF_CACHE_TEMP_TTL_HOURS", 6, 1) * 3600
+CACHE_CLEANUP_INTERVAL_SECONDS = _env_int("TURBOTIFF_CACHE_CLEANUP_INTERVAL_SECONDS", 3600, 300)
+CACHE_IMAGES_MAX_BYTES = _env_int("TURBOTIFF_CACHE_IMAGES_MAX_MB", 512, 32) * 1024 * 1024
+
+
+def _extract_api_image_filename(value: Any) -> Optional[str]:
+    text = str(value or "").strip()
+    marker = "/api/images/"
+    if marker not in text:
+        return None
+    filename = text.split(marker, 1)[1].split("?", 1)[0].split("#", 1)[0].strip("/")
+    if not filename or "/" in filename or "\\" in filename:
+        return None
+    return filename
+
+
+def _referenced_image_filenames() -> set:
+    referenced = set()
+    db_path = config.AUTH_DB_PATH
+    if not db_path or not os.path.exists(db_path):
+        return referenced
+    try:
+        with sqlite3.connect(db_path) as conn:
+            rows = conn.execute(
+                "SELECT original_image_path, cropped_image_path FROM user_logs"
+            ).fetchall()
+        for original_path, cropped_path in rows:
+            for value in (original_path, cropped_path):
+                filename = _extract_api_image_filename(value)
+                if filename:
+                    referenced.add(filename)
+    except Exception as exc:
+        print(f"[cache-cleanup] Could not read referenced image paths: {exc}")
+    return referenced
+
+
+def _file_age_seconds(path: Path, now_ts: Optional[float] = None) -> float:
+    now_ts = time.time() if now_ts is None else now_ts
+    try:
+        return max(0.0, now_ts - path.stat().st_mtime)
+    except Exception:
+        return 0.0
+
+
+def _safe_unlink_file(path: Path) -> int:
+    try:
+        size = path.stat().st_size
+        path.unlink()
+        return int(size)
+    except FileNotFoundError:
+        return 0
+    except Exception as exc:
+        print(f"[cache-cleanup] Could not remove {path}: {exc}")
+        return 0
+
+
+def _cleanup_empty_dirs(root: Path) -> int:
+    removed = 0
+    if not root.exists():
+        return removed
+    for path in sorted((p for p in root.rglob("*") if p.is_dir()), key=lambda p: len(p.parts), reverse=True):
+        try:
+            path.rmdir()
+            removed += 1
+        except Exception:
+            pass
+    return removed
+
+
+def _cleanup_unreferenced_images(now_ts: float) -> Dict[str, int]:
+    images_dir = Path(config.DATA_ROOT) / "images"
+    stats = {"deleted": 0, "bytes": 0, "kept_referenced": 0}
+    if not images_dir.exists():
+        return stats
+
+    referenced = _referenced_image_filenames()
+    unreferenced = []
+    total_size = 0
+
+    for path in images_dir.glob("*"):
+        if not path.is_file():
+            continue
+        try:
+            size = int(path.stat().st_size)
+        except Exception:
+            size = 0
+        total_size += size
+        if path.name in referenced:
+            stats["kept_referenced"] += 1
+            continue
+        unreferenced.append((path, size, path.stat().st_mtime if path.exists() else 0.0))
+        if _file_age_seconds(path, now_ts) >= CACHE_IMAGE_TTL_SECONDS:
+            removed = _safe_unlink_file(path)
+            if removed:
+                stats["deleted"] += 1
+                stats["bytes"] += removed
+                total_size -= removed
+
+    if total_size > CACHE_IMAGES_MAX_BYTES:
+        remaining = []
+        for path, size, mtime in unreferenced:
+            if path.exists():
+                remaining.append((mtime, path, size))
+        for _mtime, path, _size in sorted(remaining):
+            if total_size <= CACHE_IMAGES_MAX_BYTES:
+                break
+            removed = _safe_unlink_file(path)
+            if removed:
+                stats["deleted"] += 1
+                stats["bytes"] += removed
+                total_size -= removed
+
+    return stats
+
+
+def _cleanup_ttl_dirs(now_ts: float) -> Dict[str, int]:
+    stats = {"deleted": 0, "bytes": 0, "dirs": 0}
+    data_root = Path(config.DATA_ROOT)
+    for dirname in ("cache", "tmp", "temp", "uploads"):
+        root = data_root / dirname
+        if not root.exists():
+            continue
+        for path in root.rglob("*"):
+            if path.is_file() and _file_age_seconds(path, now_ts) >= CACHE_TEMP_TTL_SECONDS:
+                removed = _safe_unlink_file(path)
+                if removed:
+                    stats["deleted"] += 1
+                    stats["bytes"] += removed
+        stats["dirs"] += _cleanup_empty_dirs(root)
+    return stats
+
+
+def _cleanup_app_temp_dir(now_ts: float, shutdown: bool = False) -> Dict[str, int]:
+    stats = {"deleted": 0, "bytes": 0, "dirs": 0}
+    temp_root = Path(tempfile.gettempdir())
+    prefixes = ("turbotiff", "tiflas", "tmp_turbotiff")
+    ttl = 0 if shutdown else CACHE_TEMP_TTL_SECONDS
+    try:
+        candidates = [p for p in temp_root.iterdir() if p.name.lower().startswith(prefixes)]
+    except Exception:
+        return stats
+    for path in candidates:
+        if _file_age_seconds(path, now_ts) < ttl:
+            continue
+        try:
+            if path.is_dir():
+                size = sum((f.stat().st_size for f in path.rglob("*") if f.is_file()), 0)
+                shutil.rmtree(path, ignore_errors=True)
+                if not path.exists():
+                    stats["dirs"] += 1
+                    stats["bytes"] += int(size)
+            elif path.is_file():
+                removed = _safe_unlink_file(path)
+                if removed:
+                    stats["deleted"] += 1
+                    stats["bytes"] += removed
+        except Exception as exc:
+            print(f"[cache-cleanup] Could not clean temp path {path}: {exc}")
+    return stats
+
+
+def run_storage_cleanup(reason: str = "manual", shutdown: bool = False) -> Dict[str, Any]:
+    if not CACHE_CLEANUP_ENABLED:
+        return {"enabled": False, "reason": reason}
+    now_ts = time.time()
+    stats = {
+        "enabled": True,
+        "reason": reason,
+        "data_root": str(config.DATA_ROOT),
+        "images": _cleanup_unreferenced_images(now_ts),
+        "ttl_dirs": _cleanup_ttl_dirs(now_ts),
+        "temp": _cleanup_app_temp_dir(now_ts, shutdown=shutdown),
+    }
+    print(f"[cache-cleanup] {json.dumps(stats, ensure_ascii=False)}")
+    return stats
+
+
+def _cache_cleanup_loop(stop_event: threading.Event) -> None:
+    while not stop_event.wait(CACHE_CLEANUP_INTERVAL_SECONDS):
+        try:
+            run_storage_cleanup(reason="periodic")
+        except Exception as exc:
+            print(f"[cache-cleanup] Periodic cleanup failed: {exc}")
+
+
+_cache_cleanup_stop_event = threading.Event()
+if CACHE_CLEANUP_ENABLED:
+    try:
+        run_storage_cleanup(reason="startup")
+        _cache_cleanup_thread = threading.Thread(
+            target=_cache_cleanup_loop,
+            args=(_cache_cleanup_stop_event,),
+            name="turbotiff-cache-cleanup",
+            daemon=True,
+        )
+        _cache_cleanup_thread.start()
+    except Exception as exc:
+        print(f"[cache-cleanup] Startup cleanup failed: {exc}")
+
+
+def _shutdown_storage_cleanup() -> None:
+    try:
+        _cache_cleanup_stop_event.set()
+        run_storage_cleanup(reason="shutdown", shutdown=True)
+    except Exception as exc:
+        print(f"[cache-cleanup] Shutdown cleanup failed: {exc}")
+
+
+atexit.register(_shutdown_storage_cleanup)
 
 PLAN_TO_PRICE = {
     'monthly': config.STRIPE_PRICE_MONTHLY,
