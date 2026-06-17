@@ -5227,6 +5227,7 @@
             });
 
             entry.values[idx] = newValue;
+            const manualPointStamp = Date.now();
 
             if (!Array.isArray(pts)) {
                 pts = [];
@@ -5237,6 +5238,7 @@
                 pts[existingIdx][1] = yImgUse;
                 pts[existingIdx][2] = idx;
                 pts[existingIdx][3] = 'manual';
+                pts[existingIdx][4] = manualPointStamp;
             } else {
                 // Insert at the correct sorted position to prevent "line out to the right"
                 let insertAt = pts.length;
@@ -5246,7 +5248,7 @@
                         break;
                     }
                 }
-                pts.splice(insertAt, 0, [clampedX, yImgUse, idx, 'manual']);
+                pts.splice(insertAt, 0, [clampedX, yImgUse, idx, 'manual', manualPointStamp]);
             }
 
             lastCurveTraces[targetKey] = pts;
@@ -11245,7 +11247,14 @@
                             group = [];
                             return;
                         }
-                        const manualPoint = valid.find(pt => pt[3] === 'manual');
+                        const manualPoints = valid.filter(pt => pt[3] === 'manual');
+                        const manualPoint = manualPoints.length
+                            ? manualPoints.reduce((best, pt) => {
+                                const bestTs = Number(best && best[4]);
+                                const ptTs = Number(pt && pt[4]);
+                                return (Number.isFinite(ptTs) && (!Number.isFinite(bestTs) || ptTs >= bestTs)) ? pt : best;
+                            }, manualPoints[0])
+                            : null;
                         if (manualPoint) {
                             collapsed.push(manualPoint);
                             group = [];
@@ -11291,7 +11300,9 @@
                     flush();
                     return collapsed;
                 };
-                sortedPoints = collapseTraceSamplesByDepth(sortedPoints, name);
+                if (!(editMode && isFocus)) {
+                    sortedPoints = collapseTraceSamplesByDepth(sortedPoints, name);
+                }
                 if (sortedPoints.length < 2) continue;
                 // Black traces need to show the actual traced crests, not a
                 // browser-smoothed approximation of them.
