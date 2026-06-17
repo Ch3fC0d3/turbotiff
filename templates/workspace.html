@@ -11116,7 +11116,7 @@
                     }
                 }
                 let points = tracesToRender[name] || [];
-                const isActiveEditFocus = isFocusedOverlayCurve(name);
+                const isActiveEditFocus = !!(editMode && editCurveId);
                 if (!(editMode && isActiveEditFocus)) {
                     const rebuiltDisplayTrace = buildDisplayTracePointsFromDigitized(name, { persist: false });
                     if (rebuiltDisplayTrace && Array.isArray(rebuiltDisplayTrace.points) && rebuiltDisplayTrace.points.length) {
