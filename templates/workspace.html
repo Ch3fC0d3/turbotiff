@@ -1817,6 +1817,14 @@
                                                 <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5ApplyYShift()">Apply</button>
                                             </div>
                                         </div>
+                                        <div class="field" style="grid-column:1/-1;">
+                                            <label>Loop local segment</label>
+                                            <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;">
+                                                <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5ApplyWrapCorrection(1)" title="Right edge reappears on left: add one wrap pass">R -> L +</button>
+                                                <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5ApplyWrapCorrection(-1)" title="Left edge reappears on right: subtract one wrap pass">L -> R -</button>
+                                                <input type="number" id="s5wrapRadius" value="120" min="10" max="800" step="10" title="Vertical edit radius in image pixels" style="width:72px;">
+                                            </div>
+                                        </div>
                                         <div class="field">
                                             <label>LAS mnemonic / unit</label>
                                             <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;">
@@ -3477,6 +3485,142 @@
             applyCurveYShiftForCurve(i);
         }
 
+        function s5ApplyWrapCorrection(direction) {
+            const dir = direction >= 0 ? 1 : -1;
+            const i = step5ActiveCurveIndex;
+            if (i < 0) {
+                showStatus('Select a curve before applying a loop correction.', 'info');
+                return;
+            }
+
+            const wrappedEl = document.getElementById(`wrapped${i}`);
+            if (wrappedEl && !wrappedEl.checked) {
+                wrappedEl.checked = true;
+                wrappedEl.dispatchEvent(new Event('change'));
+            }
+
+            const tracks = getTrackCalibrationsSnapshot();
+            const track = tracks.find(t => t && t.index === i);
+            if (!track) {
+                showStatus('Could not find the selected curve track.', 'error');
+                return;
+            }
+            track.wrapped = true;
+
+            const curveId = String(track.id || '').trim().toUpperCase();
+            if (!curveId) {
+                showStatus('Selected curve has no LAS mnemonic.', 'error');
+                return;
+            }
+            if (!lastDigitizedDepth || !lastDigitizedCurves) {
+                showStatus('Run Digitize before applying loop corrections.', 'info');
+                return;
+            }
+
+            const found = findDigitizedCurveEntry(curveId);
+            if (!found || !found.entry || !Array.isArray(found.entry.values)) {
+                showStatus(`No digitized values found for ${curveId}.`, 'error');
+                return;
+            }
+
+            const activeTrace = getActiveCurveTracePoints(curveId);
+            const traceKey = activeTrace.traceKey || getActiveCurveTraceKey(curveId) || found.key || curveId;
+            let pts = activeTrace.points;
+            if (!Array.isArray(pts) || !pts.length) {
+                rebuildCurveTraceFromDigitized(curveId);
+                pts = lastCurveTraces && lastCurveTraces[traceKey];
+            }
+            if (!Array.isArray(pts) || !pts.length) {
+                showStatus(`No editable trace points found for ${curveId}.`, 'error');
+                return;
+            }
+
+            ensureTracePointsHaveDepthIndex(curveId);
+
+            const radiusEl = document.getElementById('s5wrapRadius');
+            const radius = Math.max(10, Math.min(800, parseFloat(radiusEl && radiusEl.value) || 120));
+            let targetY = Number(lastMouseImgY);
+            if (!Number.isFinite(targetY)) {
+                targetY = pts[Math.floor(pts.length / 2)][1];
+            }
+
+            const leftX = Number(track.leftX);
+            const rightX = Number(track.rightX);
+            const width = rightX - leftX;
+            if (!Number.isFinite(leftX) || !Number.isFinite(rightX) || Math.abs(width) < 1e-3) {
+                showStatus('Invalid track width for loop correction.', 'error');
+                return;
+            }
+
+            const candidates = [];
+            for (let pointIndex = 0; pointIndex < pts.length; pointIndex++) {
+                const pt = pts[pointIndex];
+                if (!Array.isArray(pt) || pt.length < 2) continue;
+                const x = Number(pt[0]);
+                const y = Number(pt[1]);
+                if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+                if (Math.abs(y - targetY) > radius) continue;
+
+                const depthIndex = Number.isInteger(pt[2]) ? pt[2] : -1;
+                if (depthIndex < 0 || depthIndex >= found.entry.values.length) continue;
+                if (isDepthIndexPinned(curveId, depthIndex)) continue;
+
+                const frac = Math.max(0, Math.min(1, (x - leftX) / width));
+                const onExpectedSide = dir > 0 ? frac >= 0.5 : frac <= 0.5;
+                if (onExpectedSide) {
+                    candidates.push({ pointIndex, depthIndex, frac });
+                }
+            }
+
+            if (!candidates.length) {
+                showStatus(dir > 0
+                    ? 'No right-side points near the mouse to loop left.'
+                    : 'No left-side points near the mouse to loop right.', 'info');
+                return;
+            }
+
+            const undoPoints = pts.map((p, idx) => ({
+                pointIndex: idx,
+                oldX: Array.isArray(p) ? p[0] : null,
+                oldDepthIndex: Array.isArray(p) ? p[2] : null,
+            }));
+            const undoValues = found.entry.values.map((value, idx) => ({ idx, oldValue: value }));
+            editUndoStack.push({
+                type: 'bulk_transform',
+                label: dir > 0 ? 'right-to-left wrap correction' : 'left-to-right wrap correction',
+                curveKey: found.key,
+                curveId,
+                traceKey,
+                undoPoints,
+                undoValues,
+            });
+
+            const edgeEpsilon = 0.001;
+            candidates.forEach(({ pointIndex, depthIndex, frac }) => {
+                const newFrac = dir > 0
+                    ? 1 + Math.max(edgeEpsilon, 1 - frac)
+                    : -Math.max(edgeEpsilon, frac);
+                const newValue = trackFractionToValue(newFrac, track);
+                if (!Number.isFinite(newValue)) return;
+                found.entry.values[depthIndex] = newValue;
+
+                const visibleFrac = normalizeWrappedFraction(newFrac);
+                const newX = leftX + visibleFrac * width;
+                if (Array.isArray(pts[pointIndex])) {
+                    pts[pointIndex][0] = newX;
+                    pts[pointIndex][2] = depthIndex;
+                    pts[pointIndex][3] = 'manual';
+                    pts[pointIndex][4] = Date.now();
+                }
+            });
+
+            if (!lastCurveTraces) lastCurveTraces = {};
+            lastCurveTraces[traceKey] = pts;
+            rebuildCurveTraceFromDigitized(curveId);
+            renderCurveTraceOverlays(lastCurveTraces);
+            showStatus(`${dir > 0 ? 'Right-to-left' : 'Left-to-right'} loop correction applied to ${candidates.length} points. Ctrl+Z to undo.`, 'success');
+        }
+
         function beginPanelSelection() {
             if (editMode) {
                 showStatus('Turn off manual curve edit mode before changing the panel selection.', 'info');
@@ -3785,6 +3929,15 @@
             return ((frac % 1) + 1) % 1;
         }
 
+        function normalizeWrappedFractionForDisplay(frac) {
+            const wrapped = normalizeWrappedFraction(frac);
+            if (!Number.isFinite(wrapped)) return wrapped;
+            if (frac > 0 && Math.abs(wrapped) < 1e-9 && Math.abs(frac - Math.round(frac)) < 1e-9) {
+                return 1;
+            }
+            return wrapped;
+        }
+
         function trackFractionToValue(frac, track) {
             if (!track || !Number.isFinite(frac)) return null;
             const scaleMin = Number(track.scaleMin);
@@ -3894,7 +4047,7 @@
             let frac = trackValueToFraction(value, track);
             if (!Number.isFinite(frac)) return null;
             if (isWrappedTrack(track)) {
-                frac = normalizeWrappedFraction(frac);
+                frac = normalizeWrappedFractionForDisplay(frac);
             }
             return leftX + frac * (rightX - leftX);
         }
