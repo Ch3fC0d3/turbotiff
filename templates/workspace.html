@@ -13372,16 +13372,30 @@ document.addEventListener('DOMContentLoaded', async () => {
         
         showStatus('Loading saved log...', 'info');
         
-        // Fetch image and convert to data URL for canvas compatibility
-        const response = await fetch(imgPath);
-        if (!response.ok) throw new Error('Failed to fetch image');
-        const blob = await response.blob();
-        
-        const dataUrl = await new Promise((resolve) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(reader.result);
-            reader.readAsDataURL(blob);
-        });
+        let imageLoadWarning = '';
+        let dataUrl = null;
+        try {
+            // Fetch image and convert to data URL for canvas compatibility
+            const response = await fetch(imgPath);
+            if (!response.ok) throw new Error(`Saved image returned HTTP ${response.status}`);
+            const blob = await response.blob();
+
+            dataUrl = await new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result);
+                reader.readAsDataURL(blob);
+            });
+        } catch (imageErr) {
+            console.warn('Saved log image is unavailable; restoring LAS data only.', imageErr);
+            imageLoadWarning = ' Saved image is missing, so LAS/header data was restored without the original image.';
+            const placeholderSvg = `
+                <svg xmlns="http://www.w3.org/2000/svg" width="900" height="1400" viewBox="0 0 900 1400">
+                    <rect width="900" height="1400" fill="#ffffff"/>
+                    <text x="450" y="660" text-anchor="middle" font-family="Arial, sans-serif" font-size="30" fill="#334155">Saved image unavailable</text>
+                    <text x="450" y="705" text-anchor="middle" font-family="Arial, sans-serif" font-size="22" fill="#64748b">LAS and well info restored</text>
+                </svg>`;
+            dataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(placeholderSvg)}`;
+        }
         
         uploadedImage = dataUrl;
         uploadedImagePath = imgPath;
@@ -13431,7 +13445,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 );
             }
 
-            showStatus('Log loaded successfully. Ready to edit.', 'success');
+            showStatus(`Log loaded successfully.${imageLoadWarning || ' Ready to edit.'}`, imageLoadWarning ? 'info' : 'success');
             
             // Auto scroll and expand step 5 for immediate editing
             setTimeout(() => {
