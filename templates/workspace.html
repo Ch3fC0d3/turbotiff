@@ -12424,6 +12424,10 @@
                 return;
             }
 
+            if (typeof stripTurbotiffStateFromLasText === 'function') {
+                lasText = stripTurbotiffStateFromLasText(lasText);
+            }
+
             // Keep the cached LAS in sync with whatever we are downloading.
             lastLasContent = lasText;
 
@@ -13036,32 +13040,6 @@
             const headerCols = ['DEPTH'].concat(curveNames.map((n) => n.toUpperCase()));
             const header = headerCols.map((c) => c.padStart(10, ' ')).join(' ');
             
-            // --- TURBOTIFF STATE INJECTION ---
-            try {
-                const fullConfig = (typeof buildDigitizeConfigFromInputs === 'function') ? buildDigitizeConfigFromInputs() : null;
-                if (fullConfig) {
-                    const currentHeaderMetadata = (typeof syncHeaderMetadataFromInputs === 'function')
-                        ? syncHeaderMetadataFromInputs()
-                        : headerMetadata;
-                    const stateBlob = {
-                        config: fullConfig,
-                        curveTraces: window.lastCurveTraces || (typeof lastCurveTraces !== 'undefined' ? lastCurveTraces : null),
-                        headerMetadata: currentHeaderMetadata || null
-                    };
-                    const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(stateBlob))));
-                    const chunks = b64.match(/.{1,80}/g) || [];
-                    if (chunks.length > 0) {
-                        lines.push('~O' + eol);
-                        lines.push('# TURBOTIFF_STATE_START' + eol);
-                        chunks.forEach(c => lines.push('# ' + c + eol));
-                        lines.push('# TURBOTIFF_STATE_END' + eol);
-                    }
-                }
-            } catch (e) {
-                console.warn("Failed to inject turbotiff state:", e);
-            }
-            // ---------------------------------
-
             lines.push('~A ' + header + eol);
 
             for (let i = 0; i < depths.length; i++) {
@@ -13075,6 +13053,42 @@
             }
 
             return lines.join('');
+        }
+
+        function stripTurbotiffStateFromLasText(lasText) {
+            if (!lasText || !String(lasText).includes('TURBOTIFF_STATE_START')) {
+                return lasText || '';
+            }
+
+            const eol = String(lasText).includes('\r\n') ? '\r\n' : '\n';
+            const lines = String(lasText).split(/\r?\n/);
+            const cleaned = [];
+            let inState = false;
+            let droppedOnlyStateOtherSection = false;
+
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i];
+                const nextLine = (i + 1 < lines.length) ? lines[i + 1] : '';
+                if (/^\s*~O\b/i.test(line) && nextLine.includes('TURBOTIFF_STATE_START')) {
+                    droppedOnlyStateOtherSection = true;
+                    continue;
+                }
+                if (line.includes('TURBOTIFF_STATE_START')) {
+                    inState = true;
+                    continue;
+                }
+                if (line.includes('TURBOTIFF_STATE_END')) {
+                    inState = false;
+                    continue;
+                }
+                if (!inState) cleaned.push(line);
+            }
+
+            let out = cleaned.join(eol);
+            if (droppedOnlyStateOtherSection) {
+                out = out.replace(/\r?\n{3,}/g, eol + eol);
+            }
+            return out;
         }
 
         function renderDigitizationSummary(depthCfg, digitizedDepth, digitizedCurves, nullSentinel) {
