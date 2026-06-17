@@ -377,7 +377,7 @@
         }
         .workspace {
             display: grid;
-            grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
+            grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
             gap: 20px;
             margin-bottom: 0px;
             align-items: start;
@@ -652,6 +652,17 @@
         .curve-pane .btn {
             padding: 6px 10px;
             font-size: 0.8rem;
+            line-height: 1.15;
+            max-width: 100%;
+            white-space: normal;
+        }
+        .control-pane .flex-wrap-center,
+        .curve-pane .flex-wrap-center {
+            gap: 6px;
+        }
+        .control-pane .flex-wrap-center > .btn,
+        .curve-pane .flex-wrap-center > .btn {
+            flex: 0 1 auto;
         }
         .control-pane #configStep {
             background: #1e293b;
@@ -727,7 +738,7 @@
         }
         @media (min-width: 1201px) {
             .workspace {
-                grid-template-columns: minmax(600px, 1fr) minmax(300px, 380px);
+                grid-template-columns: minmax(600px, 1fr) minmax(340px, 430px);
             }
         }
         .curve-actions {
@@ -8073,6 +8084,65 @@
                     el.value = canonical[key];
                 }
             });
+            headerMetadata = mergeHeaderMetadataValues(canonical, headerMetadata) || canonical;
+            const detailsEl = document.getElementById('headerMetadataDetails');
+            if (detailsEl && Object.keys(canonical).length) detailsEl.open = true;
+            const summaryEl = document.getElementById('headerSelectionSummary');
+            if (summaryEl && Object.keys(canonical).length) {
+                const bits = [];
+                if (canonical.well) bits.push(`WELL=${canonical.well}`);
+                if (canonical.comp) bits.push(`COMP=${canonical.comp}`);
+                if (canonical.fld) bits.push(`FLD=${canonical.fld}`);
+                if (canonical.state) bits.push(`STATE=${canonical.state}`);
+                summaryEl.textContent = `Header fields restored.${bits.length ? ' ' + bits.join(' | ') : ''}`;
+            }
+        }
+
+        function extractHeaderMetadataFromLasText(lasText) {
+            if (!lasText || typeof lasText !== 'string') return null;
+            const aliases = {
+                WELL: 'well',
+                COMP: 'comp',
+                COMPANY: 'comp',
+                API: 'api',
+                DATE: 'date',
+                FLD: 'fld',
+                FIELD: 'fld',
+                LOC: 'loc',
+                LOCATION: 'loc',
+                CNTY: 'county',
+                COUNTY: 'county',
+                STAT: 'state',
+                STATE: 'state',
+                PROV: 'prov',
+                PROVINCE: 'prov',
+                SRVC: 'srvc',
+                SERVICE: 'srvc',
+                UWI: 'uwi',
+            };
+            const metadata = {};
+            let inWellBlock = false;
+            const lines = lasText.split(/\r?\n/);
+            for (const rawLine of lines) {
+                const line = String(rawLine || '');
+                const trimmed = line.trim();
+                if (!trimmed) continue;
+                if (trimmed.startsWith('~')) {
+                    inWellBlock = /^~W/i.test(trimmed);
+                    continue;
+                }
+                if (!inWellBlock || trimmed.startsWith('#')) continue;
+                const match = trimmed.match(/^([A-Za-z0-9_]+)\s*\.[^:]*?(?:\s{2,}|\t+)?([^:]*?)(?::|$)/);
+                if (!match) continue;
+                const key = aliases[String(match[1] || '').trim().toUpperCase()];
+                if (!key || metadata[key]) continue;
+                let value = String(match[2] || '').trim();
+                value = value.replace(/\s{2,}.*$/, '').trim();
+                if (value && value.toUpperCase() !== 'DIGITIZED_LOG') {
+                    metadata[key] = value;
+                }
+            }
+            return Object.keys(metadata).length ? metadata : null;
         }
 
         function analyzeHeaderTracks(tracks) {
@@ -12811,6 +12881,16 @@
                 
                 if (stateB64) {
                     const stateBlob = JSON.parse(decodeURIComponent(escape(atob(stateB64))));
+                    const restoredMetadata = mergeHeaderMetadataValues(
+                        stateBlob.headerMetadata,
+                        stateBlob.header_metadata,
+                        stateBlob.metadata,
+                        extractHeaderMetadataFromLasText(lastLasContent)
+                    );
+                    if (restoredMetadata) {
+                        applyHeaderMetadataToInputs(restoredMetadata);
+                        lastDigitizeHeaderMetadata = JSON.parse(JSON.stringify(restoredMetadata));
+                    }
                     if (stateBlob.config) {
                         const cfg = stateBlob.config;
                         if (cfg.depth) {
@@ -12871,6 +12951,12 @@
                             renderCurveTraceOverlays(lastCurveTraces);
                         }, 100);
                     }
+                } else {
+                    const restoredMetadata = extractHeaderMetadataFromLasText(lastLasContent);
+                    if (restoredMetadata) {
+                        applyHeaderMetadataToInputs(restoredMetadata);
+                        lastDigitizeHeaderMetadata = JSON.parse(JSON.stringify(restoredMetadata));
+                    }
                 }
             } catch (e) {
                 console.error("Failed to restore Turbotiff internal state from LAS:", e);
@@ -12902,7 +12988,20 @@
             const step = depths.length > 1 ? (depths[1] - depths[0]) : 0.0;
             lines.push(` STEP.${unitToken}               ${step.toFixed(4)}:` + eol);
             lines.push(` NULL.               ${nullVal.toFixed(4)}:` + eol);
-            lines.push(' WELL.               WELL NAME:  DIGITIZED_LOG' + eol);
+            const md = (typeof syncHeaderMetadataFromInputs === 'function')
+                ? getCanonicalHeaderMetadata(syncHeaderMetadataFromInputs())
+                : getCanonicalHeaderMetadata(headerMetadata);
+            if (md.comp) lines.push(` COMP.       ${md.comp}:` + eol);
+            lines.push(` WELL.       ${md.well || 'DIGITIZED_LOG'}:` + eol);
+            if (md.fld) lines.push(` FLD .       ${md.fld}:` + eol);
+            if (md.loc) lines.push(` LOC .       ${md.loc}:` + eol);
+            if (md.county) lines.push(` CNTY.       ${md.county}:` + eol);
+            if (md.state) lines.push(` STAT.       ${md.state}:` + eol);
+            if (md.prov) lines.push(` PROV.       ${md.prov}:` + eol);
+            if (md.srvc) lines.push(` SRVC.       ${md.srvc}:` + eol);
+            if (md.date) lines.push(` DATE.       ${md.date}:` + eol);
+            if (md.api) lines.push(` API .       ${md.api}:` + eol);
+            if (md.uwi) lines.push(` UWI .       ${md.uwi}:` + eol);
 
             lines.push('~PARAMETER INFORMATION BLOCK' + eol);
             lines.push('#MNEM.UNIT       VALUE        DESCRIPTION' + eol);
@@ -12941,9 +13040,13 @@
             try {
                 const fullConfig = (typeof buildDigitizeConfigFromInputs === 'function') ? buildDigitizeConfigFromInputs() : null;
                 if (fullConfig) {
+                    const currentHeaderMetadata = (typeof syncHeaderMetadataFromInputs === 'function')
+                        ? syncHeaderMetadataFromInputs()
+                        : headerMetadata;
                     const stateBlob = {
                         config: fullConfig,
-                        curveTraces: window.lastCurveTraces || (typeof lastCurveTraces !== 'undefined' ? lastCurveTraces : null)
+                        curveTraces: window.lastCurveTraces || (typeof lastCurveTraces !== 'undefined' ? lastCurveTraces : null),
+                        headerMetadata: currentHeaderMetadata || null
                     };
                     const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(stateBlob))));
                     const chunks = b64.match(/.{1,80}/g) || [];
