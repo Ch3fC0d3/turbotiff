@@ -10922,31 +10922,38 @@ def digitize():
         digitized_depth = None
         digitized_curves = None
 
-    # Generate LAS file
-    las_content = write_las_simple(las_depth, las_curve_data, depth_unit, header_metadata=header_metadata)
+    las_content = None
+    ai_payload = None
+    ai_summary = None
 
-    # Validate LAS output if possible
+    # Lean responses avoid server-side LAS generation/validation. The browser
+    # rebuilds the LAS from digitized_depth/digitized_curves for download.
     validation = {
         'passed': True,
-        'message': 'LAS validation skipped (lasio not installed).'
+        'message': 'LAS generation deferred to browser download (lean mode).'
     }
-    if LASIO_AVAILABLE:
-        try:
-            lasio.read(StringIO(las_content))
-            validation = {
-                'passed': True,
-                'message': 'LAS parsed successfully with lasio.'
-            }
-        except Exception as exc:
-            validation = {
-                'passed': False,
-                'message': f'LAS validation failed: {exc}'
-            }
+    if include_heavy_response:
+        las_content = write_las_simple(las_depth, las_curve_data, depth_unit, header_metadata=header_metadata)
+        validation = {
+            'passed': True,
+            'message': 'LAS validation skipped (lasio not installed).'
+        }
+        if LASIO_AVAILABLE:
+            try:
+                lasio.read(StringIO(las_content))
+                validation = {
+                    'passed': True,
+                    'message': 'LAS parsed successfully with lasio.'
+                }
+            except Exception as exc:
+                validation = {
+                    'passed': False,
+                    'message': f'LAS validation failed: {exc}'
+                }
 
-        if include_heavy_response:
-            # Build AI analysis payload (OCR + LAS stats + user curve config)
-            ai_payload = build_ai_analysis_payload(las_content, detected_text, curves)
-            ai_summary = call_hf_curve_analysis(ai_payload) if ai_payload else None
+        # Build AI analysis payload (OCR + LAS stats + user curve config)
+        ai_payload = build_ai_analysis_payload(las_content, detected_text, curves)
+        ai_summary = call_hf_curve_analysis(ai_payload) if ai_payload else None
 
     return jsonify({
         'success': True,
