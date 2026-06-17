@@ -5204,58 +5204,62 @@
                 ensureTracePointsHaveDepthIndex(editCurveId);
             }
 
-            let existingIdx = Array.isArray(pts)
-                ? findBestPointIndexForDepth(pts, idx, yTrace, clampedX)
-                : -1;
-            if (existingIdx < 0 && Array.isArray(pts)) {
-                const picked = findEditablePointIndex(pts, clampedX, yTrace, editCurveId, { maxYDist: 6, maxDist: 18 });
-                existingIdx = picked.pointIndex;
-            }
-            const oldTraceX = (existingIdx >= 0 && Array.isArray(pts?.[existingIdx])) ? pts[existingIdx][0] : null;
-            const oldTraceY = (existingIdx >= 0 && Array.isArray(pts?.[existingIdx])) ? pts[existingIdx][1] : yTrace;
-
-            // For a pure "add point" operation, mark oldTraceX as null so undo removes
-            editUndoStack.push({
-                curveKey,
-                curveId: editCurveId,
-                traceKey: targetKey,
-                idx,
-                oldValue,
-                oldTraceX,
-                oldTraceY,
-                yImg: yTrace,
-                depthIndex: idx,
-                pointIndex: existingIdx >= 0 ? existingIdx : null,
-            });
-
-            entry.values[idx] = newValue;
-            const manualPointStamp = Date.now();
-
             if (!Array.isArray(pts)) {
                 pts = [];
             }
 
-            if (existingIdx >= 0) {
-                pts[existingIdx][0] = clampedX;
-                pts[existingIdx][1] = yTrace;
-                pts[existingIdx][2] = idx;
-                pts[existingIdx][3] = 'manual';
-                pts[existingIdx][4] = manualPointStamp;
-            } else {
-                // Insert at the correct sorted position to prevent "line out to the right"
-                let insertAt = pts.length;
-                for (let i = 0; i < pts.length; i++) {
-                    if (pts[i] && pts[i][1] > yTrace) {
-                        insertAt = i;
-                        break;
+            const undoTracePoints = pts.map(pt => Array.isArray(pt) ? pt.slice() : pt);
+            const undoValues = entry.values.map((value, valueIdx) => ({ idx: valueIdx, oldValue: value }));
+            editUndoStack.push({
+                type: 'add_point_crest',
+                curveKey,
+                curveId: editCurveId,
+                traceKey: targetKey,
+                undoTracePoints,
+                undoValues,
+            });
+
+            const manualPointStamp = Date.now();
+            const crestRadius = 2;
+            const touchedDepths = [];
+
+            for (let dIdx = Math.max(0, idx - crestRadius); dIdx <= Math.min(entry.values.length - 1, idx + crestRadius); dIdx++) {
+                if (isDepthIndexPinned(editCurveId, dIdx)) continue;
+                const pointY = (dIdx === idx) ? yTrace : (getPixelYForDepthIndex(dIdx, depthCfg) ?? yTrace);
+                const pointValue = pixelToTrackValue(clampedX, targetTrack);
+                if (!Number.isFinite(pointValue)) continue;
+                entry.values[dIdx] = pointValue;
+                touchedDepths.push(dIdx);
+
+                let existingIdx = findBestPointIndexForDepth(pts, dIdx, pointY, clampedX);
+                if (existingIdx < 0) {
+                    const picked = findEditablePointIndex(pts, clampedX, pointY, editCurveId, { maxYDist: 6, maxDist: 18 });
+                    existingIdx = picked.pointIndex;
+                    if (existingIdx >= 0 && Array.isArray(pts[existingIdx]) && Number.isInteger(pts[existingIdx][2]) && pts[existingIdx][2] !== dIdx) {
+                        existingIdx = -1;
                     }
                 }
-                pts.splice(insertAt, 0, [clampedX, yTrace, idx, 'manual', manualPointStamp]);
+
+                if (existingIdx >= 0) {
+                    pts[existingIdx][0] = clampedX;
+                    pts[existingIdx][1] = pointY;
+                    pts[existingIdx][2] = dIdx;
+                    pts[existingIdx][3] = 'manual';
+                    pts[existingIdx][4] = manualPointStamp;
+                } else {
+                    pts.push([clampedX, pointY, dIdx, 'manual', manualPointStamp]);
+                }
             }
 
+            pts.sort((a, b) => {
+                const ay = Array.isArray(a) ? Number(a[1]) : 0;
+                const by = Array.isArray(b) ? Number(b[1]) : 0;
+                return ay - by;
+            });
             lastCurveTraces[targetKey] = pts;
 
             renderCurveTraceOverlays(lastCurveTraces);
+            showStatus(`Added crest point (${touchedDepths.length} samples).`, 'info');
         }
 
         function handleCurveEditDelete(xImg, yImg) {
@@ -5533,6 +5537,31 @@
                 return;
             }
             const last = editUndoStack.pop();
+
+            if (last.type === 'add_point_crest') {
+                const { curveKey, curveId, traceKey, undoTracePoints, undoValues } = last;
+
+                if (lastDigitizedCurves && lastDigitizedCurves[curveKey] && Array.isArray(lastDigitizedCurves[curveKey].values)) {
+                    const vals = lastDigitizedCurves[curveKey].values;
+                    if (Array.isArray(undoValues)) {
+                        undoValues.forEach(v => {
+                            if (v && Number.isInteger(v.idx) && v.idx >= 0 && v.idx < vals.length) {
+                                vals[v.idx] = v.oldValue;
+                            }
+                        });
+                    }
+                }
+
+                if (lastCurveTraces && traceKey) {
+                    lastCurveTraces[traceKey] = Array.isArray(undoTracePoints)
+                        ? undoTracePoints.map(pt => Array.isArray(pt) ? pt.slice() : pt)
+                        : [];
+                }
+
+                renderCurveTraceOverlays(lastCurveTraces);
+                showStatus(`Undo: removed crest point on "${curveId}".`, 'info');
+                return;
+            }
 
             if (last.type === 'bulk_transform') {
                 const { curveKey, curveId, traceKey, undoPoints, undoValues } = last;
