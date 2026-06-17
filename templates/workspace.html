@@ -3772,35 +3772,130 @@
             return topPx + frac * (bottomPx - topPx);
         }
 
-        function pixelToTrackValue(xImg, track) {
+        function isWrappedTrack(track) {
+            return !!(track && track.wrapped);
+        }
+
+        function isLogTrack(track) {
+            return !!(track && String(track.scaleType || '').toLowerCase() === 'log');
+        }
+
+        function normalizeWrappedFraction(frac) {
+            if (!Number.isFinite(frac)) return frac;
+            return ((frac % 1) + 1) % 1;
+        }
+
+        function trackFractionToValue(frac, track) {
+            if (!track || !Number.isFinite(frac)) return null;
+            const scaleMin = Number(track.scaleMin);
+            const scaleMax = Number(track.scaleMax);
+            if (!Number.isFinite(scaleMin) || !Number.isFinite(scaleMax)) return null;
+            if (isLogTrack(track) && scaleMin > 0 && scaleMax > 0) {
+                const logMin = Math.log10(scaleMin);
+                const logMax = Math.log10(scaleMax);
+                return Math.pow(10, logMin + frac * (logMax - logMin));
+            }
+            return scaleMin + frac * (scaleMax - scaleMin);
+        }
+
+        function trackValueToFraction(value, track) {
+            if (!track || !Number.isFinite(value)) return null;
+            const scaleMin = Number(track.scaleMin);
+            const scaleMax = Number(track.scaleMax);
+            if (!Number.isFinite(scaleMin) || !Number.isFinite(scaleMax)) return null;
+            if (isLogTrack(track) && scaleMin > 0 && scaleMax > 0 && value > 0) {
+                const denom = Math.log10(scaleMax) - Math.log10(scaleMin);
+                if (Math.abs(denom) < 1e-9) return null;
+                return (Math.log10(value) - Math.log10(scaleMin)) / denom;
+            }
+            const denom = scaleMax - scaleMin;
+            if (Math.abs(denom) < 1e-9) return null;
+            return (value - scaleMin) / denom;
+        }
+
+        function valueDistanceForTrack(a, b, track) {
+            if (!Number.isFinite(a) || !Number.isFinite(b)) return Infinity;
+            if (isLogTrack(track) && a > 0 && b > 0) {
+                return Math.abs(Math.log10(a) - Math.log10(b));
+            }
+            return Math.abs(a - b);
+        }
+
+        function getNeighborReferenceValue(values, depthIndex, nullSentinel = lastNullValue) {
+            if (!Array.isArray(values) || !Number.isInteger(depthIndex)) return null;
+            const maxRadius = Math.min(80, values.length);
+            let before = null;
+            let after = null;
+            for (let r = 1; r <= maxRadius; r++) {
+                const li = depthIndex - r;
+                const ri = depthIndex + r;
+                if (before === null && li >= 0 && !isMissingDigitizedValue(values[li], nullSentinel)) {
+                    before = Number(values[li]);
+                }
+                if (after === null && ri < values.length && !isMissingDigitizedValue(values[ri], nullSentinel)) {
+                    after = Number(values[ri]);
+                }
+                if (before !== null || after !== null) break;
+            }
+            if (Number.isFinite(before) && Number.isFinite(after)) return (before + after) / 2;
+            if (Number.isFinite(before)) return before;
+            if (Number.isFinite(after)) return after;
+            return null;
+        }
+
+        function pixelToTrackValueWrapped(xImg, track, options = {}) {
             if (!track) return null;
-            const leftX = track.leftX;
-            const rightX = track.rightX;
-            const scaleMin = track.scaleMin;
-            const scaleMax = track.scaleMax;
+            const leftX = Number(track.leftX);
+            const rightX = Number(track.rightX);
             const denom = rightX - leftX;
-            if (!Number.isFinite(leftX) || !Number.isFinite(rightX) ||
-                !Number.isFinite(scaleMin) || !Number.isFinite(scaleMax) ||
-                Math.abs(denom) < 1e-3) {
+            if (!Number.isFinite(leftX) || !Number.isFinite(rightX) || Math.abs(denom) < 1e-3) {
                 return null;
             }
-            const frac = (xImg - leftX) / denom;
-            return scaleMin + frac * (scaleMax - scaleMin);
+
+            const rawFrac = (Number(xImg) - leftX) / denom;
+            if (!isWrappedTrack(track)) {
+                return trackFractionToValue(rawFrac, track);
+            }
+
+            const values = Array.isArray(options.values) ? options.values : null;
+            const refValue = Number.isFinite(options.referenceValue)
+                ? Number(options.referenceValue)
+                : getNeighborReferenceValue(values, options.depthIndex);
+            if (!Number.isFinite(refValue)) {
+                return trackFractionToValue(rawFrac, track);
+            }
+
+            const visibleFrac = normalizeWrappedFraction(rawFrac);
+            const explicitWrap = Math.floor(rawFrac);
+            let bestValue = null;
+            let bestCost = Infinity;
+            for (let wrap = explicitWrap - 6; wrap <= explicitWrap + 6; wrap++) {
+                const value = trackFractionToValue(visibleFrac + wrap, track);
+                const cost = valueDistanceForTrack(value, refValue, track);
+                if (cost < bestCost) {
+                    bestCost = cost;
+                    bestValue = value;
+                }
+            }
+            return bestValue;
+        }
+
+        function pixelToTrackValue(xImg, track, options = {}) {
+            return pixelToTrackValueWrapped(xImg, track, options);
         }
 
         function trackValueToPixelX(value, track) {
             if (!track) return null;
             const leftX = track.leftX;
             const rightX = track.rightX;
-            const scaleMin = track.scaleMin;
-            const scaleMax = track.scaleMax;
-            const denom = scaleMax - scaleMin;
-            if (!Number.isFinite(leftX) || !Number.isFinite(rightX) ||
-                !Number.isFinite(scaleMin) || !Number.isFinite(scaleMax) ||
-                Math.abs(denom) < 1e-3) {
+            if (!Number.isFinite(leftX) || !Number.isFinite(rightX)) {
                 return null;
             }
-            const frac = (value - scaleMin) / denom;
+            let frac = trackValueToFraction(value, track);
+            if (!Number.isFinite(frac)) return null;
+            if (isWrappedTrack(track)) {
+                frac = normalizeWrappedFraction(frac);
+            }
             return leftX + frac * (rightX - leftX);
         }
 
@@ -3997,6 +4092,8 @@
                 const unitEl = document.getElementById(`unit${i}`);
                 const lasUnitEl = document.getElementById(`lasUnit${i}`);
                 const modeEl = document.getElementById(`mode${i}`);
+                const scaleTypeEl = document.getElementById(`scaleType${i}`);
+                const wrappedEl = document.getElementById(`wrapped${i}`);
 
                 let baseId = (lasMnemonicEl && lasMnemonicEl.value
                     ? lasMnemonicEl.value.trim()
@@ -4022,6 +4119,8 @@
                     rightX: rightXAdj,
                     scaleMin,
                     scaleMax,
+                    scaleType: scaleTypeEl && scaleTypeEl.value ? String(scaleTypeEl.value).toLowerCase() : 'linear',
+                    wrapped: !!(wrappedEl && wrappedEl.checked),
                     mode: modeEl && modeEl.value ? String(modeEl.value).toLowerCase() : 'black',
                     displayUnit: unitEl && unitEl.value ? unitEl.value : '',
                     lasUnit: lasUnitEl && lasUnitEl.value ? lasUnitEl.value : ''
@@ -4554,7 +4653,7 @@
 
                     const dIdx = Number.isInteger(p[2]) ? p[2] : null;
                     if (dIdx != null && dIdx >= 0 && dIdx < entry.values.length) {
-                        const newVal = pixelToTrackValue(newX, track);
+                        const newVal = pixelToTrackValue(newX, track, { depthIndex: dIdx, values: entry.values });
                         if (Number.isFinite(newVal)) {
                             entry.values[dIdx] = newVal;
                         }
@@ -4658,7 +4757,7 @@
                     if (!Number.isInteger(newDepthIdx) || newDepthIdx < 0 || newDepthIdx >= newValues.length) continue;
                     p[2] = newDepthIdx;
 
-                    const newVal = pixelToTrackValue(oldX, track);
+                    const newVal = pixelToTrackValue(oldX, track, { depthIndex: newDepthIdx, values: newValues });
                     if (Number.isFinite(newVal)) {
                         newValues[newDepthIdx] = newVal;
                     }
@@ -5008,12 +5107,14 @@
                 return;
             }
 
-            const clampedX = Math.max(targetTrack.leftX, Math.min(targetTrack.rightX, xImg));
-            const newValue = pixelToTrackValue(clampedX, targetTrack);
-            if (!Number.isFinite(newValue)) return;
-
             const entry = lastDigitizedCurves[curveKey];
             if (!entry || !Array.isArray(entry.values) || idx >= entry.values.length) return;
+
+            const clampedX = isWrappedTrack(targetTrack)
+                ? xImg
+                : Math.max(targetTrack.leftX, Math.min(targetTrack.rightX, xImg));
+            const newValue = pixelToTrackValue(clampedX, targetTrack, { depthIndex: idx, values: entry.values });
+            if (!Number.isFinite(newValue)) return;
 
             // Save old value for undo
             const oldValue = entry.values[idx];
@@ -5132,7 +5233,7 @@
                 // Skip pinned depths
                 if (isDepthIndexPinned(editCurveId, idx)) continue;
                 const yImgUse = getPixelYForDepthIndex(idx, depthCfg) ?? yImg;
-                const newValue = pixelToTrackValue(xImg, targetTrack);
+                const newValue = pixelToTrackValue(xImg, targetTrack, { depthIndex: idx, values: entry.values });
                 if (!Number.isFinite(newValue)) continue;
                 if (idx >= entry.values.length) continue;
                 entry.values[idx] = newValue;
@@ -5191,12 +5292,14 @@
                 return;
             }
 
-            const clampedX = xImg; // Allow values outside track box
-            const newValue = pixelToTrackValue(clampedX, targetTrack);
-            if (!Number.isFinite(newValue)) return;
-
             const entry = lastDigitizedCurves[curveKey];
             if (!entry || !Array.isArray(entry.values) || idx >= entry.values.length) return;
+
+            const clampedX = isWrappedTrack(targetTrack)
+                ? xImg
+                : Math.max(targetTrack.leftX, Math.min(targetTrack.rightX, xImg));
+            const newValue = pixelToTrackValue(clampedX, targetTrack, { depthIndex: idx, values: entry.values });
+            if (!Number.isFinite(newValue)) return;
 
             const oldValue = entry.values[idx];
 
@@ -5237,7 +5340,7 @@
             for (let dIdx = Math.max(0, idx - crestRadius); dIdx <= Math.min(entry.values.length - 1, idx + crestRadius); dIdx++) {
                 if (isDepthIndexPinned(editCurveId, dIdx)) continue;
                 const pointY = (dIdx === idx) ? yTrace : (getPixelYForDepthIndex(dIdx, depthCfg) ?? yTrace);
-                const pointValue = pixelToTrackValue(clampedX, targetTrack);
+                const pointValue = pixelToTrackValue(clampedX, targetTrack, { depthIndex: dIdx, values: entry.values });
                 if (!Number.isFinite(pointValue)) continue;
                 entry.values[dIdx] = pointValue;
                 touchedDepths.push(dIdx);
@@ -5432,8 +5535,8 @@
             for (let i = 0; i < pts.length; i++) {
                 pts[i][0] = newXs[i];
                 if (track && found && found.entry) {
-                    const val = pixelToTrackValue(newXs[i], track);
                     const dIdx = Number.isInteger(pts[i][2]) ? pts[i][2] : -1;
+                    const val = pixelToTrackValue(newXs[i], track, { depthIndex: dIdx, values: found.entry.values });
                     if (Number.isFinite(val) && dIdx >= 0 && dIdx < found.entry.values.length) {
                         found.entry.values[dIdx] = val;
                     }
@@ -5529,8 +5632,8 @@
                 const newX = Math.max(lo, Math.min(hi, shiftedX));
                 pts[i][0] = newX;
                 if (track && found && found.entry) {
-                    const val = pixelToTrackValue(newX, track);
                     const dIdx = Number.isInteger(pts[i][2]) ? pts[i][2] : -1;
+                    const val = pixelToTrackValue(newX, track, { depthIndex: dIdx, values: found.entry.values });
                     if (Number.isFinite(val) && dIdx >= 0 && dIdx < found.entry.values.length) {
                         found.entry.values[dIdx] = val;
                     }
@@ -6039,7 +6142,7 @@
                 const depthIdx = (Array.isArray(pts[idx]) && Number.isInteger(pts[idx][2])) ? pts[idx][2] : -1;
                 if (curveId && isDepthIndexPinned(curveId, depthIdx)) return;
                 pts[idx][0] = newX;
-                const newVal = pixelToTrackValue(newX, targetTrack);
+                const newVal = pixelToTrackValue(newX, targetTrack, { depthIndex: depthIdx, values: entry.values });
                 if (Number.isFinite(newVal)) {
                     const depthIdx = (Array.isArray(pts[idx]) && Number.isInteger(pts[idx][2])) ? pts[idx][2] : -1;
                     if (depthIdx >= 0 && depthIdx < entry.values.length) entry.values[depthIdx] = newVal;
@@ -6162,7 +6265,7 @@
                 pts[n.pointIndex][2] = newDepthIndex;
                 n.depthIndex = newDepthIndex; // Update neighbor state for future iterations in this drag
 
-                const newVal = pixelToTrackValue(newX, targetTrack);
+                const newVal = pixelToTrackValue(newX, targetTrack, { depthIndex: newDepthIndex, values: entry.values });
                 if (Number.isFinite(newVal)) {
                     entry.values[newDepthIndex] = newVal;
                 }
@@ -6474,7 +6577,7 @@
                     const snapped = snapToCurveColor(snapX, snapY, targetTrack.leftX, targetTrack.rightX, { mode: trackModeForSnap });
                     if (snapped.x !== snapX) {
                         pts[localIdx][0] = snapped.x;
-                        const newVal = pixelToTrackValue(snapped.x, targetTrack);
+                        const newVal = pixelToTrackValue(snapped.x, targetTrack, { depthIndex: snapDIdx, values: entry.values });
                         if (Number.isFinite(newVal) && snapDIdx >= 0 && snapDIdx < entry.values.length) {
                             entry.values[snapDIdx] = newVal;
                         }
@@ -6604,7 +6707,7 @@
                         showSnapPulse(refinedX, currentY);
 
                         // Update the LAS value
-                        const newVal = pixelToTrackValue(refinedX, targetTrack);
+                        const newVal = pixelToTrackValue(refinedX, targetTrack, { depthIndex, values: entry.values });
                         if (Number.isFinite(newVal) && depthIndex >= 0 && depthIndex < entry.values.length) {
                             entry.values[depthIndex] = newVal;
                         }
@@ -6651,7 +6754,7 @@
                                         pts[neighborIdx][0] = pt.x;
                                         pts[neighborIdx][2] = neighborDepthIdx;
 
-                                        const nVal = pixelToTrackValue(pt.x, targetTrack);
+                                        const nVal = pixelToTrackValue(pt.x, targetTrack, { depthIndex: neighborDepthIdx, values: entry.values });
                                         if (Number.isFinite(nVal) && neighborDepthIdx < entry.values.length) {
                                             entry.values[neighborDepthIdx] = nVal;
                                         }
@@ -6668,7 +6771,7 @@
                         const beforeX = currentX;
                         const beforeY = currentY;
                         pts[pIdx][0] = snapped.x;
-                        const newVal = pixelToTrackValue(snapped.x, targetTrack);
+                        const newVal = pixelToTrackValue(snapped.x, targetTrack, { depthIndex, values: entry.values });
                         if (Number.isFinite(newVal) && depthIndex >= 0 && depthIndex < entry.values.length) {
                             entry.values[depthIndex] = newVal;
                         }
@@ -6695,7 +6798,7 @@
                     const beforeX = currentX;
                     const beforeY = currentY;
                     pts[pIdx][0] = snapped.x;
-                    const newVal = pixelToTrackValue(snapped.x, targetTrack);
+                    const newVal = pixelToTrackValue(snapped.x, targetTrack, { depthIndex, values: entry.values });
                     if (Number.isFinite(newVal) && depthIndex >= 0 && depthIndex < entry.values.length) {
                         entry.values[depthIndex] = newVal;
                     }
@@ -11442,12 +11545,22 @@
                         const firstX = (renderPoints[0][0] * scaleX);
                         const firstY = (renderPoints[0][1] * scaleY);
                         ctx.moveTo(firstX, firstY);
+                        const splitWrappedJumps = !!(trackMeta && trackMeta.wrapped);
+                        const wrapJumpThreshold = splitWrappedJumps
+                            ? Math.abs(Number(trackMeta.rightX) - Number(trackMeta.leftX)) * 0.55
+                            : Infinity;
 
                         for (let i = 1; i < renderPoints.length; i++) {
+                            const prevPoint = renderPoints[i - 1];
                             const currPoint = renderPoints[i];
                             const xDom = (currPoint[0] * scaleX);
                             const yDom = (currPoint[1] * scaleY);
-                            ctx.lineTo(xDom, yDom);
+                            const jumpX = Math.abs(Number(currPoint[0]) - Number(prevPoint[0]));
+                            if (splitWrappedJumps && Number.isFinite(jumpX) && jumpX > wrapJumpThreshold) {
+                                ctx.moveTo(xDom, yDom);
+                            } else {
+                                ctx.lineTo(xDom, yDom);
+                            }
                         }
                         ctx.stroke();
                         ctx.restore();
