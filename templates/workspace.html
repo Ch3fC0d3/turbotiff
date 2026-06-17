@@ -4991,6 +4991,7 @@
             const idx = findNearestDepthIndex(depth, lastDigitizedDepth);
             if (!Number.isInteger(idx) || idx < 0) return;
             const yImgUse = getPixelYForDepthIndex(idx, depthCfg) ?? yImg;
+            const yTrace = Number.isFinite(yImg) ? yImg : yImgUse;
             if (isDepthIndexPinned(editCurveId, idx)) {
                 showStatus('Point is pinned; unpin before editing.', 'info');
                 return;
@@ -5172,6 +5173,7 @@
             if (idx < 0) return;
 
             const yImgUse = getPixelYForDepthIndex(idx, depthCfg) ?? yImg;
+            const yTrace = Number.isFinite(yImg) ? yImg : yImgUse;
 
             if (isDepthIndexPinned(editCurveId, idx)) {
                 showStatus('Point is pinned; unpin before adding/editing at this depth.', 'info');
@@ -5203,14 +5205,14 @@
             }
 
             let existingIdx = Array.isArray(pts)
-                ? findBestPointIndexForDepth(pts, idx, yImgUse, clampedX)
+                ? findBestPointIndexForDepth(pts, idx, yTrace, clampedX)
                 : -1;
             if (existingIdx < 0 && Array.isArray(pts)) {
-                const picked = findEditablePointIndex(pts, clampedX, yImgUse, editCurveId, { maxYDist: 6, maxDist: 18 });
+                const picked = findEditablePointIndex(pts, clampedX, yTrace, editCurveId, { maxYDist: 6, maxDist: 18 });
                 existingIdx = picked.pointIndex;
             }
             const oldTraceX = (existingIdx >= 0 && Array.isArray(pts?.[existingIdx])) ? pts[existingIdx][0] : null;
-            const oldTraceY = (existingIdx >= 0 && Array.isArray(pts?.[existingIdx])) ? pts[existingIdx][1] : yImgUse;
+            const oldTraceY = (existingIdx >= 0 && Array.isArray(pts?.[existingIdx])) ? pts[existingIdx][1] : yTrace;
 
             // For a pure "add point" operation, mark oldTraceX as null so undo removes
             editUndoStack.push({
@@ -5221,7 +5223,7 @@
                 oldValue,
                 oldTraceX,
                 oldTraceY,
-                yImg: yImgUse,
+                yImg: yTrace,
                 depthIndex: idx,
                 pointIndex: existingIdx >= 0 ? existingIdx : null,
             });
@@ -5235,7 +5237,7 @@
 
             if (existingIdx >= 0) {
                 pts[existingIdx][0] = clampedX;
-                pts[existingIdx][1] = yImgUse;
+                pts[existingIdx][1] = yTrace;
                 pts[existingIdx][2] = idx;
                 pts[existingIdx][3] = 'manual';
                 pts[existingIdx][4] = manualPointStamp;
@@ -5243,12 +5245,12 @@
                 // Insert at the correct sorted position to prevent "line out to the right"
                 let insertAt = pts.length;
                 for (let i = 0; i < pts.length; i++) {
-                    if (pts[i] && pts[i][1] > yImgUse) {
+                    if (pts[i] && pts[i][1] > yTrace) {
                         insertAt = i;
                         break;
                     }
                 }
-                pts.splice(insertAt, 0, [clampedX, yImgUse, idx, 'manual', manualPointStamp]);
+                pts.splice(insertAt, 0, [clampedX, yTrace, idx, 'manual', manualPointStamp]);
             }
 
             lastCurveTraces[targetKey] = pts;
@@ -11114,9 +11116,12 @@
                     }
                 }
                 let points = tracesToRender[name] || [];
-                const rebuiltDisplayTrace = buildDisplayTracePointsFromDigitized(name, { persist: false });
-                if (rebuiltDisplayTrace && Array.isArray(rebuiltDisplayTrace.points) && rebuiltDisplayTrace.points.length) {
-                    points = rebuiltDisplayTrace.points;
+                const isActiveEditFocus = isFocusedOverlayCurve(name);
+                if (!(editMode && isActiveEditFocus)) {
+                    const rebuiltDisplayTrace = buildDisplayTracePointsFromDigitized(name, { persist: false });
+                    if (rebuiltDisplayTrace && Array.isArray(rebuiltDisplayTrace.points) && rebuiltDisplayTrace.points.length) {
+                        points = rebuiltDisplayTrace.points;
+                    }
                 }
                 if (!points.length) continue;
 
