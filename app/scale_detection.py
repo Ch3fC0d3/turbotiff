@@ -252,6 +252,85 @@ def unwrap_log_trace(
     return wraps
 
 
+def unwrap_curve_x_path(
+    xs: np.ndarray,
+    width_px: int,
+    max_wraps: int = 3,
+    edge_margin: Optional[float] = None,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Track a smooth curve path using wrapped x-coordinate candidates.
+
+    Paper log curves can run off one edge of a track and reappear on the
+    opposite edge at nearly the same depth. For every visible x sample this
+    function considers x +/- N track widths and picks the smoothest ordered
+    path. Edge-to-edge jumps are cheap; non-edge jumps are still possible but
+    penalized so noisy neighboring curves are less likely to be joined.
+    """
+    xs = np.asarray(xs, dtype=np.float64)
+    w = max(1.0, float(int(width_px) - 1))
+    margin = float(edge_margin) if edge_margin is not None else max(8.0, 0.06 * w)
+
+    unwrapped = np.full(xs.shape, np.nan, dtype=np.float64)
+    wraps = np.full(xs.shape, np.nan, dtype=np.float64)
+
+    prev_observed = None
+    prev_unwrapped = None
+    prev_wrap = 0
+
+    for i, raw_x in enumerate(xs):
+        if not np.isfinite(raw_x):
+            prev_observed = None
+            prev_unwrapped = None
+            prev_wrap = 0
+            continue
+
+        x = float(np.clip(raw_x, 0.0, w))
+        if prev_unwrapped is None or prev_observed is None:
+            unwrapped[i] = x
+            wraps[i] = 0
+            prev_observed = x
+            prev_unwrapped = x
+            prev_wrap = 0
+            continue
+
+        near_right_before = prev_observed >= (w - margin)
+        near_left_before = prev_observed <= margin
+        near_left_after = x <= margin
+        near_right_after = x >= (w - margin)
+
+        best_cost = float("inf")
+        best_x = x
+        best_wrap = prev_wrap
+
+        for wrap_count in range(-max_wraps, max_wraps + 1):
+            candidate_x = x + float(wrap_count) * w
+            cost = abs(candidate_x - prev_unwrapped)
+            wrap_delta = wrap_count - prev_wrap
+
+            if wrap_delta > 0:
+                probable = near_right_before and near_left_after
+            elif wrap_delta < 0:
+                probable = near_left_before and near_right_after
+            else:
+                probable = True
+
+            if not probable:
+                cost += 2.0 * w * abs(wrap_delta)
+
+            if cost < best_cost:
+                best_cost = cost
+                best_x = candidate_x
+                best_wrap = wrap_count
+
+        unwrapped[i] = best_x
+        wraps[i] = best_wrap
+        prev_observed = x
+        prev_unwrapped = best_x
+        prev_wrap = int(best_wrap)
+
+    return unwrapped, wraps
+
+
 def pixel_to_value(
     xs: np.ndarray,
     width_px: int,
@@ -268,9 +347,9 @@ def pixel_to_value(
         left_value: value at x=0
         right_value: value at x=width_px-1
         scale_type: "linear" | "log" | "centered"
-        wrapped: if True AND scale_type=="log", detect multi-decade wraps in
-                 the trace and multiply values by (right/left)^wrap_count so
-                 a curve that wrapped once reads at the next decade.
+        wrapped: if True, track a smooth unwrapped x path. Linear tracks add
+                 or subtract one full scale range per wrap; log tracks unwrap
+                 in log-position space before converting back to values.
 
     Returns a float array same shape as xs with NaN preserved.
     """
@@ -281,11 +360,16 @@ def pixel_to_value(
         return out
 
     w = max(1, int(width_px) - 1)
-    x = xs[valid].copy()
-    # Clamp pixel x to the track for the in-track fraction; wrap count (if any)
-    # provides the between-decade multiplier.
-    x_clamped = np.clip(x, 0.0, float(w))
-    frac = x_clamped / w
+    if wrapped:
+        x_for_value, _ = unwrap_curve_x_path(xs, width_px)
+    else:
+        x_for_value = xs
+
+    x = x_for_value[valid].copy()
+    if wrapped:
+        frac = x / float(w)
+    else:
+        frac = np.clip(x, 0.0, float(w)) / float(w)
 
     st = (scale_type or "linear").lower()
 
@@ -298,16 +382,7 @@ def pixel_to_value(
         else:
             log_lo = math.log10(lv)
             log_hi = math.log10(rv)
-            base_vals = np.power(10.0, log_lo + frac * (log_hi - log_lo))
-            if wrapped:
-                # Compute wrap index on the ORIGINAL (ordered) xs so the
-                # row-to-row jump detection is faithful, then subset to valid.
-                wrap_full = unwrap_log_trace(xs, width_px)
-                wrap_valid = wrap_full[valid]
-                wrap_valid = np.where(np.isnan(wrap_valid), 0.0, wrap_valid)
-                decade_factor = rv / lv  # e.g. 20/0.2 = 100 for a 2-decade track
-                base_vals = base_vals * np.power(decade_factor, wrap_valid)
-            out[valid] = base_vals
+            out[valid] = np.power(10.0, log_lo + frac * (log_hi - log_lo))
 
     elif st == "centered":
         # Linear mapping, but treat the midpoint of the track as the
