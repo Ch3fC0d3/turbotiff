@@ -5236,6 +5236,7 @@
                 pts[existingIdx][0] = clampedX;
                 pts[existingIdx][1] = yImgUse;
                 pts[existingIdx][2] = idx;
+                pts[existingIdx][3] = 'manual';
             } else {
                 // Insert at the correct sorted position to prevent "line out to the right"
                 let insertAt = pts.length;
@@ -5245,11 +5246,10 @@
                         break;
                     }
                 }
-                pts.splice(insertAt, 0, [clampedX, yImgUse, idx]);
+                pts.splice(insertAt, 0, [clampedX, yImgUse, idx, 'manual']);
             }
 
             lastCurveTraces[targetKey] = pts;
-            rebuildCurveTraceFromDigitized(editCurveId);
 
             renderCurveTraceOverlays(lastCurveTraces);
         }
@@ -11242,6 +11242,12 @@
                         const valid = group.filter(pt => Array.isArray(pt) && pt.length >= 2 &&
                             Number.isFinite(pt[0]) && Number.isFinite(pt[1]));
                         if (!valid.length) {
+                            group = [];
+                            return;
+                        }
+                        const manualPoint = valid.find(pt => pt[3] === 'manual');
+                        if (manualPoint) {
+                            collapsed.push(manualPoint);
                             group = [];
                             return;
                         }
