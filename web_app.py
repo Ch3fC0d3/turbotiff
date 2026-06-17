@@ -193,7 +193,7 @@ except Exception:
     CURVE_TRACE_UPSCALE = 2.0
 CURVE_TRACE_UPSCALE = max(1.0, min(4.0, CURVE_TRACE_UPSCALE))
 
-APP_VERSION = os.environ.get("APP_VERSION", "saved-log-header-restore-20260617")
+APP_VERSION = os.environ.get("APP_VERSION", "storage-prune-db-images-20260617")
 APP_BUILD_TIME = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
 
 app = Flask(__name__)
@@ -332,10 +332,12 @@ def _env_int(name: str, default: int, min_value: int = 0) -> int:
 
 
 CACHE_CLEANUP_ENABLED = _env_bool("TURBOTIFF_CACHE_CLEANUP_ENABLED", True)
-CACHE_IMAGE_TTL_SECONDS = _env_int("TURBOTIFF_CACHE_IMAGE_TTL_HOURS", 24, 1) * 3600
+CACHE_IMAGE_TTL_SECONDS = _env_int("TURBOTIFF_CACHE_IMAGE_TTL_HOURS", 1, 0) * 3600
 CACHE_TEMP_TTL_SECONDS = _env_int("TURBOTIFF_CACHE_TEMP_TTL_HOURS", 6, 1) * 3600
-CACHE_CLEANUP_INTERVAL_SECONDS = _env_int("TURBOTIFF_CACHE_CLEANUP_INTERVAL_SECONDS", 3600, 300)
-CACHE_IMAGES_MAX_BYTES = _env_int("TURBOTIFF_CACHE_IMAGES_MAX_MB", 512, 32) * 1024 * 1024
+CACHE_CLEANUP_INTERVAL_SECONDS = _env_int("TURBOTIFF_CACHE_CLEANUP_INTERVAL_SECONDS", 900, 300)
+CACHE_IMAGES_MAX_BYTES = _env_int("TURBOTIFF_CACHE_IMAGES_MAX_MB", 64, 16) * 1024 * 1024
+CACHE_KEEP_SAVED_LOG_IMAGES = _env_bool("TURBOTIFF_CACHE_KEEP_SAVED_LOG_IMAGES", False)
+CACHE_STRIP_DB_IMAGE_BLOBS = _env_bool("TURBOTIFF_STRIP_DB_IMAGE_BLOBS", True)
 
 
 def _extract_api_image_filename(value: Any) -> Optional[str]:
@@ -351,6 +353,8 @@ def _extract_api_image_filename(value: Any) -> Optional[str]:
 
 def _referenced_image_filenames() -> set:
     referenced = set()
+    if not CACHE_KEEP_SAVED_LOG_IMAGES:
+        return referenced
     db_path = config.AUTH_DB_PATH
     if not db_path or not os.path.exists(db_path):
         return referenced
@@ -367,6 +371,60 @@ def _referenced_image_filenames() -> set:
     except Exception as exc:
         print(f"[cache-cleanup] Could not read referenced image paths: {exc}")
     return referenced
+
+
+def _is_inline_data_blob(value: Any) -> bool:
+    text = str(value or "").lstrip()
+    return text.startswith("data:")
+
+
+def _storage_safe_image_ref(value: Any) -> Optional[str]:
+    """Keep only lightweight image references; never persist inline base64 blobs."""
+    text = str(value or "").strip()
+    if not text or _is_inline_data_blob(text):
+        return None
+    return text
+
+
+def _cleanup_db_image_blobs() -> Dict[str, int]:
+    stats = {"rows": 0, "fields": 0, "bytes_removed": 0, "vacuumed": 0}
+    if not CACHE_STRIP_DB_IMAGE_BLOBS:
+        return stats
+    db_path = config.AUTH_DB_PATH
+    if not db_path or not os.path.exists(db_path):
+        return stats
+    try:
+        with sqlite3.connect(db_path) as conn:
+            rows = conn.execute(
+                "SELECT id, original_image_path, cropped_image_path FROM user_logs"
+            ).fetchall()
+            for log_id, original_path, cropped_path in rows:
+                updates = {}
+                for column, value in (
+                    ("original_image_path", original_path),
+                    ("cropped_image_path", cropped_path),
+                ):
+                    if _is_inline_data_blob(value):
+                        updates[column] = None
+                        stats["fields"] += 1
+                        stats["bytes_removed"] += len(str(value).encode("utf-8", errors="ignore"))
+                if updates:
+                    stats["rows"] += 1
+                    assignments = ", ".join(f"{column} = ?" for column in updates)
+                    conn.execute(
+                        f"UPDATE user_logs SET {assignments}, updated_at = ? WHERE id = ?",
+                        (*updates.values(), datetime.now(timezone.utc).isoformat(), log_id),
+                    )
+            if stats["fields"]:
+                conn.commit()
+                try:
+                    conn.execute("VACUUM")
+                    stats["vacuumed"] = 1
+                except Exception as exc:
+                    print(f"[cache-cleanup] DB VACUUM failed: {exc}")
+    except Exception as exc:
+        print(f"[cache-cleanup] Could not strip DB image blobs: {exc}")
+    return stats
 
 
 def _file_age_seconds(path: Path, now_ts: Optional[float] = None) -> float:
@@ -502,6 +560,7 @@ def run_storage_cleanup(reason: str = "manual", shutdown: bool = False) -> Dict[
         "enabled": True,
         "reason": reason,
         "data_root": str(config.DATA_ROOT),
+        "db": _cleanup_db_image_blobs(),
         "images": _cleanup_unreferenced_images(now_ts),
         "ttl_dirs": _cleanup_ttl_dirs(now_ts),
         "temp": _cleanup_app_temp_dir(now_ts, shutdown=shutdown),
@@ -9705,8 +9764,8 @@ def save_log():
         depth_end = float(data.get('depth_end', 0))
         depth_unit = data.get('depth_unit', 'FT')
         las_content = data.get('las_content', '')
-        original_image_path = data.get('original_image_path', None)
-        cropped_image_path = data.get('cropped_image_path', None)
+        original_image_path = _storage_safe_image_ref(data.get('original_image_path'))
+        cropped_image_path = _storage_safe_image_ref(data.get('cropped_image_path'))
 
         with auth_billing.get_db(config.AUTH_DB_PATH) as conn:
             # If admin override user_id is 0, we must ensure it exists in the DB to avoid FK constraint errors.
