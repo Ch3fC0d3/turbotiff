@@ -13045,6 +13045,7 @@
             const lines = lasText.split(/\r?\n/);
             const curveOrder = [];
             const curveValues = {};
+            const curveUnits = {};
             const depth = [];
             let depthName = 'DEPTH';
             let inCurveSection = false;
@@ -13062,13 +13063,14 @@
                 }
 
                 if (inCurveSection) {
-                    const match = line.match(/^([A-Za-z0-9_]+)\./);
+                    const match = line.match(/^([A-Za-z0-9_]+)\.([^\s:]*)/);
                     if (match) {
                         const name = match[1].toUpperCase();
                         if (!curveOrder.includes(name)) {
                             curveOrder.push(name);
                             curveValues[name] = [];
                         }
+                        curveUnits[name] = (match[2] || '').trim();
                     }
                     continue;
                 }
@@ -13098,9 +13100,142 @@
 
             const curves = curveOrder
                 .slice(1)
-                .map((name) => ({ name, values: curveValues[name] || [] }));
+                .map((name) => ({ name, unit: curveUnits[name] || '', values: curveValues[name] || [] }));
 
             return { depth, depthName, curves };
+        }
+
+        function inferCurveTypeFromLasName(name) {
+            const n = String(name || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+            if (!n) return 'OTHER';
+            if (n.includes('GR') || n.includes('GAMMA')) return 'GR';
+            if (n.includes('RHOB') || n.includes('DENS')) return 'RHOB';
+            if (n.includes('NPHI') || n.includes('TNPH') || n.includes('NEUT')) return 'NPHI';
+            if (n === 'DT' || n.includes('DTC') || n.includes('SONIC')) return 'DT';
+            if (n.includes('CALI') || n === 'CAL') return 'CALI';
+            if (n === 'SP' || n.includes('SPONT')) return 'SP';
+            if (n.includes('RES') || n.includes('ILD') || n.includes('LLD') || n.includes('LLS') || n === 'RT') return 'RT';
+            return 'OTHER';
+        }
+
+        function getFiniteLasValueRange(values) {
+            const nullVal = (typeof lastNullValue === 'number') ? lastNullValue : -999.25;
+            const finite = (Array.isArray(values) ? values : [])
+                .map(Number)
+                .filter((v) => Number.isFinite(v) && Math.abs(v - nullVal) > 1e-6 && Math.abs(v + 999.25) > 1e-6);
+            if (!finite.length) return null;
+            finite.sort((a, b) => a - b);
+            return { min: finite[0], max: finite[finite.length - 1] };
+        }
+
+        function configureWorkspaceFromParsedLas(parsed) {
+            if (!parsed || !Array.isArray(parsed.curves) || !parsed.curves.length) return false;
+            const count = Math.min(6, parsed.curves.length);
+            const numEl = document.getElementById('numCurves');
+            if (numEl) numEl.value = count;
+
+            const imgEl = document.getElementById('imagePreview');
+            const w = Number(imageWidth || (imgEl && (imgEl.naturalWidth || imgEl.width)) || 900);
+            const leftMargin = Math.max(0, Math.round(w * 0.08));
+            const rightMargin = Math.max(leftMargin + count, Math.round(w * 0.92));
+            const usable = Math.max(count, rightMargin - leftMargin);
+            const tracks = [];
+            for (let i = 0; i < count; i++) {
+                const left = Math.round(leftMargin + (i * usable / count));
+                const right = Math.round(leftMargin + ((i + 1) * usable / count));
+                tracks.push([left, Math.max(left + 1, right)]);
+            }
+
+            detectedTracks = tracks;
+            window.detectedTracks = tracks;
+            generateCurveInputs(tracks);
+
+            const configs = [];
+            for (let i = 0; i < count; i++) {
+                const curve = parsed.curves[i];
+                const mnemonic = String(curve.name || `CURVE${i + 1}`).trim().toUpperCase();
+                const type = inferCurveTypeFromLasName(mnemonic);
+                const unit = String(curve.unit || '').trim();
+                const range = getFiniteLasValueRange(curve.values);
+
+                const typeEl = document.getElementById(`type${i}`);
+                if (typeEl) {
+                    typeEl.value = Array.from(typeEl.options).some(o => o.value === type) ? type : 'OTHER';
+                    typeEl.dispatchEvent(new Event('change'));
+                }
+
+                const nameEl = document.getElementById(`name${i}`);
+                if (nameEl) nameEl.value = mnemonic;
+                const unitEl = document.getElementById(`unit${i}`);
+                if (unitEl) unitEl.value = unit;
+                const mnEl = document.getElementById(`lasMnemonic${i}`);
+                if (mnEl) mnEl.value = mnemonic;
+                const lasUnitEl = document.getElementById(`lasUnit${i}`);
+                if (lasUnitEl) lasUnitEl.value = unit;
+
+                let leftValue;
+                let rightValue;
+                let scaleType = 'linear';
+                if (type === 'RT') {
+                    leftValue = 0.2;
+                    rightValue = 2000;
+                    scaleType = 'log';
+                } else {
+                    const defaults = getCurveScaleDefaults(type);
+                    if (defaults) {
+                        leftValue = defaults.left;
+                        rightValue = defaults.right;
+                        scaleType = type === 'SP' ? 'centered' : 'linear';
+                    } else if (range) {
+                        leftValue = range.min;
+                        rightValue = range.max;
+                    } else {
+                        leftValue = 0;
+                        rightValue = 100;
+                    }
+                }
+
+                const leftValEl = document.getElementById(`leftVal${i}`);
+                if (leftValEl) leftValEl.value = Number(leftValue).toPrecision(8).replace(/\.?0+$/, '');
+                const rightValEl = document.getElementById(`rightVal${i}`);
+                if (rightValEl) rightValEl.value = Number(rightValue).toPrecision(8).replace(/\.?0+$/, '');
+                const scaleEl = document.getElementById(`scaleType${i}`);
+                if (scaleEl) scaleEl.value = scaleType;
+                const wrappedEl = document.getElementById(`wrapped${i}`);
+                if (wrappedEl && range && Number.isFinite(leftValue) && Number.isFinite(rightValue)) {
+                    const lo = Math.min(leftValue, rightValue);
+                    const hi = Math.max(leftValue, rightValue);
+                    wrappedEl.checked = type === 'RT' || range.min < lo - Math.abs(hi - lo) * 0.05 || range.max > hi + Math.abs(hi - lo) * 0.05;
+                }
+
+                configs.push({
+                    las_mnemonic: mnemonic,
+                    name: mnemonic,
+                    type,
+                    unit,
+                    left_px: tracks[i][0],
+                    right_px: tracks[i][1],
+                    scale_min: leftValue,
+                    scale_max: rightValue,
+                    scale_type: scaleType,
+                    wrapped: !!(wrappedEl && wrappedEl.checked),
+                });
+            }
+
+            if (typeof populateEditCurveSelectFromConfig === 'function') {
+                populateEditCurveSelectFromConfig(configs);
+            }
+            lastDepthConfig = getDepthConfigFromInputs();
+            if (!lastCurveTraces || typeof lastCurveTraces !== 'object') {
+                lastCurveTraces = {};
+            }
+            configs.forEach(cfg => rebuildCurveTraceFromDigitized(cfg.las_mnemonic));
+            window.lastCurveTraces = lastCurveTraces;
+            refreshTrackOverlaysFromCurves();
+            renderCurveListView();
+            renderDepthOverlays();
+            if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
+            return true;
         }
 
         function ensureDigitizedFromLas() {
@@ -13188,7 +13323,7 @@
                                     const el2 = document.getElementById(`unit${i}`); if(el2) el2.value = c.unit;
                                 }
                                 if (c.las_mnemonic !== undefined) {
-                                    const el1 = document.getElementById(`mnemonic${i}`); if(el1) el1.value = c.las_mnemonic;
+                                    const el1 = document.getElementById(`lasMnemonic${i}`); if(el1) el1.value = c.las_mnemonic;
                                 }
                                 if (c.type !== undefined) {
                                     const el2 = document.getElementById(`type${i}`); if(el2) el2.value = c.type;
@@ -13196,6 +13331,7 @@
                                 if (c.mode !== undefined) { const el = document.getElementById(`mode${i}`); if(el) el.value = c.mode; }
                                 if (c.name !== undefined) { const el = document.getElementById(`name${i}`); if(el) el.value = c.name; }
                                 if (c.scale_type !== undefined) { const el = document.getElementById(`scaleType${i}`); if(el) el.value = c.scale_type; }
+                                if (c.wrapped !== undefined) { const el = document.getElementById(`wrapped${i}`); if(el) el.checked = !!c.wrapped; }
                             });
                             
                             if (typeof populateEditCurveSelectFromConfig === 'function') {
@@ -13220,6 +13356,18 @@
                         setTimeout(() => {
                             renderCurveTraceOverlays(lastCurveTraces);
                         }, 100);
+                    } else if (stateBlob.config && Array.isArray(stateBlob.config.curves)) {
+                        if (!lastCurveTraces || typeof lastCurveTraces !== 'object') {
+                            lastCurveTraces = {};
+                        }
+                        stateBlob.config.curves.forEach((c) => {
+                            const key = String(c.las_mnemonic || c.name || c.type || '').trim().toUpperCase();
+                            if (key) rebuildCurveTraceFromDigitized(key);
+                        });
+                        window.lastCurveTraces = lastCurveTraces;
+                        setTimeout(() => {
+                            renderCurveTraceOverlays(lastCurveTraces);
+                        }, 100);
                     }
                 } else {
                     const restoredMetadata = extractHeaderMetadataFromLasText(lastLasContent);
@@ -13227,9 +13375,15 @@
                         applyHeaderMetadataToInputs(restoredMetadata);
                         lastDigitizeHeaderMetadata = JSON.parse(JSON.stringify(restoredMetadata));
                     }
+                    configureWorkspaceFromParsedLas(parsed);
                 }
             } catch (e) {
                 console.error("Failed to restore Turbotiff internal state from LAS:", e);
+                try {
+                    configureWorkspaceFromParsedLas(parsed);
+                } catch (fallbackErr) {
+                    console.error("Failed to infer workspace from saved LAS:", fallbackErr);
+                }
             }
             // ---------------------------------
         }
@@ -13683,9 +13837,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         lastLasFilename = (logData.name || 'digitized_log').replace(/ /g, '_') + '.las';
         
         const imgEl = document.getElementById('imagePreview');
-        imgEl.onload = () => {
-            imageWidth = imgEl.naturalWidth || imgEl.width;
-            imageHeight = imgEl.naturalHeight || imgEl.height;
+        let savedLogLoadFinished = false;
+        const finishSavedLogLoad = () => {
+            if (savedLogLoadFinished) return;
+            savedLogLoadFinished = true;
+
+            imageWidth = imgEl.naturalWidth || imgEl.width || imageWidth || 900;
+            imageHeight = imgEl.naturalHeight || imgEl.height || imageHeight || 1400;
             
             const dimsEl = document.getElementById('imageDims');
             if (dimsEl) {
@@ -13725,6 +13883,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                 );
             }
 
+            const downloadBtn = document.getElementById('downloadLasBtn');
+            const viewBtn = document.getElementById('viewLasBtn');
+            if (downloadBtn && lastLasContent) downloadBtn.disabled = false;
+            if (viewBtn && lastLasContent) viewBtn.disabled = false;
+
             showStatus(`Log loaded successfully.${imageLoadWarning || ' Ready to edit.'}`, imageLoadWarning ? 'info' : 'success');
             
             // Auto scroll and expand step 5 for immediate editing
@@ -13735,7 +13898,14 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
             }, 500);
         };
+        imgEl.onload = finishSavedLogLoad;
+        imgEl.onerror = () => {
+            console.warn('Saved log image element failed to render; continuing with LAS data only.');
+            imageLoadWarning = imageLoadWarning || ' Saved image could not be rendered, so LAS/header data was restored without the original image.';
+            finishSavedLogLoad();
+        };
         imgEl.src = uploadedImage;
+        setTimeout(finishSavedLogLoad, 1500);
 
     } catch(e) {
         console.error("Error preloading log data", e);
