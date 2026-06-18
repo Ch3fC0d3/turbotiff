@@ -12280,6 +12280,14 @@
                         ctx.moveTo(firstX, firstY);
                         const splitWrappedJumps = false;
                         const wrapJumpThreshold = Infinity;
+                        const nearestTrackEdgeX = (xImg) => {
+                            if (!trackMeta) return null;
+                            const left = Number(trackMeta.leftX);
+                            const right = Number(trackMeta.rightX);
+                            const xVal = Number(xImg);
+                            if (!Number.isFinite(left) || !Number.isFinite(right) || !Number.isFinite(xVal)) return null;
+                            return Math.abs(xVal - left) <= Math.abs(xVal - right) ? left : right;
+                        };
 
                         for (let i = 1; i < renderPoints.length; i++) {
                             const prevPoint = renderPoints[i - 1];
@@ -12289,6 +12297,14 @@
                             const jumpX = Math.abs(Number(currPoint[0]) - Number(prevPoint[0]));
                             if (isScaleWrapDisplayJump(name, prevPoint, currPoint, trackMeta) ||
                                 (splitWrappedJumps && Number.isFinite(jumpX) && jumpX > wrapJumpThreshold)) {
+                                const prevEdgeX = nearestTrackEdgeX(prevPoint[0]);
+                                const currEdgeX = nearestTrackEdgeX(currPoint[0]);
+                                if (Number.isFinite(prevEdgeX) && Number.isFinite(currEdgeX)) {
+                                    const prevYDom = Number(prevPoint[1]) * scaleY;
+                                    ctx.lineTo(prevEdgeX * scaleX, prevYDom);
+                                    ctx.moveTo(currEdgeX * scaleX, yDom);
+                                    ctx.lineTo(xDom, yDom);
+                                }
                                 ctx.moveTo(xDom, yDom);
                             } else {
                                 ctx.lineTo(xDom, yDom);
