@@ -2286,6 +2286,36 @@
             return getWrapMarkersForCurve(curveId).some(m => m.depthIndex > lo && m.depthIndex <= hi);
         }
 
+        function isScaleWrapDisplayJump(curveId, prevPoint, currPoint, track) {
+            if (isScaleWrapBoundaryForPoints(curveId, prevPoint, currPoint)) return true;
+            if (!track || !Array.isArray(prevPoint) || !Array.isArray(currPoint)) return false;
+            if (!getWrapMarkersForCurve(curveId).length) return false;
+
+            const left = Math.min(Number(track.leftX), Number(track.rightX));
+            const right = Math.max(Number(track.leftX), Number(track.rightX));
+            const width = right - left;
+            if (!Number.isFinite(width) || width <= 0) return false;
+
+            const x0 = Number(prevPoint[0]);
+            const y0 = Number(prevPoint[1]);
+            const x1 = Number(currPoint[0]);
+            const y1 = Number(currPoint[1]);
+            if (![x0, y0, x1, y1].every(Number.isFinite)) return false;
+
+            const dx = Math.abs(x1 - x0);
+            const dy = Math.abs(y1 - y0);
+            const edgeMargin = Math.max(6, width * 0.07);
+            const nearLeft0 = x0 <= left + edgeMargin;
+            const nearRight0 = x0 >= right - edgeMargin;
+            const nearLeft1 = x1 <= left + edgeMargin;
+            const nearRight1 = x1 >= right - edgeMargin;
+            const oppositeEdges = (nearLeft0 && nearRight1) || (nearRight0 && nearLeft1);
+
+            return oppositeEdges &&
+                dx >= width * 0.58 &&
+                dy <= Math.max(18, width * 0.12);
+        }
+
         function getSelectedWrapCurveContext() {
             let i = step5ActiveCurveIndex;
             if (i < 0) {
@@ -11874,9 +11904,8 @@
                         : Math.max(2.0, effectiveLineLength);
                     const halfStick = stickLen * 0.5;
                     const renderStickSegments = false;
-                    // First, draw a thin connecting polyline that always stays
-                    // continuous. The user requirement here is explicit: the
-                    // displayed curve should never show spaces.
+                    // First, draw a thin connecting polyline. Explicit scale-wrap
+                    // jumps stay in the data, but are not drawn across the chart face.
                     if (sortedPoints.length >= 2) {
                         ctx.save();
                         ctx.setLineDash([]);
@@ -11902,7 +11931,7 @@
                             const xDom = (currPoint[0] * scaleX);
                             const yDom = (currPoint[1] * scaleY);
                             const jumpX = Math.abs(Number(currPoint[0]) - Number(prevPoint[0]));
-                            if (isScaleWrapBoundaryForPoints(name, prevPoint, currPoint) ||
+                            if (isScaleWrapDisplayJump(name, prevPoint, currPoint, trackMeta) ||
                                 (splitWrappedJumps && Number.isFinite(jumpX) && jumpX > wrapJumpThreshold)) {
                                 ctx.moveTo(xDom, yDom);
                             } else {
