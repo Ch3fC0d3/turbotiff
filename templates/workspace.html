@@ -4119,7 +4119,16 @@
             populateOverlayCurveSelectFromTracks();
             if (typeof syncToolbarCurveLockButton === 'function') syncToolbarCurveLockButton();
             const editSel = document.getElementById('editCurveSelect');
-            if (editSel) editSel.addEventListener('change', syncStep5Advanced);
+            if (editSel) editSel.addEventListener('change', () => {
+                syncStep5Advanced();
+                if (editMode) {
+                    const nextId = normalizeCurveKey(editSel.value);
+                    if (nextId) {
+                        setActiveEditCurve(nextId);
+                        setEditModeUI();
+                    }
+                }
+            });
             const tourBackdrop = document.getElementById('guidedTourBackdrop');
             if (tourBackdrop) {
                 tourBackdrop.addEventListener('click', skipWorkspaceTour);
@@ -7917,6 +7926,27 @@
             // When edit mode is enabled, clicks/drag adjust the selected curve
             // instead of starting new selections.
             if (editMode && editCurveId) {
+                if (event.button === 2) {
+                    return;
+                }
+
+                // WRAP ERASER can start anywhere in the selected curve track and
+                // is intentionally isolated from pointer/add-point handling.
+                if (activeTool === 'wrapEraser' && event.button === 0) {
+                    eraserStart = { x: xImg, y: yImg, clientX: event.clientX, clientY: event.clientY };
+                    eraserBox = document.createElement('div');
+                    eraserBox.className = 'eraser-box';
+                    const leftPct = (xImg / imageWidth) * 100;
+                    const topPct = (yImg / imageHeight) * 100;
+                    eraserBox.style.left = `${leftPct}%`;
+                    eraserBox.style.top = `${topPct}%`;
+                    eraserBox.style.width = '0';
+                    eraserBox.style.height = '0';
+                    if (overlay) overlay.appendChild(eraserBox);
+                    event.preventDefault();
+                    return;
+                }
+
                 const clickedTrack = getTrackUnderImageX(xImg);
                 if (!clickedTrack) {
                     event.preventDefault();
@@ -7936,9 +7966,6 @@
                     event.preventDefault();
                     return;
                 }
-                if (event.button === 2) {
-                    return;
-                }
                 // DRAW (PEN) TOOL
                 if (activeTool === 'draw' && (event.button === 0 || (event.pointerType && event.pointerType !== 'mouse'))) {
                     drawStrokeActive = true;
@@ -7952,8 +7979,8 @@
                     event.preventDefault();
                     return;
                 }
-                // ERASER / WRAP ERASER TOOL
-                if ((activeTool === 'eraser' || activeTool === 'wrapEraser') && event.button === 0) {
+                // ERASER TOOL
+                if (activeTool === 'eraser' && event.button === 0) {
                     eraserStart = { x: xImg, y: yImg, clientX: event.clientX, clientY: event.clientY };
                     eraserBox = document.createElement('div');
                     eraserBox.className = 'eraser-box';
