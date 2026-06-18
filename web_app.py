@@ -193,7 +193,7 @@ except Exception:
     CURVE_TRACE_UPSCALE = 2.0
 CURVE_TRACE_UPSCALE = max(1.0, min(4.0, CURVE_TRACE_UPSCALE))
 
-APP_VERSION = os.environ.get("APP_VERSION", "simple-carry-over-20260618")
+APP_VERSION = os.environ.get("APP_VERSION", "revert-wrap-carry-20260618")
 APP_BUILD_TIME = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
 
 app = Flask(__name__)
@@ -11052,37 +11052,6 @@ def digitize():
                 'auto_wrap': True,
             })
 
-        if wrapped_flag:
-            try:
-                _, wrap_counts = scale_detection.unwrap_curve_x_path(xs, width_px)
-                finite_wrap_rows = np.where(~np.isnan(wrap_counts))[0]
-                previous_row = None
-                previous_wrap = None
-                for row_idx in finite_wrap_rows:
-                    wrap_count = int(wrap_counts[row_idx])
-                    if previous_wrap is None:
-                        previous_row = int(row_idx)
-                        previous_wrap = wrap_count
-                        continue
-                    if wrap_count != previous_wrap:
-                        direction = 'right_to_left' if wrap_count > previous_wrap else 'left_to_right'
-                        depth_a_idx = max(0, min(len(base_depth) - 1, previous_row if previous_row is not None else int(row_idx)))
-                        depth_b_idx = max(0, min(len(base_depth) - 1, int(row_idx)))
-                        curve_warnings.append({
-                            'curve': name,
-                            'event_type': 'off_scale_wrap',
-                            'depth_start': float(base_depth[depth_a_idx]),
-                            'depth_end': float(base_depth[depth_b_idx]),
-                            'direction': direction,
-                            'wrap_count_change': int(wrap_count - previous_wrap),
-                            'confidence': 0.87,
-                            'requires_review': False,
-                        })
-                    previous_row = int(row_idx)
-                    previous_wrap = wrap_count
-            except Exception:
-                pass
-
         vals_out = np.where(np.isnan(vals), null_val, vals).astype(np.float32)
         curve_data[name] = {'unit': unit, 'values': vals_out}
 
@@ -12262,25 +12231,11 @@ def batch_digitize():
 
                 xs = pd.Series(xs).interpolate(method='linear', limit_direction='both', limit=10).to_numpy()
 
-                scale_type = (c.get('scale_type') or '').lower().strip()
-                wrapped_flag = bool(c.get('wrapped'))
-                if not scale_type:
-                    _hint = scale_detection.classify_curve_type(c.get('name') or c.get('type') or '')
-                    scale_type = (_hint or {}).get('scale_type', 'linear')
-                if scale_type == 'log' and not wrapped_flag:
-                    try:
-                        wrapped_flag = bool(scale_detection.detect_wrap(xs, right_px - left_px))
-                    except Exception:
-                        wrapped_flag = False
+                scale_range = right_value - left_value
+                if scale_range == 0:
+                    scale_range = 1.0
 
-                values = scale_detection.pixel_to_value(
-                    xs=xs,
-                    width_px=right_px - left_px,
-                    left_value=left_value,
-                    right_value=right_value,
-                    scale_type=scale_type,
-                    wrapped=wrapped_flag,
-                )
+                values = left_value + (xs / (right_px - left_px)) * scale_range
                 values = np.where(np.isnan(values), null_val, values)
 
                 # Clean NaN/inf from xs and values before converting to list
