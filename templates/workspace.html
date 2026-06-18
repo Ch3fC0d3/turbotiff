@@ -1840,7 +1840,8 @@
                                                 <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5AddWrapMarkerDelta(-1)">- cycle</button>
                                                 <input type="number" id="s5wrapCycleManual" step="1" value="1" title="Absolute wrap cycle">
                                                 <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5AddWrapMarkerFromInput()">Set</button>
-                                                <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5ClearWrapMarkerNearMouse()">Clear near</button>
+                                                <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5ClearWrapMarkerNearMouse()">Clear marker</button>
+                                                <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5ClearAllWrapMarkers()">Clear all</button>
                                             </div>
                                             <div id="s5WrapStatus" class="scale-wrap-status">No wrap markers.</div>
                                         </div>
@@ -2412,9 +2413,47 @@
                 showStatus('Select a curve before clearing a wrap marker.', 'info');
                 return;
             }
+            const markers = getWrapMarkersForCurve(ctx.curveKey);
+            if (!markers.length) {
+                updateScaleWrapStatus(ctx.curveKey);
+                showStatus('No wrap markers for this curve.', 'info');
+                return;
+            }
+
             const dIdx = getWrapDepthIndexFromMouse();
-            if (!Number.isInteger(dIdx) || dIdx < 0) {
-                showStatus('Move the mouse near the wrap marker to clear it.', 'info');
+            const maxDepthRows = Array.isArray(lastDigitizedDepth)
+                ? Math.max(12, Math.round(lastDigitizedDepth.length * 0.025))
+                : 25;
+            let removeIndex = markers.length - 1;
+            let bestDist = Infinity;
+            if (Number.isInteger(dIdx) && dIdx >= 0) {
+                for (let i = 0; i < markers.length; i++) {
+                    const marker = markers[i];
+                    const dist = Math.abs(marker.depthIndex - dIdx);
+                    if (dist < bestDist) {
+                        removeIndex = i;
+                        bestDist = dist;
+                    }
+                }
+                if (bestDist > maxDepthRows) {
+                    removeIndex = markers.length - 1;
+                }
+            }
+
+            const removed = markers[removeIndex];
+            const nextMarkers = markers.slice(0, removeIndex).concat(markers.slice(removeIndex + 1));
+            setWrapMarkersForCurve(ctx.curveKey, nextMarkers);
+            normalizeCurveValuesToWrapMarkers(ctx.curveKey);
+            rebuildCurveTraceFromDigitized(ctx.curveKey);
+            updateScaleWrapStatus(ctx.curveKey);
+            if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
+            showStatus(`Cleared ${ctx.curveKey} ${formatWrapCycle(removed.cycle)} wrap marker.`, 'success');
+        }
+
+        function s5ClearAllWrapMarkers() {
+            const ctx = getSelectedWrapCurveContext();
+            if (!ctx || !ctx.curveKey) {
+                showStatus('Select a curve before clearing wrap markers.', 'info');
                 return;
             }
             const markers = getWrapMarkersForCurve(ctx.curveKey);
@@ -2423,25 +2462,12 @@
                 showStatus('No wrap markers for this curve.', 'info');
                 return;
             }
-            let best = null;
-            let bestDist = Infinity;
-            for (const marker of markers) {
-                const dist = Math.abs(marker.depthIndex - dIdx);
-                if (dist < bestDist) {
-                    best = marker;
-                    bestDist = dist;
-                }
-            }
-            if (!best || bestDist > 5) {
-                showStatus('No wrap marker close enough to clear.', 'info');
-                return;
-            }
-            setWrapMarkersForCurve(ctx.curveKey, markers.filter(marker => marker !== best));
+            setWrapMarkersForCurve(ctx.curveKey, []);
             normalizeCurveValuesToWrapMarkers(ctx.curveKey);
             rebuildCurveTraceFromDigitized(ctx.curveKey);
             updateScaleWrapStatus(ctx.curveKey);
             if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
-            showStatus(`Cleared ${ctx.curveKey} wrap marker near row ${best.depthIndex}.`, 'success');
+            showStatus(`Cleared all wrap markers for ${ctx.curveKey}.`, 'success');
         }
 
         function renderScaleWrapMarkersOnCanvas(ctx, scaleX, scaleY, tracks) {
@@ -2449,7 +2475,7 @@
             const keys = Object.keys(curveWrapMarkers);
             if (!keys.length) return;
             ctx.save();
-            ctx.font = '700 11px system-ui, -apple-system, Segoe UI, sans-serif';
+            ctx.font = '700 9px system-ui, -apple-system, Segoe UI, sans-serif';
             ctx.textBaseline = 'middle';
             for (const key of keys) {
                 const markers = getWrapMarkersForCurve(key);
@@ -2465,47 +2491,50 @@
                     const x = xImg * scaleX;
                     const y = yImg * scaleY;
                     const cycleText = formatWrapCycle(marker.cycle);
-                    const rangeText = getWrapCycleRangeLabel(track, marker.cycle);
-                    const label = `${key} ${cycleText} ${rangeText}`;
+                    const label = cycleText;
                     const labelOnRight = marker.edge === 'left';
-                    const labelX = labelOnRight ? x + 7 : x - 7;
                     const textW = ctx.measureText(label).width;
-                    const boxX = labelOnRight ? labelX : labelX - textW - 8;
-                    const boxY = y - 11;
+                    const boxW = Math.max(20, textW + 8);
+                    const boxH = 15;
+                    const edgePad = 3;
+                    const boxX = labelOnRight
+                        ? x + edgePad
+                        : x - boxW - edgePad;
+                    const boxY = y - boxH - 4;
 
                     ctx.strokeStyle = '#f97316';
                     ctx.fillStyle = '#f97316';
-                    ctx.lineWidth = 2;
+                    ctx.lineWidth = 1.5;
                     ctx.beginPath();
-                    ctx.moveTo(x, y - 12);
-                    ctx.lineTo(x, y + 12);
+                    ctx.moveTo(x, y - 9);
+                    ctx.lineTo(x, y + 9);
                     ctx.stroke();
                     ctx.beginPath();
                     if (marker.edge === 'left') {
                         ctx.moveTo(x, y);
-                        ctx.lineTo(x + 7, y - 5);
-                        ctx.lineTo(x + 7, y + 5);
+                        ctx.lineTo(x + 5, y - 4);
+                        ctx.lineTo(x + 5, y + 4);
                     } else {
                         ctx.moveTo(x, y);
-                        ctx.lineTo(x - 7, y - 5);
-                        ctx.lineTo(x - 7, y + 5);
+                        ctx.lineTo(x - 5, y - 4);
+                        ctx.lineTo(x - 5, y + 4);
                     }
                     ctx.closePath();
                     ctx.fill();
 
-                    ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
-                    ctx.strokeStyle = 'rgba(249, 115, 22, 0.95)';
+                    ctx.fillStyle = 'rgba(15, 23, 42, 0.78)';
+                    ctx.strokeStyle = 'rgba(249, 115, 22, 0.88)';
                     ctx.lineWidth = 1;
                     ctx.beginPath();
                     if (typeof ctx.roundRect === 'function') {
-                        ctx.roundRect(boxX, boxY, textW + 8, 22, 5);
+                        ctx.roundRect(boxX, boxY, boxW, boxH, 4);
                     } else {
-                        ctx.rect(boxX, boxY, textW + 8, 22);
+                        ctx.rect(boxX, boxY, boxW, boxH);
                     }
                     ctx.fill();
                     ctx.stroke();
                     ctx.fillStyle = '#fed7aa';
-                    ctx.fillText(label, boxX + 4, y);
+                    ctx.fillText(label, boxX + 4, boxY + boxH * 0.52);
                 }
             }
             ctx.restore();
