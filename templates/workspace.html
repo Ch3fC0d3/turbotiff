@@ -1818,10 +1818,10 @@
                                             </div>
                                         </div>
                                         <div class="field" style="grid-column:1/-1;">
-                                            <label>Loop local segment</label>
+                                            <label>Carry over</label>
                                             <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;">
-                                                <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5ApplyWrapCorrection(1)" title="Right edge reappears on left: add one wrap pass">R -> L +</button>
-                                                <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5ApplyWrapCorrection(-1)" title="Left edge reappears on right: subtract one wrap pass">L -> R -</button>
+                                                <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5ApplyWrapCorrection(1)" title="Add one full track-width to exported values near the mouse">Carry +1</button>
+                                                <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5ApplyWrapCorrection(-1)" title="Subtract one full track-width from exported values near the mouse">Carry -1</button>
                                                 <input type="number" id="s5wrapRadius" value="120" min="10" max="800" step="10" title="Vertical edit radius in image pixels" style="width:72px;">
                                             </div>
                                         </div>
@@ -3565,17 +3565,18 @@
                 if (depthIndex < 0 || depthIndex >= found.entry.values.length) continue;
                 if (isDepthIndexPinned(curveId, depthIndex)) continue;
 
-                const frac = Math.max(0, Math.min(1, (x - leftX) / width));
-                const onExpectedSide = dir > 0 ? frac >= 0.5 : frac <= 0.5;
-                if (onExpectedSide) {
+                const existingValue = Number(found.entry.values[depthIndex]);
+                let frac = trackValueToFraction(existingValue, track);
+                if (!Number.isFinite(frac)) {
+                    frac = (x - leftX) / width;
+                }
+                if (Number.isFinite(frac)) {
                     candidates.push({ pointIndex, depthIndex, frac });
                 }
             }
 
             if (!candidates.length) {
-                showStatus(dir > 0
-                    ? 'No right-side points near the mouse to loop left.'
-                    : 'No left-side points near the mouse to loop right.', 'info');
+                showStatus('No editable points near the mouse for carry-over correction.', 'info');
                 return;
             }
 
@@ -3587,7 +3588,7 @@
             const undoValues = found.entry.values.map((value, idx) => ({ idx, oldValue: value }));
             editUndoStack.push({
                 type: 'bulk_transform',
-                label: dir > 0 ? 'right-to-left wrap correction' : 'left-to-right wrap correction',
+                label: dir > 0 ? 'carry +1' : 'carry -1',
                 curveKey: found.key,
                 curveId,
                 traceKey,
@@ -3595,19 +3596,13 @@
                 undoValues,
             });
 
-            const edgeEpsilon = 0.001;
             candidates.forEach(({ pointIndex, depthIndex, frac }) => {
-                const newFrac = dir > 0
-                    ? 1 + Math.max(edgeEpsilon, 1 - frac)
-                    : -Math.max(edgeEpsilon, frac);
+                const newFrac = frac + dir;
                 const newValue = trackFractionToValue(newFrac, track);
                 if (!Number.isFinite(newValue)) return;
                 found.entry.values[depthIndex] = newValue;
 
-                const visibleFrac = normalizeWrappedFraction(newFrac);
-                const newX = leftX + visibleFrac * width;
                 if (Array.isArray(pts[pointIndex])) {
-                    pts[pointIndex][0] = newX;
                     pts[pointIndex][2] = depthIndex;
                     pts[pointIndex][3] = 'manual';
                     pts[pointIndex][4] = Date.now();
@@ -3616,9 +3611,8 @@
 
             if (!lastCurveTraces) lastCurveTraces = {};
             lastCurveTraces[traceKey] = pts;
-            rebuildCurveTraceFromDigitized(curveId);
             renderCurveTraceOverlays(lastCurveTraces);
-            showStatus(`${dir > 0 ? 'Right-to-left' : 'Left-to-right'} loop correction applied to ${candidates.length} points. Ctrl+Z to undo.`, 'success');
+            showStatus(`${dir > 0 ? 'Carry +1' : 'Carry -1'} applied to ${candidates.length} local points. Ctrl+Z to undo.`, 'success');
         }
 
         function beginPanelSelection() {
@@ -11698,10 +11692,8 @@
                         const firstX = (renderPoints[0][0] * scaleX);
                         const firstY = (renderPoints[0][1] * scaleY);
                         ctx.moveTo(firstX, firstY);
-                        const splitWrappedJumps = !!(trackMeta && trackMeta.wrapped);
-                        const wrapJumpThreshold = splitWrappedJumps
-                            ? Math.abs(Number(trackMeta.rightX) - Number(trackMeta.leftX)) * 0.55
-                            : Infinity;
+                        const splitWrappedJumps = false;
+                        const wrapJumpThreshold = Infinity;
 
                         for (let i = 1; i < renderPoints.length; i++) {
                             const prevPoint = renderPoints[i - 1];

@@ -193,7 +193,7 @@ except Exception:
     CURVE_TRACE_UPSCALE = 2.0
 CURVE_TRACE_UPSCALE = max(1.0, min(4.0, CURVE_TRACE_UPSCALE))
 
-APP_VERSION = os.environ.get("APP_VERSION", "saved-log-load-fallback-20260617")
+APP_VERSION = os.environ.get("APP_VERSION", "simple-carry-over-20260618")
 APP_BUILD_TIME = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
 
 app = Flask(__name__)
@@ -8767,6 +8767,67 @@ def generate_upload_url():
         return jsonify({'success': False, 'error': 'Failed to generate upload URL.'}), 500
 
 
+MANAGED_JOB_FILES_MARKER = "\n\nFiles: "
+MANAGED_JOB_ADMIN_FILES_MARKER = "\n\nAdmin Files: "
+
+
+def _extract_managed_job_json_section(notes: str, marker: str) -> list:
+    if not notes or marker not in notes:
+        return []
+
+    start = notes.find(marker) + len(marker)
+    end = len(notes)
+    for next_marker in (MANAGED_JOB_FILES_MARKER, MANAGED_JOB_ADMIN_FILES_MARKER):
+        if next_marker == marker:
+            continue
+        pos = notes.find(next_marker, start)
+        if pos != -1:
+            end = min(end, pos)
+
+    try:
+        parsed = json.loads(notes[start:end].strip())
+    except Exception:
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def _managed_job_note_body(notes: str) -> str:
+    if not notes:
+        return ""
+    cut_points = [
+        pos for pos in (
+            notes.find(MANAGED_JOB_FILES_MARKER),
+            notes.find(MANAGED_JOB_ADMIN_FILES_MARKER),
+        )
+        if pos != -1
+    ]
+    if not cut_points:
+        return notes
+    return notes[:min(cut_points)].rstrip()
+
+
+def _build_managed_job_notes(notes: str, source_files: list, admin_files: list | None = None) -> str:
+    body = _managed_job_note_body(notes)
+    updated = f"{body}{MANAGED_JOB_FILES_MARKER}{json.dumps(source_files or [])}"
+    if admin_files:
+        updated += f"{MANAGED_JOB_ADMIN_FILES_MARKER}{json.dumps(admin_files)}"
+    return updated
+
+
+def _managed_job_file_key(file_ref) -> str:
+    if isinstance(file_ref, str):
+        return file_ref
+    if isinstance(file_ref, dict):
+        return file_ref.get('gcs_key') or file_ref.get('key') or ''
+    return ''
+
+
+def _managed_job_file_name(file_ref, file_key: str) -> str:
+    if isinstance(file_ref, dict) and file_ref.get('name'):
+        return file_ref['name']
+    return file_key.split("/")[-1] if file_key else 'file'
+
+
 @app.route('/api/managed-jobs/checkout', methods=['POST'])
 def create_managed_job_checkout():
     """Create a Stripe Checkout Session in setup mode for a managed job."""
@@ -8820,7 +8881,7 @@ def create_managed_job_checkout():
                 data.get('complexity'), data.get('turnaround'),
                 float(data.get('estimatedUnits') or 0),
                 float(data.get('estimatedTotal') or 0),
-                f"{data.get('notes', '')}\n\nFiles: {json.dumps(data.get('files', []))}", # Append filekeys temporarily to notes to save DB migrations
+                _build_managed_job_notes(data.get('notes', ''), data.get('files', [])),
                 datetime.now(timezone.utc).isoformat(),
                 datetime.now(timezone.utc).isoformat()
             ))
@@ -8882,17 +8943,10 @@ def managed_job_success():
                 job = conn.execute("SELECT * FROM managed_jobs WHERE id = ?", (job_id,)).fetchone()
             
             if job and config.MAIL_FROM:
-                file_keys = []
-                try:
-                    notes = job['notes']
-                    if notes and "\n\nFiles: " in notes:
-                        files_str = notes.split("\n\nFiles: ")[-1]
-                        file_keys = json.loads(files_str)
-                except Exception as e:
-                    print(f"Error parsing files: {e}")
+                file_refs = _extract_managed_job_json_section(job['notes'], MANAGED_JOB_FILES_MARKER)
                 
                 file_urls = []
-                if file_keys and VISION_API_AVAILABLE:
+                if file_refs and VISION_API_AVAILABLE:
                     try:
                         global credentials
                         if 'credentials' in globals() and credentials:
@@ -8900,7 +8954,10 @@ def managed_job_success():
                         else:
                             storage_client = storage.Client()
                         bucket = storage_client.bucket(config.GCS_UPLOADS_BUCKET)
-                        for fk in file_keys:
+                        for file_ref in file_refs:
+                            fk = _managed_job_file_key(file_ref)
+                            if not fk:
+                                continue
                             blob = bucket.blob(fk)
                             url = blob.generate_signed_url(version="v4", expiration=timedelta(days=7), method="GET")
                             file_urls.append({'key': fk, 'url': url})
@@ -9281,27 +9338,142 @@ def admin_managed_job_files(job_id):
         return jsonify({'success': False, 'error': 'Job not found'}), 404
         
     try:
-        notes = job['notes']
-        if not notes or "\n\nFiles: " not in notes:
-            return jsonify({'success': True, 'urls': []})
-            
-        files_str = notes.split("\n\nFiles: ")[-1]
-        file_keys = json.loads(files_str)
+        file_refs = _extract_managed_job_json_section(job['notes'], MANAGED_JOB_FILES_MARKER)
         
         urls = []
-        if file_keys and VISION_API_AVAILABLE:
+        if file_refs and VISION_API_AVAILABLE:
             global credentials
             if 'credentials' in globals() and credentials:
                 storage_client = storage.Client(credentials=credentials)
             else:
                 storage_client = storage.Client()
             bucket = storage_client.bucket(config.GCS_UPLOADS_BUCKET)
-            for fk in file_keys:
+            for file_ref in file_refs:
+                fk = _managed_job_file_key(file_ref)
+                if not fk:
+                    continue
                 blob = bucket.blob(fk)
                 url = blob.generate_signed_url(version="v4", expiration=timedelta(hours=1), method="GET")
-                filename = fk.split("/")[-1]
+                filename = _managed_job_file_name(file_ref, fk)
                 urls.append({'filename': filename, 'url': url})
                 
+        return jsonify({'success': True, 'urls': urls})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/admin/managed-jobs/<job_id>/delivery-upload-url', methods=['POST'])
+@login_required()
+def admin_managed_job_delivery_upload_url(job_id):
+    if not session.get('is_admin'):
+        return jsonify({'success': False, 'error': 'Unauthorized'}), 403
+
+    data = request.json or {}
+    filename = (data.get('filename') or '').strip()
+    content_type = data.get('contentType') or 'application/octet-stream'
+
+    if not filename:
+        return jsonify({'success': False, 'error': 'Missing filename'}), 400
+    if not VISION_API_AVAILABLE:
+        return jsonify({'success': False, 'error': 'Cloud storage is not configured.'}), 500
+
+    with auth_billing.get_db(config.AUTH_DB_PATH) as conn:
+        job = conn.execute("SELECT id FROM managed_jobs WHERE id = ?", (job_id,)).fetchone()
+    if not job:
+        return jsonify({'success': False, 'error': 'Job not found'}), 404
+
+    try:
+        global credentials
+        if 'credentials' in globals() and credentials:
+            storage_client = storage.Client(credentials=credentials)
+        else:
+            storage_client = storage.Client()
+
+        bucket = storage_client.bucket(config.GCS_UPLOADS_BUCKET)
+        safe_filename = re.sub(r'[^A-Za-z0-9._-]+', '_', filename).strip('._') or 'file'
+        blob_path = f"deliveries/{job_id}/{uuid.uuid4()}/{safe_filename}"
+        blob = bucket.blob(blob_path)
+        url = blob.generate_signed_url(
+            version="v4",
+            expiration=timedelta(minutes=30),
+            method="PUT",
+            content_type=content_type,
+        )
+        return jsonify({'success': True, 'uploadUrl': url, 'fileKey': blob_path})
+    except Exception as e:
+        print(f"Failed to generate admin delivery upload URL: {e}")
+        return jsonify({'success': False, 'error': 'Failed to generate upload URL.'}), 500
+
+
+@app.route('/api/admin/managed-jobs/<job_id>/delivery-files', methods=['GET', 'POST'])
+@login_required()
+def admin_managed_job_delivery_files(job_id):
+    if not session.get('is_admin'):
+        return jsonify({'success': False, 'error': 'Unauthorized'}), 403
+
+    with auth_billing.get_db(config.AUTH_DB_PATH) as conn:
+        job = conn.execute("SELECT * FROM managed_jobs WHERE id = ?", (job_id,)).fetchone()
+
+    if not job:
+        return jsonify({'success': False, 'error': 'Job not found'}), 404
+
+    if request.method == 'POST':
+        data = request.json or {}
+        new_files = data.get('files') or []
+        if not isinstance(new_files, list) or not new_files:
+            return jsonify({'success': False, 'error': 'No files provided'}), 400
+
+        normalized_new_files = []
+        for file_ref in new_files:
+            if not isinstance(file_ref, dict):
+                continue
+            file_key = _managed_job_file_key(file_ref)
+            if not file_key:
+                continue
+            normalized_new_files.append({
+                'name': file_ref.get('name') or file_key.split('/')[-1],
+                'size': int(file_ref.get('size') or 0),
+                'type': file_ref.get('type') or 'application/octet-stream',
+                'gcs_key': file_key,
+                'uploaded_at': datetime.now(timezone.utc).isoformat(),
+            })
+
+        if not normalized_new_files:
+            return jsonify({'success': False, 'error': 'No valid files provided'}), 400
+
+        source_files = _extract_managed_job_json_section(job['notes'], MANAGED_JOB_FILES_MARKER)
+        admin_files = _extract_managed_job_json_section(job['notes'], MANAGED_JOB_ADMIN_FILES_MARKER)
+        updated_notes = _build_managed_job_notes(
+            job['notes'],
+            source_files,
+            admin_files + normalized_new_files,
+        )
+
+        with auth_billing.get_db(config.AUTH_DB_PATH) as conn:
+            conn.execute(
+                "UPDATE managed_jobs SET notes = ?, updated_at = ? WHERE id = ?",
+                (updated_notes, datetime.now(timezone.utc).isoformat(), job_id),
+            )
+
+        return jsonify({'success': True, 'uploaded': len(normalized_new_files)})
+
+    try:
+        file_refs = _extract_managed_job_json_section(job['notes'], MANAGED_JOB_ADMIN_FILES_MARKER)
+        urls = []
+        if file_refs and VISION_API_AVAILABLE:
+            global credentials
+            if 'credentials' in globals() and credentials:
+                storage_client = storage.Client(credentials=credentials)
+            else:
+                storage_client = storage.Client()
+            bucket = storage_client.bucket(config.GCS_UPLOADS_BUCKET)
+            for file_ref in file_refs:
+                fk = _managed_job_file_key(file_ref)
+                if not fk:
+                    continue
+                blob = bucket.blob(fk)
+                url = blob.generate_signed_url(version="v4", expiration=timedelta(hours=1), method="GET")
+                urls.append({'filename': _managed_job_file_name(file_ref, fk), 'url': url})
         return jsonify({'success': True, 'urls': urls})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
