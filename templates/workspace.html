@@ -1841,7 +1841,6 @@
                                                 <input type="number" id="s5wrapCycleManual" step="1" value="1" title="Absolute wrap cycle">
                                                 <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5AddWrapMarkerFromInput()">Set</button>
                                                 <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5ClearWrapMarkerNearMouse()">Clear marker</button>
-                                                <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5ClearAllWrapMarkers()">Clear all</button>
                                             </div>
                                             <div id="s5WrapStatus" class="scale-wrap-status">No wrap markers.</div>
                                         </div>
@@ -2448,26 +2447,6 @@
             updateScaleWrapStatus(ctx.curveKey);
             if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
             showStatus(`Cleared ${ctx.curveKey} ${formatWrapCycle(removed.cycle)} wrap marker.`, 'success');
-        }
-
-        function s5ClearAllWrapMarkers() {
-            const ctx = getSelectedWrapCurveContext();
-            if (!ctx || !ctx.curveKey) {
-                showStatus('Select a curve before clearing wrap markers.', 'info');
-                return;
-            }
-            const markers = getWrapMarkersForCurve(ctx.curveKey);
-            if (!markers.length) {
-                updateScaleWrapStatus(ctx.curveKey);
-                showStatus('No wrap markers for this curve.', 'info');
-                return;
-            }
-            setWrapMarkersForCurve(ctx.curveKey, []);
-            normalizeCurveValuesToWrapMarkers(ctx.curveKey);
-            rebuildCurveTraceFromDigitized(ctx.curveKey);
-            updateScaleWrapStatus(ctx.curveKey);
-            if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
-            showStatus(`Cleared all wrap markers for ${ctx.curveKey}.`, 'success');
         }
 
         function renderScaleWrapMarkersOnCanvas(ctx, scaleX, scaleY, tracks) {
