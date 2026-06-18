@@ -1959,6 +1959,7 @@
         let curveIndexToTraceKey = null; // { [curveIndex:number]: string } mapping from UI curve index to curve_traces key
         let editUndoStack = [];          // stack of { curveKey, idx, oldValue, oldTraceX } for Ctrl+Z
         let curveWrapMarkers = {};       // { [curveKey]: [{ depthIndex, cycle, edge, xImg, createdAt }] }
+        let curveWrapEraseBoxes = {};    // { [curveKey]: [{ x1, y1, x2, y2 }] } visual-only hidden wrap bridge boxes
         let lastDigitizeRequestConfig = null;
         let lastDigitizePreviewFilters = null;
         let lastDigitizeHeaderMetadata = null;
@@ -2296,7 +2297,64 @@
             return [];
         }
 
+        function getWrapEraseBoxesForCurve(curveId) {
+            const key = getCurveKeyForWrap(curveId);
+            if (!key || !curveWrapEraseBoxes || typeof curveWrapEraseBoxes !== 'object') return [];
+            const boxes = Array.isArray(curveWrapEraseBoxes[key]) ? curveWrapEraseBoxes[key] : [];
+            return boxes.filter(b => b &&
+                Number.isFinite(Number(b.x1)) && Number.isFinite(Number(b.y1)) &&
+                Number.isFinite(Number(b.x2)) && Number.isFinite(Number(b.y2))
+            ).map(b => ({
+                x1: Math.min(Number(b.x1), Number(b.x2)),
+                y1: Math.min(Number(b.y1), Number(b.y2)),
+                x2: Math.max(Number(b.x1), Number(b.x2)),
+                y2: Math.max(Number(b.y1), Number(b.y2)),
+            }));
+        }
+
+        function addWrapEraseBoxForCurve(curveId, box) {
+            const key = getCurveKeyForWrap(curveId);
+            if (!key || !box) return false;
+            if (!curveWrapEraseBoxes || typeof curveWrapEraseBoxes !== 'object') curveWrapEraseBoxes = {};
+            const clean = {
+                x1: Math.min(Number(box.x1), Number(box.x2)),
+                y1: Math.min(Number(box.y1), Number(box.y2)),
+                x2: Math.max(Number(box.x1), Number(box.x2)),
+                y2: Math.max(Number(box.y1), Number(box.y2)),
+            };
+            if (![clean.x1, clean.y1, clean.x2, clean.y2].every(Number.isFinite)) return false;
+            if (!Array.isArray(curveWrapEraseBoxes[key])) curveWrapEraseBoxes[key] = [];
+            curveWrapEraseBoxes[key].push(clean);
+            return true;
+        }
+
+        function getWrapEraseBoxesForRenderCurve(curveId, track) {
+            const candidates = [
+                curveId,
+                track && track.id,
+                track && track.name,
+                track && track.displayName,
+            ].filter(Boolean);
+            for (const candidate of candidates) {
+                const boxes = getWrapEraseBoxesForCurve(candidate);
+                if (boxes.length) return boxes;
+            }
+            return [];
+        }
+
+        function isSegmentHiddenByWrapEraser(curveId, prevPoint, currPoint, track) {
+            if (!Array.isArray(prevPoint) || !Array.isArray(currPoint)) return false;
+            const x0 = Number(prevPoint[0]);
+            const y0 = Number(prevPoint[1]);
+            const x1 = Number(currPoint[0]);
+            const y1 = Number(currPoint[1]);
+            if (![x0, y0, x1, y1].every(Number.isFinite)) return false;
+            const boxes = getWrapEraseBoxesForRenderCurve(curveId, track);
+            return boxes.some(box => segmentTouchesBox(x0, y0, x1, y1, box.x1, box.y1, box.x2, box.y2));
+        }
+
         function isScaleWrapDisplayJump(curveId, prevPoint, currPoint, track) {
+            if (isSegmentHiddenByWrapEraser(curveId, prevPoint, currPoint, track)) return true;
             if (isScaleWrapBoundaryForPoints(curveId, prevPoint, currPoint)) return true;
             if (!track || !Array.isArray(prevPoint) || !Array.isArray(currPoint)) return false;
             const markers = getWrapMarkersForRenderCurve(curveId, track);
@@ -2632,6 +2690,7 @@
             const width = right - left;
             if (!Number.isFinite(width) || width <= 0) return 0;
 
+            const boxAdded = addWrapEraseBoxForCurve(ctx.curveKey, { x1, y1, x2, y2 });
             const sorted = points
                 .filter(pt => Array.isArray(pt) && pt.length >= 2 && Number.isFinite(Number(pt[0])) && Number.isFinite(Number(pt[1])))
                 .slice()
@@ -2654,7 +2713,12 @@
             }
 
             if (!newMarkers.length) {
-                showStatus('Wrap Eraser did not find a long connector in that box.', 'info');
+                if (boxAdded) {
+                    if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
+                    showStatus('Wrap Eraser hid the selected foreground area.', 'success');
+                    return 1;
+                }
+                showStatus('Wrap Eraser box was too small to apply.', 'info');
                 return 0;
             }
 
@@ -2672,7 +2736,7 @@
             rebuildCurveTraceFromDigitized(ctx.curveKey);
             updateScaleWrapStatus(ctx.curveKey);
             if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
-            showStatus(`Wrap Eraser repaired ${newMarkers.length} bridge${newMarkers.length === 1 ? '' : 's'}.`, 'success');
+            showStatus(`Wrap Eraser hid the selected area and repaired ${newMarkers.length} bridge${newMarkers.length === 1 ? '' : 's'}.`, 'success');
             return newMarkers.length;
         }
 
@@ -8626,6 +8690,7 @@
             lastDigitizedDepth = null;
             lastDigitizedCurves = null;
             curveWrapMarkers = {};
+            curveWrapEraseBoxes = {};
             if (pinnedDepthIndices) pinnedDepthIndices.clear();
 
             clearPrimaryRegionOverlay();
@@ -12781,6 +12846,7 @@
                     lastDigitizedDepth = Array.isArray(data.digitized_depth) ? data.digitized_depth : null;
                     lastDigitizedCurves = data.digitized_curves || null;
                     curveWrapMarkers = {};
+                    curveWrapEraseBoxes = {};
                     lastLasContent = data.las_content || null;
                     lastLasFilename = data.filename || 'digitized_log.las';
                     lastDepthConfig = depthCfg;
@@ -14328,6 +14394,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         uploadedImagePath = imgPath;
         lastLasContent = logData.las_content || null;
         curveWrapMarkers = {};
+        curveWrapEraseBoxes = {};
         lastLasFilename = (logData.name || 'digitized_log').replace(/ /g, '_') + '.las';
         
         const imgEl = document.getElementById('imagePreview');
