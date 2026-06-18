@@ -2298,9 +2298,20 @@
         }
 
         function getWrapEraseBoxesForCurve(curveId) {
-            const key = getCurveKeyForWrap(curveId);
-            if (!key || !curveWrapEraseBoxes || typeof curveWrapEraseBoxes !== 'object') return [];
-            const boxes = Array.isArray(curveWrapEraseBoxes[key]) ? curveWrapEraseBoxes[key] : [];
+            if (!curveId || !curveWrapEraseBoxes || typeof curveWrapEraseBoxes !== 'object') return [];
+            const normalized = normalizeCurveKey(curveId);
+            const keys = [getCurveKeyForWrap(curveId), normalized].filter(Boolean);
+            Object.keys(curveWrapEraseBoxes).forEach(key => {
+                if (normalizeCurveKey(key) === normalized) keys.push(key);
+            });
+            const seen = new Set();
+            const boxes = [];
+            keys.forEach(key => {
+                if (!key || seen.has(key)) return;
+                seen.add(key);
+                const list = Array.isArray(curveWrapEraseBoxes[key]) ? curveWrapEraseBoxes[key] : [];
+                list.forEach(b => boxes.push(b));
+            });
             return boxes.filter(b => b &&
                 Number.isFinite(Number(b.x1)) && Number.isFinite(Number(b.y1)) &&
                 Number.isFinite(Number(b.x2)) && Number.isFinite(Number(b.y2))
@@ -2691,53 +2702,13 @@
             if (!Number.isFinite(width) || width <= 0) return 0;
 
             const boxAdded = addWrapEraseBoxForCurve(ctx.curveKey, { x1, y1, x2, y2 });
-            const sorted = points
-                .filter(pt => Array.isArray(pt) && pt.length >= 2 && Number.isFinite(Number(pt[0])) && Number.isFinite(Number(pt[1])))
-                .slice()
-                .sort((a, b) => Number(a[1]) - Number(b[1]));
-            const newMarkers = [];
-            for (let i = 1; i < sorted.length; i++) {
-                const prev = sorted[i - 1];
-                const curr = sorted[i];
-                const x0 = Number(prev[0]);
-                const y0 = Number(prev[1]);
-                const xCurr = Number(curr[0]);
-                const yCurr = Number(curr[1]);
-                const dx = Math.abs(xCurr - x0);
-                const dy = Math.abs(yCurr - y0);
-                if (dx < width * 0.18) continue;
-                if (dy > Math.max(42, width * 0.32)) continue;
-                if (!segmentTouchesBox(x0, y0, xCurr, yCurr, x1, y1, x2, y2)) continue;
-                const marker = applyWrapBridgeRepairForSegment(ctx, prev, curr);
-                if (marker) newMarkers.push(marker);
-            }
-
-            if (!newMarkers.length) {
-                if (boxAdded) {
-                    if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
-                    showStatus('Wrap Eraser hid the selected foreground area.', 'success');
-                    return 1;
-                }
+            if (!boxAdded) {
                 showStatus('Wrap Eraser box was too small to apply.', 'info');
                 return 0;
             }
-
-            const markers = getWrapMarkersForCurve(ctx.curveKey);
-            for (const marker of newMarkers) {
-                const existingIdx = markers.findIndex(m => Math.abs(m.depthIndex - marker.depthIndex) <= 1);
-                if (existingIdx >= 0) {
-                    markers[existingIdx] = marker;
-                } else {
-                    markers.push(marker);
-                }
-            }
-            setWrapMarkersForCurve(ctx.curveKey, markers);
-            normalizeCurveValuesToWrapMarkers(ctx.curveKey);
-            rebuildCurveTraceFromDigitized(ctx.curveKey);
-            updateScaleWrapStatus(ctx.curveKey);
             if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
-            showStatus(`Wrap Eraser hid the selected area and repaired ${newMarkers.length} bridge${newMarkers.length === 1 ? '' : 's'}.`, 'success');
-            return newMarkers.length;
+            showStatus('Wrap Eraser hid the selected foreground area.', 'success');
+            return 1;
         }
 
         function s5ClearWrapMarkerNearMouse() {
