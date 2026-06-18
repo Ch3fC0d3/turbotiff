@@ -2286,10 +2286,25 @@
             return getWrapMarkersForCurve(curveId).some(m => m.depthIndex > lo && m.depthIndex <= hi);
         }
 
+        function getWrapMarkersForRenderCurve(curveId, track) {
+            const candidates = [
+                curveId,
+                track && track.id,
+                track && track.name,
+                track && track.displayName,
+            ].filter(Boolean);
+            for (const candidate of candidates) {
+                const markers = getWrapMarkersForCurve(candidate);
+                if (markers.length) return markers;
+            }
+            return [];
+        }
+
         function isScaleWrapDisplayJump(curveId, prevPoint, currPoint, track) {
             if (isScaleWrapBoundaryForPoints(curveId, prevPoint, currPoint)) return true;
             if (!track || !Array.isArray(prevPoint) || !Array.isArray(currPoint)) return false;
-            if (!getWrapMarkersForCurve(curveId).length) return false;
+            const markers = getWrapMarkersForRenderCurve(curveId, track);
+            if (!markers.length) return false;
 
             const left = Math.min(Number(track.leftX), Number(track.rightX));
             const right = Math.max(Number(track.leftX), Number(track.rightX));
@@ -2310,10 +2325,13 @@
             const nearLeft1 = x1 <= left + edgeMargin;
             const nearRight1 = x1 >= right - edgeMargin;
             const oppositeEdges = (nearLeft0 && nearRight1) || (nearRight0 && nearLeft1);
+            const longFlatBridge = dx >= width * 0.36 && dy <= Math.max(24, width * 0.18);
+
+            if (longFlatBridge) return true;
 
             return oppositeEdges &&
-                dx >= width * 0.58 &&
-                dy <= Math.max(18, width * 0.12);
+                dx >= width * 0.45 &&
+                dy <= Math.max(24, width * 0.18);
         }
 
         function getSelectedWrapCurveContext() {
