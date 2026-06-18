@@ -1834,14 +1834,9 @@
                                             </div>
                                         </div>
                                         <div class="field" style="grid-column:1/-1;">
-                                            <label>Scale Wrap Assist</label>
+                                            <label>Wrap Repair</label>
                                             <div class="scale-wrap-controls">
-                                                <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5AddWrapMarkerDelta(1)">+ cycle</button>
-                                                <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5AddWrapMarkerDelta(-1)">- cycle</button>
-                                                <input type="number" id="s5wrapCycleManual" step="1" value="1" title="Absolute wrap cycle">
-                                                <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5RepairWrapBridge()">Repair bridge</button>
-                                                <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5AddWrapMarkerFromInput()">Set</button>
-                                                <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5ClearWrapMarkerNearMouse()">Clear marker</button>
+                                                <span class="hint-text">Use the Wrap Eraser tool in the toolbar, then box the fake connector.</span>
                                             </div>
                                             <div id="s5WrapStatus" class="scale-wrap-status">No wrap markers.</div>
                                         </div>
@@ -2571,6 +2566,116 @@
             showStatus(`Repaired wrap bridge for ${ctx.curveKey} at ${formatWrapNumber(depth)} with cycle ${formatWrapCycle(nextCycle)}.`, 'success');
         }
 
+        function segmentTouchesBox(ax, ay, bx, by, x1, y1, x2, y2) {
+            const minX = Math.min(ax, bx);
+            const maxX = Math.max(ax, bx);
+            const minY = Math.min(ay, by);
+            const maxY = Math.max(ay, by);
+            if (maxX < x1 || minX > x2 || maxY < y1 || minY > y2) return false;
+            if ((ax >= x1 && ax <= x2 && ay >= y1 && ay <= y2) ||
+                (bx >= x1 && bx <= x2 && by >= y1 && by <= y2)) {
+                return true;
+            }
+            const cx = (ax + bx) * 0.5;
+            const cy = (ay + by) * 0.5;
+            if (cx >= x1 && cx <= x2 && cy >= y1 && cy <= y2) return true;
+            const clampedX = Math.max(x1, Math.min(x2, cx));
+            const clampedY = Math.max(y1, Math.min(y2, cy));
+            return distancePointToSegment(clampedX, clampedY, ax, ay, bx, by) <= Math.max(10, Math.min(x2 - x1, y2 - y1) * 0.35);
+        }
+
+        function applyWrapBridgeRepairForSegment(ctx, prev, curr, cycleOverride = null) {
+            if (!ctx || !ctx.track || !ctx.curveKey || !Array.isArray(prev) || !Array.isArray(curr)) return null;
+            const prevIdx = Number.isInteger(prev[2]) ? prev[2] : getDepthIndexAtImageY(Number(prev[1]));
+            const currIdx = Number.isInteger(curr[2]) ? curr[2] : getDepthIndexAtImageY(Number(curr[1]));
+            const markerIdx = Math.max(0, Math.min(lastDigitizedDepth.length - 1,
+                Number.isInteger(currIdx) && currIdx >= 0 ? currIdx : Math.max(0, prevIdx + 1)
+            ));
+            const prevCycle = getWrapCycleForDepth(ctx.curveKey, Math.max(0, markerIdx - 1));
+            const nextCycle = Number.isFinite(cycleOverride)
+                ? Math.round(Number(cycleOverride))
+                : (Number(curr[0]) < Number(prev[0]) ? prevCycle + 1 : prevCycle - 1);
+            const edge = Number(curr[0]) < Number(prev[0]) ? 'left' : 'right';
+            return {
+                curveKey: ctx.curveKey,
+                depthIndex: markerIdx,
+                cycle: nextCycle,
+                edge,
+                xImg: edge === 'left' ? Number(ctx.track.leftX) : Number(ctx.track.rightX),
+                createdAt: Date.now(),
+            };
+        }
+
+        function handleWrapEraserBox(x1, y1, x2, y2) {
+            const ctx = getSelectedWrapCurveContext();
+            if (!ctx || !ctx.track || !ctx.curveKey) {
+                showStatus('Select a curve before using Wrap Eraser.', 'info');
+                return 0;
+            }
+            if (!Array.isArray(lastDigitizedDepth) || !lastDigitizedDepth.length || !lastDigitizedCurves) {
+                showStatus('Run Digitize before using Wrap Eraser.', 'info');
+                return 0;
+            }
+            const activeTrace = getActiveCurveTracePoints(ctx.curveKey);
+            let points = activeTrace.points;
+            if (!Array.isArray(points) || points.length < 2) {
+                const rebuilt = buildDisplayTracePointsFromDigitized(ctx.curveKey, { persist: false });
+                points = rebuilt && Array.isArray(rebuilt.points) ? rebuilt.points : null;
+            }
+            if (!Array.isArray(points) || points.length < 2) {
+                showStatus('No visible trace points found for Wrap Eraser.', 'info');
+                return 0;
+            }
+
+            const left = Math.min(Number(ctx.track.leftX), Number(ctx.track.rightX));
+            const right = Math.max(Number(ctx.track.leftX), Number(ctx.track.rightX));
+            const width = right - left;
+            if (!Number.isFinite(width) || width <= 0) return 0;
+
+            const sorted = points
+                .filter(pt => Array.isArray(pt) && pt.length >= 2 && Number.isFinite(Number(pt[0])) && Number.isFinite(Number(pt[1])))
+                .slice()
+                .sort((a, b) => Number(a[1]) - Number(b[1]));
+            const newMarkers = [];
+            for (let i = 1; i < sorted.length; i++) {
+                const prev = sorted[i - 1];
+                const curr = sorted[i];
+                const x0 = Number(prev[0]);
+                const y0 = Number(prev[1]);
+                const xCurr = Number(curr[0]);
+                const yCurr = Number(curr[1]);
+                const dx = Math.abs(xCurr - x0);
+                const dy = Math.abs(yCurr - y0);
+                if (dx < width * 0.18) continue;
+                if (dy > Math.max(42, width * 0.32)) continue;
+                if (!segmentTouchesBox(x0, y0, xCurr, yCurr, x1, y1, x2, y2)) continue;
+                const marker = applyWrapBridgeRepairForSegment(ctx, prev, curr);
+                if (marker) newMarkers.push(marker);
+            }
+
+            if (!newMarkers.length) {
+                showStatus('Wrap Eraser did not find a long connector in that box.', 'info');
+                return 0;
+            }
+
+            const markers = getWrapMarkersForCurve(ctx.curveKey);
+            for (const marker of newMarkers) {
+                const existingIdx = markers.findIndex(m => Math.abs(m.depthIndex - marker.depthIndex) <= 1);
+                if (existingIdx >= 0) {
+                    markers[existingIdx] = marker;
+                } else {
+                    markers.push(marker);
+                }
+            }
+            setWrapMarkersForCurve(ctx.curveKey, markers);
+            normalizeCurveValuesToWrapMarkers(ctx.curveKey);
+            rebuildCurveTraceFromDigitized(ctx.curveKey);
+            updateScaleWrapStatus(ctx.curveKey);
+            if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
+            showStatus(`Wrap Eraser repaired ${newMarkers.length} bridge${newMarkers.length === 1 ? '' : 's'}.`, 'success');
+            return newMarkers.length;
+        }
+
         function s5ClearWrapMarkerNearMouse() {
             const ctx = getSelectedWrapCurveContext();
             if (!ctx || !ctx.curveKey) {
@@ -2615,6 +2720,7 @@
         }
 
         function renderScaleWrapMarkersOnCanvas(ctx, scaleX, scaleY, tracks) {
+            return;
             if (!ctx || !curveWrapMarkers || typeof curveWrapMarkers !== 'object') return;
             const keys = Object.keys(curveWrapMarkers);
             if (!keys.length) return;
@@ -2754,7 +2860,7 @@
         }
 
         // Toolbar State
-        let activeTool = 'pointer'; // 'pointer', 'draw', 'addPoint', 'eraser'
+        let activeTool = 'pointer'; // 'pointer', 'draw', 'addPoint', 'eraser', 'wrapEraser'
         let crosshairEnabled = false;
         let eraserStart = null;
         let eraserBox = null;
@@ -2762,6 +2868,20 @@
         let drawStrokeActive = false;
         let drawStrokePoints = [];   // raw [xImg, yImg] samples collected this stroke
         let drawCursorRing = null;   // live visual ring element
+
+        function ensureWrapEraserToolbarButton() {
+            if (document.getElementById('toolWrapEraser')) return;
+            const eraserBtn = document.getElementById('toolEraser');
+            if (!eraserBtn || !eraserBtn.parentNode) return;
+            const btn = document.createElement('button');
+            btn.className = 'tool-btn';
+            btn.id = 'toolWrapEraser';
+            btn.type = 'button';
+            btn.title = 'Wrap Eraser - box the fake cross-track connector';
+            btn.textContent = 'W';
+            btn.onclick = () => setTool('wrapEraser');
+            eraserBtn.parentNode.insertBefore(btn, eraserBtn.nextSibling);
+        }
 
         function setEditModeUI() {
             const container = document.getElementById('workspace');
@@ -2773,6 +2893,7 @@
                 if (container) container.classList.add('edit-mode');
                 document.body.classList.add('edit-mode-active');
                 if (toolbar) toolbar.classList.remove('hidden');
+                ensureWrapEraserToolbarButton();
                 setTool('pointer'); // Reset to pointer on entry
                 if (btn) btn.textContent = 'Disable edit mode';
                 if (status) status.textContent = `Editing ${editCurveId}`;
@@ -2805,8 +2926,9 @@
                 draw:    'toolDraw',
                 addPoint: 'toolAddPoint',
                 eraser: 'toolEraser',
+                wrapEraser: 'toolWrapEraser',
             })[tool] || null;
-            ['toolPointer', 'toolDraw', 'toolAddPoint', 'toolEraser'].forEach(id => {
+            ['toolPointer', 'toolDraw', 'toolAddPoint', 'toolEraser', 'toolWrapEraser'].forEach(id => {
                 const btn = document.getElementById(id);
                 if (btn) {
                     if (id === activeButtonId) {
@@ -2821,7 +2943,7 @@
             const overlay = document.getElementById('overlay');
             if (overlay) {
                 overlay.classList.remove('draw-mode-cursor');
-                if (tool === 'eraser' || tool === 'addPoint') overlay.style.cursor = 'crosshair';
+                if (tool === 'eraser' || tool === 'wrapEraser' || tool === 'addPoint') overlay.style.cursor = 'crosshair';
                 else if (tool === 'draw') {
                     overlay.style.cursor = '';
                     overlay.classList.add('draw-mode-cursor');
@@ -7766,8 +7888,8 @@
                     event.preventDefault();
                     return;
                 }
-                // ERASER TOOL
-                if (activeTool === 'eraser' && event.button === 0) {
+                // ERASER / WRAP ERASER TOOL
+                if ((activeTool === 'eraser' || activeTool === 'wrapEraser') && event.button === 0) {
                     eraserStart = { x: xImg, y: yImg, clientX: event.clientX, clientY: event.clientY };
                     eraserBox = document.createElement('div');
                     eraserBox.className = 'eraser-box';
@@ -8049,6 +8171,13 @@
                     const x2 = Math.max(eraserStart.x, xImg);
                     const y1 = Math.min(eraserStart.y, yImg);
                     const y2 = Math.max(eraserStart.y, yImg);
+
+                    if (activeTool === 'wrapEraser') {
+                        handleWrapEraserBox(x1, y1, x2, y2);
+                        eraserStart = null;
+                        eraserBox = null;
+                        return;
+                    }
                     
                     // Delete points in box
                     const activeTrace = getActiveCurveTracePoints(editCurveId);
