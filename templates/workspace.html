@@ -1201,6 +1201,22 @@
             pointer-events: none;
             z-index: 30;
         }
+        .scale-wrap-controls {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 4px;
+        }
+        .scale-wrap-controls input {
+            width: 58px;
+            min-width: 58px;
+        }
+        .scale-wrap-status {
+            color: #cbd5e1;
+            font-size: 0.76rem;
+            line-height: 1.25;
+            margin-top: 3px;
+        }
         /* Toolbar Styles */
         .tool-btn {
             background: #ffffff;
@@ -1817,6 +1833,17 @@
                                                 <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5ApplyYShift()">Apply</button>
                                             </div>
                                         </div>
+                                        <div class="field" style="grid-column:1/-1;">
+                                            <label>Scale Wrap Assist</label>
+                                            <div class="scale-wrap-controls">
+                                                <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5AddWrapMarkerDelta(1)">+ cycle</button>
+                                                <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5AddWrapMarkerDelta(-1)">- cycle</button>
+                                                <input type="number" id="s5wrapCycleManual" step="1" value="1" title="Absolute wrap cycle">
+                                                <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5AddWrapMarkerFromInput()">Set</button>
+                                                <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5ClearWrapMarkerNearMouse()">Clear near</button>
+                                            </div>
+                                            <div id="s5WrapStatus" class="scale-wrap-status">No wrap markers.</div>
+                                        </div>
                                         <div class="field">
                                             <label>LAS mnemonic / unit</label>
                                             <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;">
@@ -1935,6 +1962,7 @@
         let lastCurveTraces = null;      // last curve_traces overlay returned from backend
         let curveIndexToTraceKey = null; // { [curveIndex:number]: string } mapping from UI curve index to curve_traces key
         let editUndoStack = [];          // stack of { curveKey, idx, oldValue, oldTraceX } for Ctrl+Z
+        let curveWrapMarkers = {};       // { [curveKey]: [{ depthIndex, cycle, edge, xImg, createdAt }] }
         let lastDigitizeRequestConfig = null;
         let lastDigitizePreviewFilters = null;
         let lastDigitizeHeaderMetadata = null;
@@ -2076,6 +2104,411 @@
                 }
             }
             return null;
+        }
+
+        function getTrackScaleRange(track) {
+            if (!track) return null;
+            const minVal = Number(track.scaleMin);
+            const maxVal = Number(track.scaleMax);
+            const range = maxVal - minVal;
+            if (!Number.isFinite(minVal) || !Number.isFinite(maxVal) || Math.abs(range) < 1e-9) {
+                return null;
+            }
+            return range;
+        }
+
+        function formatWrapNumber(value) {
+            const n = Number(value);
+            if (!Number.isFinite(n)) return '';
+            if (Math.abs(n) >= 100 || Math.abs(n - Math.round(n)) < 1e-6) {
+                return String(Math.round(n));
+            }
+            return n.toFixed(2).replace(/\.?0+$/, '');
+        }
+
+        function formatWrapCycle(cycle) {
+            const n = Number(cycle) || 0;
+            return n > 0 ? `+${n}` : String(n);
+        }
+
+        function inferWrapCycleFromTrackValue(value, track) {
+            const v = Number(value);
+            const range = getTrackScaleRange(track);
+            if (!Number.isFinite(v) || !Number.isFinite(range)) return 0;
+            const minVal = Number(track.scaleMin);
+            const offset = v - minVal;
+            const eps = Math.max(1e-9, Math.abs(range) * 1e-9);
+            const adjusted = offset >= 0 ? offset - eps : offset + eps;
+            const cycle = Math.floor(adjusted / range);
+            return Number.isFinite(cycle) ? cycle : 0;
+        }
+
+        function getVisibleTrackValue(value, track) {
+            const v = Number(value);
+            const range = getTrackScaleRange(track);
+            if (!Number.isFinite(v) || !Number.isFinite(range)) return value;
+            const cycle = inferWrapCycleFromTrackValue(v, track);
+            return v - cycle * range;
+        }
+
+        function getWrapCycleRangeLabel(track, cycle) {
+            const range = getTrackScaleRange(track);
+            if (!Number.isFinite(range)) return '';
+            const baseMin = Number(track.scaleMin);
+            const baseMax = Number(track.scaleMax);
+            const offset = Number(cycle || 0) * range;
+            return `${formatWrapNumber(baseMin + offset)}-${formatWrapNumber(baseMax + offset)}`;
+        }
+
+        function getCurveKeyForWrap(curveId = null) {
+            const candidates = [curveId, editCurveDataKey, editCurveId]
+                .map(v => normalizeCurveKey(v))
+                .filter(Boolean);
+            for (const candidate of candidates) {
+                const found = findDigitizedCurveEntry(candidate);
+                if (found && found.key) return found.key;
+            }
+            for (const candidate of candidates) {
+                const traceKey = (typeof resolveTraceKeyForCurveId === 'function') ? resolveTraceKeyForCurveId(candidate) : null;
+                if (traceKey) {
+                    const found = findDigitizedCurveEntry(traceKey);
+                    return found && found.key ? found.key : traceKey;
+                }
+            }
+            return candidates.length ? candidates[0] : '';
+        }
+
+        function getWrapMarkersForCurve(curveId) {
+            const key = getCurveKeyForWrap(curveId);
+            if (!key || !curveWrapMarkers || typeof curveWrapMarkers !== 'object') return [];
+            const markers = Array.isArray(curveWrapMarkers[key]) ? curveWrapMarkers[key] : [];
+            return markers
+                .filter(m => m && Number.isFinite(Number(m.depthIndex)) && Number.isFinite(Number(m.cycle)))
+                .map(m => ({
+                    curveKey: key,
+                    depthIndex: Math.max(0, Math.round(Number(m.depthIndex))),
+                    cycle: Math.round(Number(m.cycle)),
+                    edge: m.edge === 'left' ? 'left' : 'right',
+                    xImg: Number(m.xImg),
+                    createdAt: Number(m.createdAt) || Date.now(),
+                }))
+                .sort((a, b) => a.depthIndex - b.depthIndex || a.createdAt - b.createdAt);
+        }
+
+        function setWrapMarkersForCurve(curveId, markers) {
+            const key = getCurveKeyForWrap(curveId);
+            if (!key) return;
+            if (!curveWrapMarkers || typeof curveWrapMarkers !== 'object') curveWrapMarkers = {};
+            const clean = Array.isArray(markers)
+                ? markers
+                    .filter(m => m && Number.isFinite(Number(m.depthIndex)) && Number.isFinite(Number(m.cycle)))
+                    .map(m => ({
+                        curveKey: key,
+                        depthIndex: Math.max(0, Math.round(Number(m.depthIndex))),
+                        cycle: Math.round(Number(m.cycle)),
+                        edge: m.edge === 'left' ? 'left' : 'right',
+                        xImg: Number.isFinite(Number(m.xImg)) ? Number(m.xImg) : null,
+                        createdAt: Number(m.createdAt) || Date.now(),
+                    }))
+                    .sort((a, b) => a.depthIndex - b.depthIndex || a.createdAt - b.createdAt)
+                : [];
+            if (clean.length) {
+                curveWrapMarkers[key] = clean;
+            } else {
+                delete curveWrapMarkers[key];
+            }
+        }
+
+        function getWrapCycleForDepth(curveId, depthIndex) {
+            const dIdx = Math.round(Number(depthIndex));
+            if (!Number.isInteger(dIdx) || dIdx < 0) return 0;
+            let cycle = 0;
+            const markers = getWrapMarkersForCurve(curveId);
+            for (const marker of markers) {
+                if (marker.depthIndex <= dIdx) {
+                    cycle = marker.cycle;
+                } else {
+                    break;
+                }
+            }
+            return cycle;
+        }
+
+        function getWrapCycleForPixelEdit(track, options = {}) {
+            const dIdx = Math.round(Number(options && options.depthIndex));
+            if (!Number.isInteger(dIdx) || dIdx < 0) return 0;
+            const curveKey = getCurveKeyForWrap(options.curveKey || (track && track.id) || editCurveDataKey || editCurveId);
+            const explicitCycle = getWrapCycleForDepth(curveKey, dIdx);
+            if (explicitCycle) return explicitCycle;
+
+            const values = Array.isArray(options.values)
+                ? options.values
+                : (findDigitizedCurveEntry(curveKey)?.entry?.values || null);
+            if (Array.isArray(values) && dIdx < values.length) {
+                return inferWrapCycleFromTrackValue(values[dIdx], track);
+            }
+            return 0;
+        }
+
+        function normalizeCurveValuesToWrapMarkers(curveId) {
+            const curveKey = getCurveKeyForWrap(curveId);
+            if (!curveKey) return false;
+            const found = findDigitizedCurveEntry(curveKey);
+            const track = findTrackByCurveId(curveKey) || findTrackByCurveId(curveId);
+            const range = getTrackScaleRange(track);
+            if (!found || !found.entry || !Array.isArray(found.entry.values) || !Number.isFinite(range)) {
+                return false;
+            }
+
+            const values = found.entry.values;
+            for (let i = 0; i < values.length; i++) {
+                const v = values[i];
+                if (isMissingDigitizedValue(v)) continue;
+                const visibleValue = getVisibleTrackValue(v, track);
+                const cycle = getWrapCycleForDepth(curveKey, i);
+                values[i] = visibleValue + cycle * range;
+            }
+            return true;
+        }
+
+        function syncWrapMarkersToDigitizedCurves() {
+            if (!curveWrapMarkers || typeof curveWrapMarkers !== 'object') return;
+            Object.keys(curveWrapMarkers).forEach(key => normalizeCurveValuesToWrapMarkers(key));
+        }
+
+        function isScaleWrapBoundaryForPoints(curveId, prevPoint, currPoint) {
+            if (!Array.isArray(prevPoint) || !Array.isArray(currPoint)) return false;
+            const d0 = Number.isInteger(prevPoint[2]) ? prevPoint[2] : null;
+            const d1 = Number.isInteger(currPoint[2]) ? currPoint[2] : null;
+            if (d0 == null || d1 == null) return false;
+            const lo = Math.min(d0, d1);
+            const hi = Math.max(d0, d1);
+            return getWrapMarkersForCurve(curveId).some(m => m.depthIndex > lo && m.depthIndex <= hi);
+        }
+
+        function getSelectedWrapCurveContext() {
+            let i = step5ActiveCurveIndex;
+            if (i < 0) {
+                syncStep5Advanced();
+                i = step5ActiveCurveIndex;
+            }
+            if (i < 0) return null;
+            const tracks = getTrackCalibrationsSnapshot();
+            const track = Array.isArray(tracks) ? tracks.find(t => t && t.index === i) : null;
+            const mnemonicEl = document.getElementById(`lasMnemonic${i}`);
+            const nameEl = document.getElementById(`name${i}`);
+            const selectedId = normalizeCurveKey(
+                (mnemonicEl && mnemonicEl.value) ||
+                (track && track.id) ||
+                (nameEl && nameEl.value)
+            );
+            const curveKey = getCurveKeyForWrap(selectedId || (track && track.id));
+            return { index: i, track, curveId: selectedId || curveKey, curveKey };
+        }
+
+        function updateScaleWrapStatus(curveId = null) {
+            const statusEl = document.getElementById('s5WrapStatus');
+            if (!statusEl) return;
+            const ctx = curveId
+                ? { curveKey: getCurveKeyForWrap(curveId), track: findTrackByCurveId(curveId) }
+                : getSelectedWrapCurveContext();
+            if (!ctx || !ctx.curveKey) {
+                statusEl.textContent = 'Select a curve first.';
+                return;
+            }
+            const track = ctx.track || findTrackByCurveId(ctx.curveKey);
+            const markers = getWrapMarkersForCurve(ctx.curveKey);
+            if (!markers.length) {
+                statusEl.textContent = 'No wrap markers.';
+                return;
+            }
+            const parts = markers.slice(0, 4).map(marker => {
+                const depth = Array.isArray(lastDigitizedDepth) ? lastDigitizedDepth[marker.depthIndex] : null;
+                const depthText = Number.isFinite(depth) ? `@ ${formatWrapNumber(depth)}` : `row ${marker.depthIndex}`;
+                const rangeText = track ? ` ${getWrapCycleRangeLabel(track, marker.cycle)}` : '';
+                return `${formatWrapCycle(marker.cycle)} ${depthText}${rangeText}`;
+            });
+            const extra = markers.length > 4 ? ` +${markers.length - 4} more` : '';
+            statusEl.textContent = parts.join(' | ') + extra;
+        }
+
+        function getWrapDepthIndexFromMouse() {
+            if (!Number.isFinite(lastMouseImgY)) return -1;
+            return getDepthIndexAtImageY(lastMouseImgY);
+        }
+
+        function s5AddWrapMarkerAbsolute(cycle) {
+            const ctx = getSelectedWrapCurveContext();
+            if (!ctx || !ctx.track || !ctx.curveKey) {
+                showStatus('Select a digitized curve before adding a wrap marker.', 'info');
+                return;
+            }
+            if (!Array.isArray(lastDigitizedDepth) || !lastDigitizedDepth.length || !lastDigitizedCurves) {
+                showStatus('Run Digitize before adding wrap markers.', 'info');
+                return;
+            }
+            const dIdx = getWrapDepthIndexFromMouse();
+            if (!Number.isInteger(dIdx) || dIdx < 0) {
+                showStatus('Move the mouse over the wrap depth on the log, then add the marker.', 'info');
+                return;
+            }
+
+            const nextCycle = Math.round(Number(cycle));
+            if (!Number.isFinite(nextCycle)) {
+                showStatus('Enter a whole-number wrap cycle.', 'info');
+                return;
+            }
+
+            const left = Number(ctx.track.leftX);
+            const right = Number(ctx.track.rightX);
+            const prevCycle = getWrapCycleForDepth(ctx.curveKey, Math.max(0, dIdx - 1));
+            let edge = nextCycle >= prevCycle ? 'right' : 'left';
+            if (Number.isFinite(lastMouseImgX) && Number.isFinite(left) && Number.isFinite(right)) {
+                edge = Math.abs(lastMouseImgX - left) <= Math.abs(lastMouseImgX - right) ? 'left' : 'right';
+            }
+            const xImg = edge === 'left' ? left : right;
+
+            const markers = getWrapMarkersForCurve(ctx.curveKey)
+                .filter(marker => Math.abs(marker.depthIndex - dIdx) > 1);
+            markers.push({
+                curveKey: ctx.curveKey,
+                depthIndex: dIdx,
+                cycle: nextCycle,
+                edge,
+                xImg,
+                createdAt: Date.now(),
+            });
+            setWrapMarkersForCurve(ctx.curveKey, markers);
+            normalizeCurveValuesToWrapMarkers(ctx.curveKey);
+            rebuildCurveTraceFromDigitized(ctx.curveKey);
+            updateScaleWrapStatus(ctx.curveKey);
+            if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
+
+            const depth = lastDigitizedDepth[dIdx];
+            const rangeText = getWrapCycleRangeLabel(ctx.track, nextCycle);
+            showStatus(`Added ${ctx.curveKey} ${formatWrapCycle(nextCycle)} wrap marker at ${formatWrapNumber(depth)} (${rangeText}).`, 'success');
+        }
+
+        function s5AddWrapMarkerDelta(delta) {
+            const ctx = getSelectedWrapCurveContext();
+            const dIdx = getWrapDepthIndexFromMouse();
+            if (!ctx || !ctx.curveKey || !Number.isInteger(dIdx) || dIdx < 0) {
+                s5AddWrapMarkerAbsolute(Number(delta) || 0);
+                return;
+            }
+            const prevCycle = getWrapCycleForDepth(ctx.curveKey, Math.max(0, dIdx - 1));
+            s5AddWrapMarkerAbsolute(prevCycle + Math.round(Number(delta) || 0));
+        }
+
+        function s5AddWrapMarkerFromInput() {
+            const input = document.getElementById('s5wrapCycleManual');
+            const cycle = input ? Number(input.value) : NaN;
+            s5AddWrapMarkerAbsolute(cycle);
+        }
+
+        function s5ClearWrapMarkerNearMouse() {
+            const ctx = getSelectedWrapCurveContext();
+            if (!ctx || !ctx.curveKey) {
+                showStatus('Select a curve before clearing a wrap marker.', 'info');
+                return;
+            }
+            const dIdx = getWrapDepthIndexFromMouse();
+            if (!Number.isInteger(dIdx) || dIdx < 0) {
+                showStatus('Move the mouse near the wrap marker to clear it.', 'info');
+                return;
+            }
+            const markers = getWrapMarkersForCurve(ctx.curveKey);
+            if (!markers.length) {
+                updateScaleWrapStatus(ctx.curveKey);
+                showStatus('No wrap markers for this curve.', 'info');
+                return;
+            }
+            let best = null;
+            let bestDist = Infinity;
+            for (const marker of markers) {
+                const dist = Math.abs(marker.depthIndex - dIdx);
+                if (dist < bestDist) {
+                    best = marker;
+                    bestDist = dist;
+                }
+            }
+            if (!best || bestDist > 5) {
+                showStatus('No wrap marker close enough to clear.', 'info');
+                return;
+            }
+            setWrapMarkersForCurve(ctx.curveKey, markers.filter(marker => marker !== best));
+            normalizeCurveValuesToWrapMarkers(ctx.curveKey);
+            rebuildCurveTraceFromDigitized(ctx.curveKey);
+            updateScaleWrapStatus(ctx.curveKey);
+            if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
+            showStatus(`Cleared ${ctx.curveKey} wrap marker near row ${best.depthIndex}.`, 'success');
+        }
+
+        function renderScaleWrapMarkersOnCanvas(ctx, scaleX, scaleY, tracks) {
+            if (!ctx || !curveWrapMarkers || typeof curveWrapMarkers !== 'object') return;
+            const keys = Object.keys(curveWrapMarkers);
+            if (!keys.length) return;
+            ctx.save();
+            ctx.font = '700 11px system-ui, -apple-system, Segoe UI, sans-serif';
+            ctx.textBaseline = 'middle';
+            for (const key of keys) {
+                const markers = getWrapMarkersForCurve(key);
+                if (!markers.length) continue;
+                const track = findTrackByCurveId(key) ||
+                    (Array.isArray(tracks) ? tracks.find(t => t && normalizeCurveKey(t.id) === normalizeCurveKey(key)) : null);
+                if (!track) continue;
+                for (const marker of markers) {
+                    const yImg = getPixelYForDepthIndex(marker.depthIndex);
+                    if (!Number.isFinite(yImg)) continue;
+                    const xImg = marker.edge === 'left' ? Number(track.leftX) : Number(track.rightX);
+                    if (!Number.isFinite(xImg)) continue;
+                    const x = xImg * scaleX;
+                    const y = yImg * scaleY;
+                    const cycleText = formatWrapCycle(marker.cycle);
+                    const rangeText = getWrapCycleRangeLabel(track, marker.cycle);
+                    const label = `${key} ${cycleText} ${rangeText}`;
+                    const labelOnRight = marker.edge === 'left';
+                    const labelX = labelOnRight ? x + 7 : x - 7;
+                    const textW = ctx.measureText(label).width;
+                    const boxX = labelOnRight ? labelX : labelX - textW - 8;
+                    const boxY = y - 11;
+
+                    ctx.strokeStyle = '#f97316';
+                    ctx.fillStyle = '#f97316';
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.moveTo(x, y - 12);
+                    ctx.lineTo(x, y + 12);
+                    ctx.stroke();
+                    ctx.beginPath();
+                    if (marker.edge === 'left') {
+                        ctx.moveTo(x, y);
+                        ctx.lineTo(x + 7, y - 5);
+                        ctx.lineTo(x + 7, y + 5);
+                    } else {
+                        ctx.moveTo(x, y);
+                        ctx.lineTo(x - 7, y - 5);
+                        ctx.lineTo(x - 7, y + 5);
+                    }
+                    ctx.closePath();
+                    ctx.fill();
+
+                    ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
+                    ctx.strokeStyle = 'rgba(249, 115, 22, 0.95)';
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    if (typeof ctx.roundRect === 'function') {
+                        ctx.roundRect(boxX, boxY, textW + 8, 22, 5);
+                    } else {
+                        ctx.rect(boxX, boxY, textW + 8, 22);
+                    }
+                    ctx.fill();
+                    ctx.stroke();
+                    ctx.fillStyle = '#fed7aa';
+                    ctx.fillText(label, boxX + 4, y);
+                }
+            }
+            ctx.restore();
         }
 
         function getTrackUnderImageX(xImg) {
@@ -3439,6 +3872,7 @@
                 const dst = document.getElementById(`s5${f}`);
                 if (src && dst) dst.checked = src.checked;
             });
+            updateScaleWrapStatus(mnemonic);
         }
 
         function s5SyncToCurve(fieldId) {
@@ -3772,7 +4206,7 @@
             return topPx + frac * (bottomPx - topPx);
         }
 
-        function pixelToTrackValue(xImg, track) {
+        function pixelToTrackValue(xImg, track, options = {}) {
             if (!track) return null;
             const leftX = track.leftX;
             const rightX = track.rightX;
@@ -3785,10 +4219,13 @@
                 return null;
             }
             const frac = (xImg - leftX) / denom;
-            return scaleMin + frac * (scaleMax - scaleMin);
+            const visibleValue = scaleMin + frac * (scaleMax - scaleMin);
+            const cycle = getWrapCycleForPixelEdit(track, options);
+            const range = getTrackScaleRange(track);
+            return Number.isFinite(range) ? (visibleValue + cycle * range) : visibleValue;
         }
 
-        function trackValueToPixelX(value, track) {
+        function trackValueToPixelX(value, track, options = {}) {
             if (!track) return null;
             const leftX = track.leftX;
             const rightX = track.rightX;
@@ -3800,7 +4237,8 @@
                 Math.abs(denom) < 1e-3) {
                 return null;
             }
-            const frac = (value - scaleMin) / denom;
+            const valueForDisplay = options && options.rawValue === true ? value : getVisibleTrackValue(value, track);
+            const frac = (valueForDisplay - scaleMin) / denom;
             return leftX + frac * (rightX - leftX);
         }
 
@@ -7885,6 +8323,7 @@
             trackOverlayDrag = null;
             lastDigitizedDepth = null;
             lastDigitizedCurves = null;
+            curveWrapMarkers = {};
             if (pinnedDepthIndices) pinnedDepthIndices.clear();
 
             clearPrimaryRegionOverlay();
@@ -11455,7 +11894,8 @@
                             const xDom = (currPoint[0] * scaleX);
                             const yDom = (currPoint[1] * scaleY);
                             const jumpX = Math.abs(Number(currPoint[0]) - Number(prevPoint[0]));
-                            if (splitWrappedJumps && Number.isFinite(jumpX) && jumpX > wrapJumpThreshold) {
+                            if (isScaleWrapBoundaryForPoints(name, prevPoint, currPoint) ||
+                                (splitWrappedJumps && Number.isFinite(jumpX) && jumpX > wrapJumpThreshold)) {
                                 ctx.moveTo(xDom, yDom);
                             } else {
                                 ctx.lineTo(xDom, yDom);
@@ -11761,6 +12201,7 @@
                     }
                 }
             }
+            renderScaleWrapMarkersOnCanvas(ctx, scaleX, scaleY, tracks);
         }
 
         function clearDepthOverlays() {
@@ -12038,6 +12479,7 @@
                     // Store digitized data for cursor readout and later download
                     lastDigitizedDepth = Array.isArray(data.digitized_depth) ? data.digitized_depth : null;
                     lastDigitizedCurves = data.digitized_curves || null;
+                    curveWrapMarkers = {};
                     lastLasContent = data.las_content || null;
                     lastLasFilename = data.filename || 'digitized_log.las';
                     lastDepthConfig = depthCfg;
@@ -12248,6 +12690,7 @@
             try {
                 // Prepare merged curves object using current manual edits
                 // (Note: lastDigitizedCurves should already be updated by applyRefinedSegment/updateCurveData)
+                syncWrapMarkersToDigitizedCurves();
                 
                 const payload = {
                     depths: lastDigitizedDepth,
@@ -13138,6 +13581,9 @@
             if (!Array.isArray(depths) || !curves || typeof curves !== 'object' || depths.length === 0) {
                 return null;
             }
+            if (curves === lastDigitizedCurves) {
+                syncWrapMarkersToDigitizedCurves();
+            }
 
             const eol = '\r\n';
             const nullVal = (typeof nullSentinel === 'number') ? nullSentinel : -999.25;
@@ -13580,6 +14026,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         uploadedImage = dataUrl;
         uploadedImagePath = imgPath;
         lastLasContent = logData.las_content || null;
+        curveWrapMarkers = {};
         lastLasFilename = (logData.name || 'digitized_log').replace(/ /g, '_') + '.las';
         
         const imgEl = document.getElementById('imagePreview');
