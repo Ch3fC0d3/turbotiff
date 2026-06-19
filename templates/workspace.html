@@ -2594,6 +2594,7 @@
             const left = Math.min(Number(track.leftX), Number(track.rightX));
             const right = Math.max(Number(track.leftX), Number(track.rightX));
             if (!Number.isFinite(left) || !Number.isFinite(right)) return [];
+            if (Math.abs(bestSegment.bx - bestSegment.ax) < Math.max(12, (right - left) * 0.20)) return [];
 
             const prevGoesLeft = bestSegment.ax <= bestSegment.bx;
             return [
@@ -2607,6 +2608,8 @@
             const bestSegment = findWrapConnectorForBox(points, box, ctx.track);
 
             if (!bestSegment) return [];
+            const trackWidth = Math.abs(Number(ctx.track.rightX) - Number(ctx.track.leftX));
+            if (Number.isFinite(trackWidth) && Math.abs(bestSegment.bx - bestSegment.ax) < Math.max(12, trackWidth * 0.20)) return [];
             const marker = applyWrapBridgeRepairForSegment(ctx, bestSegment.prev, bestSegment.curr, null);
             return marker && Number.isInteger(marker.depthIndex) ? [marker] : [];
         }
@@ -2978,12 +2981,17 @@
                 : [];
             const repairPoints = collectWrapEdgeRepairPoints(points, { x1, y1, x2, y2 }, ctx.track);
             const wrapMarkers = collectWrapMarkersForEraserBox(ctx, points, { x1, y1, x2, y2 });
-            if (repairPoints.length !== 2 || wrapMarkers.length !== 1) {
-                showStatus('Wrap Eraser could not find one clear connector in that box.', 'info');
+            const boxAdded = addWrapEraseBoxForCurve(ctx.curveKey, { x1, y1, x2, y2 });
+            if (!boxAdded) {
+                showStatus('Wrap Eraser box was too small.', 'info');
                 return 0;
             }
-            const markerCount = applyWrapMarkersForEraserBox(ctx, wrapMarkers);
-            const edgePointCount = applyWrapEdgeRepairPoints(ctx, traceKey, points, repairPoints);
+            const markerCount = wrapMarkers.length === 1
+                ? applyWrapMarkersForEraserBox(ctx, wrapMarkers)
+                : 0;
+            const edgePointCount = repairPoints.length === 2
+                ? applyWrapEdgeRepairPoints(ctx, traceKey, points, repairPoints)
+                : 0;
             editUndoStack.push({
                 type: 'wrap_eraser',
                 curveKey: curveKeyForUndo,
@@ -2995,7 +3003,7 @@
                 undoValues,
             });
             if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
-            showStatus(`Wrap Eraser removed the connector and snapped ${edgePointCount} ends to the track edges${markerCount ? ' with one wrap offset' : ''}. Ctrl+Z to undo.`, 'success');
+            showStatus(`Wrap Eraser removed the connector${edgePointCount ? ` and snapped ${edgePointCount} ends to the edges` : ''}${markerCount ? ' with one wrap offset' : ''}. Ctrl+Z to undo.`, 'success');
             return 1;
         }
 
