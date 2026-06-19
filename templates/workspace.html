@@ -7020,7 +7020,7 @@
                 const neighbors = [];
                 let centerDepthIdx = -1;
                 const smoothMode = document.getElementById('smoothEditToggle')?.checked;
-                const windowRadius = smoothMode ? 8 : 2;
+                const windowRadius = smoothMode ? 8 : 4;
                 if (!smoothMode && Array.isArray(pts[nearestIdx])) {
                     const centerDepth = pixelToDepthFromConfig(pts[nearestIdx][1], depthCfg);
                     const centerDIdx = Number.isFinite(centerDepth) ? findNearestDepthIndex(centerDepth, lastDigitizedDepth) : -1;
@@ -7187,12 +7187,17 @@
 
             const stamp = Date.now();
             let changed = false;
+            const centerY = Number(centerPt[1]);
+            const shoulderGapPx = 18;
             [-1, 1].forEach((offset) => {
-                const dIdx = centerDepthIdx + offset;
+                const targetY = Number.isFinite(centerY) ? (centerY + offset * shoulderGapPx) : null;
+                const targetDepth = Number.isFinite(targetY) ? pixelToDepthFromConfig(targetY, depthCfg) : null;
+                let dIdx = Number.isFinite(targetDepth) ? findNearestDepthIndex(targetDepth, lastDigitizedDepth) : -1;
+                if (dIdx === centerDepthIdx) dIdx = centerDepthIdx + offset;
                 if (dIdx < 0 || dIdx >= entry.values.length) return;
                 if (isDepthIndexPinned(editCurveId, dIdx)) return;
 
-                const y = getPixelYForDepthIndex(dIdx, depthCfg);
+                const y = Number.isFinite(targetY) ? targetY : getPixelYForDepthIndex(dIdx, depthCfg);
                 if (!Number.isFinite(y)) return;
 
                 let existingIdx = findBestPointIndexForDepth(pts, dIdx, y, centerX);
@@ -7262,7 +7267,7 @@
                 ? _computeLocalDepthSpacing(lastDigitizedDepth, neighbors.map(n => n.depthIndex))
                 : 1.0;
             // sigma in depth units (ft). Wider when smoothMode is on.
-            const sigmaDepth = smoothMode ? Math.max(5.0, localSpacing * 6.0) : Math.max(0.5, localSpacing * 0.85);
+            const sigmaDepth = smoothMode ? Math.max(5.0, localSpacing * 6.0) : Math.max(1.0, localSpacing * 1.35);
             // Normal pointer edits should bend nearby samples, not pull them flat.
             const yWeight = smoothMode ? 0.8 : 0.65;
 
@@ -7317,7 +7322,7 @@
                 let weight = 1.0;
                 if (n.pointIndex !== centerIndex) {
                     weight = Math.exp(-(depthDelta * depthDelta) / (2 * sigmaDepth * sigmaDepth));
-                    if (!smoothMode) weight = Math.min(weight, 0.42);
+                    if (!smoothMode) weight = Math.min(weight, 0.34);
                     if (weight < 0.01) return;
                 }
 
