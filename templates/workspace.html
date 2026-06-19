@@ -7049,11 +7049,13 @@
 
                     neighbors.push({
                         pointIndex: idx,
+                        offsetFromCenter: Math.abs(idx - nearestIdx),
                         depthIndex: dIdx,
                         originalDepthIndex: dIdx,
                         currentDepthIndex: dIdx,
                         originalX: ptX,
                         originalY: ptY,
+                        pointKind: String(pts[idx][3] || ''),
                         originalValue: entry.values[dIdx],
                     });
                 }
@@ -7267,9 +7269,8 @@
                 ? _computeLocalDepthSpacing(lastDigitizedDepth, neighbors.map(n => n.depthIndex))
                 : 1.0;
             // sigma in depth units (ft). Wider when smoothMode is on.
-            const sigmaDepth = smoothMode ? Math.max(5.0, localSpacing * 6.0) : Math.max(1.0, localSpacing * 1.35);
-            // Normal pointer edits should bend nearby samples, not pull them flat.
-            const yWeight = smoothMode ? 0.8 : 0.65;
+            const sigmaDepth = Math.max(5.0, localSpacing * 6.0);
+            const yWeight = smoothMode ? 0.8 : 0.72;
 
             const depthCfg = lastDepthConfig || getDepthConfigFromInputs();
 
@@ -7321,8 +7322,22 @@
                 // For the exact center point, always use weight=1.0 so it follows the mouse exactly
                 let weight = 1.0;
                 if (n.pointIndex !== centerIndex) {
-                    weight = Math.exp(-(depthDelta * depthDelta) / (2 * sigmaDepth * sigmaDepth));
-                    if (!smoothMode) weight = Math.min(weight, 0.34);
+                    if (smoothMode) {
+                        weight = Math.exp(-(depthDelta * depthDelta) / (2 * sigmaDepth * sigmaDepth));
+                    } else {
+                        const offset = Math.max(1, Number.isFinite(n.offsetFromCenter) ? n.offsetFromCenter : Math.abs(n.pointIndex - centerIndex));
+                        if (n.pointKind === 'manual_shoulder') {
+                            weight = 0.62;
+                        } else if (offset === 1) {
+                            weight = 0.46;
+                        } else if (offset === 2) {
+                            weight = 0.22;
+                        } else if (offset === 3) {
+                            weight = 0.10;
+                        } else {
+                            weight = 0.04;
+                        }
+                    }
                     if (weight < 0.01) return;
                 }
 

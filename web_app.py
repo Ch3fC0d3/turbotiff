@@ -193,7 +193,7 @@ except Exception:
     CURVE_TRACE_UPSCALE = 2.0
 CURVE_TRACE_UPSCALE = max(1.0, min(4.0, CURVE_TRACE_UPSCALE))
 
-APP_VERSION = os.environ.get("APP_VERSION", "wide-pointer-shoulders-20260618")
+APP_VERSION = os.environ.get("APP_VERSION", "index-rubberband-pointer-20260618")
 APP_BUILD_TIME = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
 
 app = Flask(__name__)
