@@ -2922,21 +2922,12 @@
         }
 
         function segmentTouchesBox(ax, ay, bx, by, x1, y1, x2, y2) {
-            const minX = Math.min(ax, bx);
-            const maxX = Math.max(ax, bx);
-            const minY = Math.min(ay, by);
-            const maxY = Math.max(ay, by);
-            if (maxX < x1 || minX > x2 || maxY < y1 || minY > y2) return false;
-            if ((ax >= x1 && ax <= x2 && ay >= y1 && ay <= y2) ||
-                (bx >= x1 && bx <= x2 && by >= y1 && by <= y2)) {
-                return true;
-            }
-            const cx = (ax + bx) * 0.5;
-            const cy = (ay + by) * 0.5;
-            if (cx >= x1 && cx <= x2 && cy >= y1 && cy <= y2) return true;
-            const clampedX = Math.max(x1, Math.min(x2, cx));
-            const clampedY = Math.max(y1, Math.min(y2, cy));
-            return distancePointToSegment(clampedX, clampedY, ax, ay, bx, by) <= Math.max(10, Math.min(x2 - x1, y2 - y1) * 0.35);
+            return segmentBoxOverlapInterval(ax, ay, bx, by, {
+                x1: Math.min(x1, x2),
+                y1: Math.min(y1, y2),
+                x2: Math.max(x1, x2),
+                y2: Math.max(y1, y2),
+            }) !== null;
         }
 
         function applyWrapBridgeRepairForSegment(ctx, prev, curr, cycleOverride = null) {
@@ -6425,7 +6416,6 @@
             });
 
             entry.values[depthIdx] = null;
-            fillDeletedDepthSpan(entry.values, depthIdx, depthIdx, lastNullValue);
 
             // Remove the point from the trace array
             pts.splice(nearestIndex, 1);
@@ -8892,28 +8882,6 @@
                         });
                         
                         if (deletedItems.length > 0) {
-                            const deletedDepths = deletedItems
-                                .map(item => item && Number.isInteger(item.idx) ? item.idx : -1)
-                                .filter(idx => idx >= 0)
-                                .sort((a, b) => a - b);
-
-                            if (deletedDepths.length) {
-                                let spanStart = deletedDepths[0];
-                                let spanEnd = deletedDepths[0];
-                                for (let i = 1; i <= deletedDepths.length; i++) {
-                                    const nextIdx = i < deletedDepths.length ? deletedDepths[i] : null;
-                                    if (nextIdx != null && nextIdx <= spanEnd + 1) {
-                                        spanEnd = nextIdx;
-                                        continue;
-                                    }
-                                    fillDeletedDepthSpan(entry.values, spanStart, spanEnd, lastNullValue);
-                                    if (nextIdx != null) {
-                                        spanStart = nextIdx;
-                                        spanEnd = nextIdx;
-                                    }
-                                }
-                            }
-
                             // Apply changes to trace array
                             lastCurveTraces[traceKey] = newPts;
                             
@@ -8929,6 +8897,23 @@
                             rebuildCurveTraceFromDigitized(editCurveId);
                             renderCurveTraceOverlays(lastCurveTraces);
                             showStatus(`Erased ${deletedItems.length} points.`, 'info');
+                        } else {
+                            const undoWrapEraseBoxes = cloneWrapEraseBoxesState();
+                            const boxAdded = addWrapEraseBoxForCurve(editCurveId, { x1, y1, x2, y2 });
+                            if (boxAdded) {
+                                editUndoStack.push({
+                                    type: 'wrap_eraser',
+                                    curveKey,
+                                    curveId: editCurveId,
+                                    traceKey,
+                                    undoWrapEraseBoxes,
+                                    undoWrapMarkers: cloneWrapMarkersState(),
+                                    undoTracePoints: cloneTracePoints(pts),
+                                    undoValues: entry.values.map((value, idx) => ({ idx, oldValue: value })),
+                                });
+                                renderCurveTraceOverlays(lastCurveTraces);
+                                showStatus('Erased the crossing line. Ctrl+Z to undo.', 'info');
+                            }
                         }
                     }
                 }
@@ -12823,8 +12808,12 @@
                         const firstX = (renderPoints[0][0] * scaleX);
                         const firstY = (renderPoints[0][1] * scaleY);
                         ctx.moveTo(firstX, firstY);
-                        const splitWrappedJumps = false;
-                        const wrapJumpThreshold = Infinity;
+                        const trackWidth = trackMeta
+                            ? Math.abs(Number(trackMeta.rightX) - Number(trackMeta.leftX))
+                            : NaN;
+                        const wrapJumpThreshold = Number.isFinite(trackWidth) && trackWidth > 0
+                            ? Math.max(24, trackWidth * 0.68)
+                            : Infinity;
 
                         for (let i = 1; i < renderPoints.length; i++) {
                             const prevPoint = renderPoints[i - 1];
@@ -12832,8 +12821,13 @@
                             const xDom = (currPoint[0] * scaleX);
                             const yDom = (currPoint[1] * scaleY);
                             const jumpX = Math.abs(Number(currPoint[0]) - Number(prevPoint[0]));
+                            const depthGap = Number.isInteger(prevPoint[2]) && Number.isInteger(currPoint[2])
+                                ? Math.abs(currPoint[2] - prevPoint[2])
+                                : 0;
+                            const isWrapTail = (prevPoint[3] === 'wrap_edge') !== (currPoint[3] === 'wrap_edge');
                             if (isSegmentHiddenByWrapEraser(name, prevPoint, currPoint, trackMeta) ||
-                                (splitWrappedJumps && Number.isFinite(jumpX) && jumpX > wrapJumpThreshold)) {
+                                depthGap > 3 ||
+                                (!isWrapTail && Number.isFinite(jumpX) && jumpX > wrapJumpThreshold)) {
                                 ctx.moveTo(xDom, yDom);
                             } else {
                                 ctx.lineTo(xDom, yDom);
@@ -13092,7 +13086,7 @@
             }
 
             // Render ML predicted curves (make them responsive to settings too)
-            if (window.mlPredictedCurves && Array.isArray(window.mlPredictedCurves)) {
+            if (!editMode && window.mlPredictedCurves && Array.isArray(window.mlPredictedCurves)) {
                 ctx.setLineDash([]);
                 
                 // Use global settings for ML curves since they don't have individual config entries
