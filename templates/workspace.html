@@ -2421,7 +2421,27 @@
             const y1 = Number(currPoint[1]);
             if (![x0, y0, x1, y1].every(Number.isFinite)) return false;
             const boxes = getEffectiveWrapEraseBoxesForRenderCurve(curveId, track);
-            return boxes.some(box => segmentTouchesBox(x0, y0, x1, y1, box.x1, box.y1, box.x2, box.y2));
+            const touchesBox = boxes.some(box => segmentTouchesBox(x0, y0, x1, y1, box.x1, box.y1, box.x2, box.y2));
+            if (!touchesBox) return false;
+
+            const prevIsEdge = prevPoint[3] === 'wrap_edge';
+            const currIsEdge = currPoint[3] === 'wrap_edge';
+            if (prevIsEdge !== currIsEdge) return false;
+            if (prevIsEdge && currIsEdge) return true;
+
+            if (track) {
+                const left = Math.min(Number(track.leftX), Number(track.rightX));
+                const right = Math.max(Number(track.leftX), Number(track.rightX));
+                const width = right - left;
+                if (Number.isFinite(width) && width > 0) {
+                    const edgeTolerance = Math.max(3, width * 0.025);
+                    const onEdge = x => Math.abs(x - left) <= edgeTolerance || Math.abs(x - right) <= edgeTolerance;
+                    if ((onEdge(x0) || onEdge(x1)) && Math.abs(x1 - x0) < width * 0.55) {
+                        return false;
+                    }
+                }
+            }
+            return true;
         }
 
         function segmentBoxOverlapInterval(ax, ay, bx, by, box) {
