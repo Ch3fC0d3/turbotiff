@@ -7031,12 +7031,19 @@
                     nearestIdx = pts.indexOf(centerPtRef);
                     if (nearestIdx < 0) nearestIdx = 0;
                 }
-                for (let offset = -windowRadius; offset <= windowRadius; offset++) {
-                    const idx = nearestIdx + offset;
+                const centerPtY = pts[nearestIdx][1];
+                const influencePx = smoothMode ? 60 : 30; // Visible rubberband size in pixels
+                const maxSearch = 200; // Prevent unbounded loops
+
+                for (let i = -maxSearch; i <= maxSearch; i++) {
+                    const idx = nearestIdx + i;
                     if (idx < 0 || idx >= pts.length) continue;
 
                     const ptX = pts[idx][0];
                     const ptY = pts[idx][1];
+                    const distPx = Math.abs(ptY - centerPtY);
+                    
+                    if (distPx > influencePx) continue; // Skip points outside physical influence
                     const depth = pixelToDepthFromConfig(ptY, depthCfg);
                     if (!Number.isFinite(depth)) continue;
 
@@ -7052,6 +7059,8 @@
                     neighbors.push({
                         pointIndex: idx,
                         offsetFromCenter: Math.abs(idx - nearestIdx),
+                        distPx: distPx,
+                        influencePx: influencePx,
                         depthIndex: dIdx,
                         originalDepthIndex: dIdx,
                         currentDepthIndex: dIdx,
@@ -7315,46 +7324,31 @@
             neighbors.forEach(n => {
                 if (isDepthIndexPinned(state.curveId, n.depthIndex) && n.pointIndex !== centerIndex) return;
 
-                const depth = (Array.isArray(lastDigitizedDepth) && n.depthIndex >= 0 && n.depthIndex < lastDigitizedDepth.length)
-                    ? lastDigitizedDepth[n.depthIndex]
-                    : null;
-                const depthDelta = (centerDepth != null && depth != null) ? Math.abs(depth - centerDepth) : Math.abs(n.pointIndex - centerIndex) * localSpacing;
-                
-                // Gaussian weight: exp(-depthDelta²/(2sigma²))
-                // For the exact center point, always use weight=1.0 so it follows the mouse exactly
+                // Physical pixel falloff: guarantees a visible rubberband regardless of data density
                 let weight = 1.0;
                 if (n.pointIndex !== centerIndex) {
+                    const normDist = Math.min(1.0, (n.distPx || 0) / (n.influencePx || 30));
                     if (smoothMode) {
-                        weight = Math.exp(-(depthDelta * depthDelta) / (2 * sigmaDepth * sigmaDepth));
+                        // Gaussian-like falloff matching the edge at normDist=1
+                        weight = Math.exp(- (normDist * normDist) * 4.0);
                     } else {
-                        const offset = Math.max(1, Number.isFinite(n.offsetFromCenter) ? n.offsetFromCenter : Math.abs(n.pointIndex - centerIndex));
-                        if (offset === 1) {
-                            weight = 0.46;
-                        } else if (offset === 2) {
-                            weight = 0.22;
-                        } else if (offset === 3) {
-                            weight = 0.10;
-                        } else {
-                            weight = 0.04;
-                        }
+                        // "Tent" rubberband with a slight curve
+                        weight = Math.pow(1.0 - normDist, 1.5);
                     }
-                    if (weight < 0.01) return;
                 }
 
-                let newX;
-                if (n.pointIndex === centerIndex) {
+                let newX, newY;
+                if (weight < 0.001) {
+                    // Safe restore: process normally to restore depth index, but don't move
+                    newX = n.originalX;
+                    newY = n.originalY;
+                } else if (n.pointIndex === centerIndex) {
                     // Center point follows mouse exactly
                     newX = xImg;
-                } else {
-                    // Neighbors get weighted X motion
-                    newX = n.originalX + deltaX * weight;
-                }
-                let newY;
-                if (n.pointIndex === centerIndex) {
-                    // Center point follows mouse exactly
                     newY = yImg;
                 } else {
-                    // Neighbors get weighted Y motion
+                    // Neighbors get weighted motion
+                    newX = n.originalX + deltaX * weight;
                     newY = n.originalY + deltaY * weight * yWeight;
                 }
 
