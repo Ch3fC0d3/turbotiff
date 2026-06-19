@@ -6264,8 +6264,7 @@
             const idx = findNearestDepthIndex(depth, lastDigitizedDepth);
             if (idx < 0) return;
 
-            const yImgUse = getPixelYForDepthIndex(idx, depthCfg) ?? yImg;
-            const yTrace = Number.isFinite(yImg) ? yImg : yImgUse;
+            const yTrace = Number.isFinite(yImg) ? yImg : (getPixelYForDepthIndex(idx, depthCfg) ?? yImg);
 
             if (isDepthIndexPinned(editCurveId, idx)) {
                 showStatus('Point is pinned; unpin before adding/editing at this depth.', 'info');
@@ -6279,17 +6278,12 @@
             const newValue = pixelToTrackValue(editX, targetTrack, { depthIndex: idx, values: entry.values });
             if (!Number.isFinite(newValue)) return;
 
-            const oldValue = entry.values[idx];
-
             if (!lastCurveTraces) {
                 lastCurveTraces = {};
             }
 
-            // Robustly find existing points using shared helper (handles case-sensitivity/keys)
             const activeTrace = getActiveCurveTracePoints(editCurveId);
             let pts = activeTrace.points;
-            
-            // Determine where to save.
             let targetKey = activeTrace.traceKey || getActiveCurveTraceKey(editCurveId) || editCurveId;
 
             if (Array.isArray(pts) && pts.length) {
@@ -6300,6 +6294,7 @@
                 pts = [];
             }
 
+            // Snapshot for undo
             const undoTracePoints = pts.map(pt => Array.isArray(pt) ? pt.slice() : pt);
             const undoValues = entry.values.map((value, valueIdx) => ({ idx: valueIdx, oldValue: value }));
             editUndoStack.push({
@@ -6311,31 +6306,20 @@
                 undoValues,
             });
 
-            const manualPointStamp = Date.now();
-            const crestRadius = 0;
-            const touchedDepths = [];
+            // Update the digitized value at this depth
+            entry.values[idx] = newValue;
 
-            for (let dIdx = Math.max(0, idx - crestRadius); dIdx <= Math.min(entry.values.length - 1, idx + crestRadius); dIdx++) {
-                if (isDepthIndexPinned(editCurveId, dIdx)) continue;
-                const pointY = (dIdx === idx) ? yTrace : (getPixelYForDepthIndex(dIdx, depthCfg) ?? yTrace);
-                const pointValue = pixelToTrackValue(editX, targetTrack, { depthIndex: dIdx, values: entry.values });
-                if (!Number.isFinite(pointValue)) continue;
-                entry.values[dIdx] = pointValue;
-                touchedDepths.push(dIdx);
+            // Only match by exact depth index — never grab a nearby point at a
+            // different depth, which would silently overwrite it ("disappearing" points).
+            let existingIdx = findBestPointIndexForDepth(pts, idx, yTrace, editX);
 
-                // Only match by exact depth index — never grab a nearby point at a
-                // different depth, which would silently overwrite it ("disappearing" points).
-                let existingIdx = findBestPointIndexForDepth(pts, dIdx, pointY, editX);
-
-                if (existingIdx >= 0) {
-                    pts[existingIdx][0] = editX;
-                    pts[existingIdx][1] = pointY;
-                    pts[existingIdx][2] = dIdx;
-                    pts[existingIdx][3] = 'manual';
-                    pts[existingIdx][4] = manualPointStamp;
-                } else {
-                    pts.push([editX, pointY, dIdx, 'manual', manualPointStamp]);
-                }
+            if (existingIdx >= 0) {
+                pts[existingIdx][0] = editX;
+                pts[existingIdx][1] = yTrace;
+                pts[existingIdx][2] = idx;
+                pts[existingIdx][3] = 'manual';
+            } else {
+                pts.push([editX, yTrace, idx, 'manual']);
             }
 
             pts.sort((a, b) => {
@@ -6346,7 +6330,7 @@
             lastCurveTraces[targetKey] = pts;
 
             renderCurveTraceOverlays(lastCurveTraces);
-            showStatus(`Added crest point (${touchedDepths.length} samples).`, 'info');
+            showStatus('Added point.', 'info');
         }
 
         function handleCurveEditDelete(xImg, yImg) {
@@ -7308,13 +7292,11 @@
 
         function _doDragUpdate() {
             if (!editMode || !editDragState) {
-                // console.log('_doDragUpdate: early return - editMode:', editMode, 'editDragState:', !!editDragState);
                 return;
             }
             const state = editDragState;
             const xImg = state.currentX;
             const yImg = state.currentY;
-            // console.log('_doDragUpdate: xImg=', xImg, 'yImg=', yImg);
             if (xImg == null || yImg == null) return;
             const curveKey = state.curveKey || state.curveId;
             if (!curveKey || !lastDigitizedCurves || !lastDigitizedCurves[curveKey]) return;
@@ -7438,10 +7420,6 @@
                 return smoothMode ? Math.exp(- (normDist * normDist) * 4.0) : Math.pow(1.0 - normDist, 1.5);
             };
 
-            const getEffectiveYWeight = (n) => {
-                return getWeight(n);
-            };
-
             let maxDownY = Infinity;
             let maxUpY = -Infinity;
 
@@ -7451,8 +7429,8 @@
                     for (let i = 0; i < neighbors.length - 1; i++) {
                         const nA = neighbors[i];
                         const nB = neighbors[i + 1];
-                        const wA = getEffectiveYWeight(nA);
-                        const wB = getEffectiveYWeight(nB);
+                        const wA = getWeight(nA);
+                        const wB = getWeight(nB);
                         const yA = nA.originalY;
                         const yB = nB.originalY;
                         const gap = yB - yA;
@@ -7477,7 +7455,7 @@
                 if (fixedAboveIdx >= 0) {
                     const yFixed = pts[fixedAboveIdx][1];
                     const gap = firstN.originalY - yFixed;
-                    const wA = getEffectiveYWeight(firstN);
+                    const wA = getWeight(firstN);
                     if (wA > 0.0001) {
                         const limit = -(gap / wA) * 0.95;
                         maxUpY = Math.max(maxUpY, limit);
@@ -7489,7 +7467,7 @@
                 if (fixedBelowIdx < pts.length) {
                     const yFixed = pts[fixedBelowIdx][1];
                     const gap = yFixed - lastN.originalY;
-                    const wB = getEffectiveYWeight(lastN);
+                    const wB = getWeight(lastN);
                     if (wB > 0.0001) {
                         const limit = (gap / wB) * 0.95;
                         maxDownY = Math.min(maxDownY, limit);
@@ -7513,7 +7491,7 @@
                 } else {
                     // Neighbors get weighted horizontal and clamped vertical motion
                     newX = n.originalX + deltaX * weight;
-                    newY = n.originalY + safeDeltaY * getEffectiveYWeight(n);
+                    newY = n.originalY + safeDeltaY * getWeight(n);
                 }
 
                 if (imgW > 1) newX = Math.max(0, Math.min(imgW - 1, newX));
