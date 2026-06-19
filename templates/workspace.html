@@ -7017,10 +7017,12 @@
                 // Cache the target track
                 // Build neighbor set with wider window for smooth Gaussian falloff
                 // Wider window (±8) prevents kinks at the boundary of the edit region
+                // Keep the drag local: only the immediate neighbors (±1) should
+                // follow the dragged point. Smooth mode can reach a bit farther.
                 const neighbors = [];
                 let centerDepthIdx = -1;
                 const smoothMode = document.getElementById('smoothEditToggle')?.checked;
-                const windowRadius = smoothMode ? 8 : 4;
+                const windowRadius = smoothMode ? 3 : 1;
                 if (!smoothMode && Array.isArray(pts[nearestIdx])) {
                     const centerDepth = pixelToDepthFromConfig(pts[nearestIdx][1], depthCfg);
                     const centerDIdx = Number.isFinite(centerDepth) ? findNearestDepthIndex(centerDepth, lastDigitizedDepth) : -1;
@@ -7258,9 +7260,9 @@
             const deltaX = xImg - centerN.originalX;
             const deltaY = yImg - centerN.originalY;
 
-            // Check smoothing toggle
+            // Check smoothing toggle and decide the hard cutoff for this drag
             const smoothMode = document.getElementById('smoothEditToggle')?.checked;
-            
+
             // Depth-aware Gaussian falloff: cover roughly ±5–10 ft instead of fixed point count
             const centerDepth = Number.isFinite(centerN.depthIndex) && Array.isArray(lastDigitizedDepth)
                 ? lastDigitizedDepth[centerN.depthIndex]
@@ -7268,6 +7270,12 @@
             const localSpacing = Array.isArray(lastDigitizedDepth)
                 ? _computeLocalDepthSpacing(lastDigitizedDepth, neighbors.map(n => n.depthIndex))
                 : 1.0;
+            // Even in smooth mode, points farther than this many depth units
+            // from the center should stay completely still.  This creates the
+            // visible "space" between the dragged point and the sides.
+            const cutoffDepth = smoothMode
+                ? Math.max(3.0, localSpacing * 2.5)
+                : Math.max(1.0, localSpacing * 0.75);
             // sigma in depth units (ft). Wider when smoothMode is on.
             const sigmaDepth = Math.max(5.0, localSpacing * 6.0);
             const yWeight = smoothMode ? 0.8 : 0.72;
@@ -7312,12 +7320,19 @@
             // Pass 2: Calculate new positions and write to new depth indices
             neighbors.forEach(n => {
                 if (isDepthIndexPinned(state.curveId, n.depthIndex) && n.pointIndex !== centerIndex) return;
+                if (n.pointIndex === centerIndex) {
+                    // Center always follows the mouse exactly (handled below)
+                } else {
+                    const depth = (Array.isArray(lastDigitizedDepth) && n.depthIndex >= 0 && n.depthIndex < lastDigitizedDepth.length)
+                        ? lastDigitizedDepth[n.depthIndex]
+                        : null;
+                    const depthDelta = (centerDepth != null && depth != null)
+                        ? Math.abs(depth - centerDepth)
+                        : Math.abs(n.pointIndex - centerIndex) * localSpacing;
+                    // Hard cutoff: too far away -> do not move at all
+                    if (depthDelta > cutoffDepth) return;
+                }
 
-                const depth = (Array.isArray(lastDigitizedDepth) && n.depthIndex >= 0 && n.depthIndex < lastDigitizedDepth.length)
-                    ? lastDigitizedDepth[n.depthIndex]
-                    : null;
-                const depthDelta = (centerDepth != null && depth != null) ? Math.abs(depth - centerDepth) : Math.abs(n.pointIndex - centerIndex) * localSpacing;
-                
                 // Gaussian weight: exp(-depthDelta²/(2sigma²))
                 // For the exact center point, always use weight=1.0 so it follows the mouse exactly
                 let weight = 1.0;
@@ -7327,15 +7342,20 @@
                     } else {
                         const offset = Math.max(1, Number.isFinite(n.offsetFromCenter) ? n.offsetFromCenter : Math.abs(n.pointIndex - centerIndex));
                         if (n.pointKind === 'manual_shoulder') {
-                            weight = 0.62;
+                            // Shoulder points are only there to stabilize the
+                            // line; they should not travel with the dragged point.
+                            weight = 0.12;
                         } else if (offset === 1) {
-                            weight = 0.46;
+                            weight = 0.35;
                         } else if (offset === 2) {
-                            weight = 0.22;
-                        } else if (offset === 3) {
                             weight = 0.10;
+                        } else if (offset === 3) {
+                            weight = 0.03;
                         } else {
-                            weight = 0.04;
+                            // The hard cutoff above already prevents these
+                            // points from being reached, but keep a tiny value
+                            // for safety.
+                            weight = 0.0;
                         }
                     }
                     if (weight < 0.01) return;
