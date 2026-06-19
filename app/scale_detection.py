@@ -236,7 +236,7 @@ def unwrap_log_trace(
     prev_x = None
     for i, x in enumerate(xs):
         if not np.isfinite(x):
-            prev_x = None
+            wraps[i] = current
             continue
         if prev_x is not None:
             dx = x - prev_x

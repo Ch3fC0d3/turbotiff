@@ -12845,8 +12845,13 @@
                             const currPoint = renderPoints[i];
                             const xDom = (currPoint[0] * scaleX);
                             const yDom = (currPoint[1] * scaleY);
+                            const dx = Math.abs(currPoint[0] - prevPoint[0]);
+                            const tWidth = trackMeta ? Math.abs((trackMeta.right || 0) - (trackMeta.left || 0)) : 0;
+                            const isHeuristicWrap = tWidth > 0 && dx > tWidth * 0.5;
+
                             if (isSegmentHiddenByWrapEraser(name, prevPoint, currPoint, trackMeta) ||
-                                isScaleWrapBoundaryForPoints(name, prevPoint, currPoint)) {
+                                isScaleWrapBoundaryForPoints(name, prevPoint, currPoint) ||
+                                isHeuristicWrap) {
                                 ctx.moveTo(xDom, yDom);
                             } else {
                                 ctx.lineTo(xDom, yDom);
@@ -13126,7 +13131,12 @@
                         if (i === 0) {
                             ctx.moveTo(xDom, yDom);
                         } else {
-                            ctx.lineTo(xDom, yDom);
+                            const dx = Math.abs(mlCurve.points[i].x - mlCurve.points[i-1].x);
+                            if (dx > 100) {
+                                ctx.moveTo(xDom, yDom);
+                            } else {
+                                ctx.lineTo(xDom, yDom);
+                            }
                         }
                     }
                     ctx.strokeStyle = mlColor;
