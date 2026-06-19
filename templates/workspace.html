@@ -7329,8 +7329,15 @@
                     const depthDelta = (centerDepth != null && depth != null)
                         ? Math.abs(depth - centerDepth)
                         : Math.abs(n.pointIndex - centerIndex) * localSpacing;
-                    // Hard cutoff: too far away -> do not move at all
-                    if (depthDelta > cutoffDepth) return;
+                    // Hard cutoff: too far away -> restore original value and do not move
+                    if (depthDelta > cutoffDepth) {
+                        const origIdx = Number.isInteger(n.depthIndex) ? n.depthIndex : -1;
+                        if (origIdx >= 0 && origIdx < entry.values.length) {
+                            const origVal = pixelToTrackValue(n.originalX, targetTrack, { depthIndex: origIdx, values: entry.values });
+                            if (Number.isFinite(origVal)) entry.values[origIdx] = origVal;
+                        }
+                        return;
+                    }
                 }
 
                 // Gaussian weight: exp(-depthDelta²/(2sigma²))
@@ -7358,7 +7365,14 @@
                             weight = 0.0;
                         }
                     }
-                    if (weight < 0.01) return;
+                    if (weight < 0.01) {
+                        const origIdx = Number.isInteger(n.depthIndex) ? n.depthIndex : -1;
+                        if (origIdx >= 0 && origIdx < entry.values.length) {
+                            const origVal = pixelToTrackValue(n.originalX, targetTrack, { depthIndex: origIdx, values: entry.values });
+                            if (Number.isFinite(origVal)) entry.values[origIdx] = origVal;
+                        }
+                        return;
+                    }
                 }
 
                 let newX;
