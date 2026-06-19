@@ -7032,7 +7032,7 @@
                     if (nearestIdx < 0) nearestIdx = 0;
                 }
                 const centerPtY = pts[nearestIdx][1];
-                const influencePx = smoothMode ? 150 : 75; // Visible rubberband size in pixels
+                const influencePx = smoothMode ? 200 : 100; // Visible rubberband size in pixels
 
                 // Scan the entire array to guarantee we never miss points, even if pts is temporarily unsorted
                 for (let i = 0; i < pts.length; i++) {
@@ -7326,16 +7326,12 @@
             // Pass 1.5: Pre-calculate weights and find maximum safe Y movement to prevent any depth inversions
             const getWeight = (n) => {
                 if (!n) return 0;
-                if (n.isCenter) return 1.0;
-                const normDist = Math.min(1.0, (n.distPx || 0) / (n.influencePx || 30));
+                const normDist = Math.min(1.0, (n.distPx || 0) / (n.influencePx || 75));
                 return smoothMode ? Math.exp(- (normDist * normDist) * 4.0) : Math.pow(1.0 - normDist, 1.5);
             };
 
-            const yWeightMultiplier = smoothMode ? 0.98 : 0.95;
             const getEffectiveYWeight = (n) => {
-                if (!n) return 0;
-                if (n.isCenter) return 1.0;
-                return getWeight(n) * yWeightMultiplier;
+                return getWeight(n);
             };
 
             let maxDownY = Infinity;
