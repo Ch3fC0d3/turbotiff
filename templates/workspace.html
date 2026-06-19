@@ -2459,6 +2459,54 @@
             return Math.abs(x - left) <= Math.abs(x - right) ? left : right;
         }
 
+        function shouldBreakManualConnector(prevPoint, currPoint, track) {
+            if (!Array.isArray(prevPoint) || !Array.isArray(currPoint)) return false;
+            const ax = Number(prevPoint[0]);
+            const ay = Number(prevPoint[1]);
+            const bx = Number(currPoint[0]);
+            const by = Number(currPoint[1]);
+            if (![ax, ay, bx, by].every(Number.isFinite)) return false;
+
+            const prevKind = String(prevPoint[3] || '');
+            const currKind = String(currPoint[3] || '');
+            if (prevKind !== 'manual' && currKind !== 'manual') return false;
+            if (prevKind === 'wrap_edge' || currKind === 'wrap_edge') return false;
+
+            const left = track ? Math.min(Number(track.leftX), Number(track.rightX)) : NaN;
+            const right = track ? Math.max(Number(track.leftX), Number(track.rightX)) : NaN;
+            const width = (Number.isFinite(left) && Number.isFinite(right) && right > left)
+                ? (right - left)
+                : Math.max(120, imageWidth || 120);
+            const dx = Math.abs(bx - ax);
+            const dy = Math.abs(by - ay);
+            return dx >= Math.max(36, width * 0.14) && dy <= Math.max(18, width * 0.08);
+        }
+
+        function getSeparatedManualConnector(prevPoint, currPoint, track) {
+            if (!shouldBreakManualConnector(prevPoint, currPoint, track)) return null;
+            const prevManual = String(prevPoint[3] || '') === 'manual';
+            const currManual = String(currPoint[3] || '') === 'manual';
+            const left = track ? Math.min(Number(track.leftX), Number(track.rightX)) : NaN;
+            const right = track ? Math.max(Number(track.leftX), Number(track.rightX)) : NaN;
+            const width = (Number.isFinite(left) && Number.isFinite(right) && right > left)
+                ? (right - left)
+                : Math.max(120, imageWidth || 120);
+            const gap = Math.max(5, Math.min(12, width * 0.028));
+            const a = { x: Number(prevPoint[0]), y: Number(prevPoint[1]) };
+            const b = { x: Number(currPoint[0]), y: Number(currPoint[1]) };
+
+            if (currManual && !prevManual) {
+                b.y -= gap;
+            } else if (prevManual && !currManual) {
+                a.y += gap;
+            } else {
+                a.y -= gap * 0.5;
+                b.y += gap * 0.5;
+            }
+
+            return { a, b };
+        }
+
         function getVisibleSegmentPiecesOutsideWrapErasers(curveId, prevPoint, currPoint, track) {
             if (!Array.isArray(prevPoint) || !Array.isArray(currPoint)) return null;
             const ax = Number(prevPoint[0]);
@@ -12061,7 +12109,7 @@
             return Math.max(MIN_OVERLAY_POINT_COUNT, Math.min(MAX_OVERLAY_POINT_COUNT, Math.round(numeric)));
         }
 
-        function buildEvenlySpacedOverlayMarkers(points, targetCount, scaleX, scaleY, curveName) {
+        function buildEvenlySpacedOverlayMarkers(points, targetCount, scaleX, scaleY, curveName, track = null) {
             const source = Array.isArray(points)
                 ? points.filter((pt) => Array.isArray(pt) && pt.length >= 2 && Number.isFinite(pt[0]) && Number.isFinite(pt[1]))
                 : [];
@@ -12074,6 +12122,10 @@
             for (let i = 1; i < source.length; i++) {
                 const prev = source[i - 1];
                 const curr = source[i];
+                if (shouldBreakManualConnector(prev, curr, track)) {
+                    cumulative.push(totalLength);
+                    continue;
+                }
                 const segLength = Math.hypot(
                     (Number(curr[0]) - Number(prev[0])) * scaleX,
                     (Number(curr[1]) - Number(prev[1])) * scaleY
@@ -12102,6 +12154,10 @@
 
                 const prev = source[Math.max(0, segIdx - 1)];
                 const curr = source[segIdx];
+                if (shouldBreakManualConnector(prev, curr, track)) {
+                    sampled.push(Array.isArray(curr) ? curr.slice(0, 3) : curr);
+                    continue;
+                }
                 const dist0 = cumulative[Math.max(0, segIdx - 1)];
                 const dist1 = cumulative[segIdx];
                 const segSpan = Math.max(0.000001, dist1 - dist0);
@@ -12620,8 +12676,13 @@
                             const yDom = (currPoint[1] * scaleY);
                             const jumpX = Math.abs(Number(currPoint[0]) - Number(prevPoint[0]));
                             const wrapVisiblePieces = getVisibleSegmentPiecesOutsideWrapErasers(name, prevPoint, currPoint, trackMeta);
+                            const separatedManualConnector = getSeparatedManualConnector(prevPoint, currPoint, trackMeta);
                             if (wrapVisiblePieces !== null) {
                                 addVisibleWrapEraserSegmentPieces(ctx, wrapVisiblePieces, scaleX, scaleY);
+                                ctx.moveTo(xDom, yDom);
+                            } else if (separatedManualConnector) {
+                                ctx.moveTo(separatedManualConnector.a.x * scaleX, separatedManualConnector.a.y * scaleY);
+                                ctx.lineTo(separatedManualConnector.b.x * scaleX, separatedManualConnector.b.y * scaleY);
                                 ctx.moveTo(xDom, yDom);
                             } else if (isScaleWrapDisplayJump(name, prevPoint, currPoint, trackMeta) ||
                                 (splitWrappedJumps && Number.isFinite(jumpX) && jumpX > wrapJumpThreshold)) {
@@ -12679,6 +12740,7 @@
                         // Break if jump is implausible or if vertical gap is too large (true missing data)
                         if (
                             Math.abs(dy) > maxGapYImg || 
+                            shouldBreakManualConnector(p0, p1, trackMeta) ||
                             shouldBreakVisualBridge(p0, p1, sortedPoints, i, i + 1)
                         ) continue;
                         const domDist = Math.hypot(domDx, domDy);
@@ -12781,7 +12843,7 @@
 
                 // Draw equally spaced dots along the visible curve.
                 if (showPoints && !fastForThisCurve) {
-                    const markerPoints = buildEvenlySpacedOverlayMarkers(renderPoints, effectivePointCount, scaleX, scaleY, name);
+                    const markerPoints = buildEvenlySpacedOverlayMarkers(renderPoints, effectivePointCount, scaleX, scaleY, name, trackMeta);
                     if (!markerPoints.length) continue;
                     const pointScale = isBlackLikeMode ? 0.72 : 1.0;
                     const r = Math.max(0.1, effectivePointSize * pointScale);
