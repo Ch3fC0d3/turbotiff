@@ -2580,8 +2580,8 @@
                     Number.isFinite(Number(pt[0])) && Number.isFinite(Number(pt[1])))
                 .slice()
                 .sort((a, b) => Number(a[1]) - Number(b[1]));
-            const markers = [];
-            const seenDepths = new Set();
+            let bestSegment = null;
+            let bestSpan = -1;
 
             for (let i = 1; i < sorted.length; i++) {
                 const prev = sorted[i - 1];
@@ -2595,14 +2595,16 @@
                 const interval = segmentBoxOverlapInterval(ax, ay, bx, by, effectiveBox);
                 if (!interval) continue;
 
-                const marker = applyWrapBridgeRepairForSegment(ctx, prev, curr, null);
-                if (!marker || !Number.isInteger(marker.depthIndex)) continue;
-                const depthBucket = Math.round(marker.depthIndex / 2);
-                if (seenDepths.has(depthBucket)) continue;
-                seenDepths.add(depthBucket);
-                markers.push(marker);
+                const span = Math.abs(bx - ax);
+                if (span > bestSpan) {
+                    bestSpan = span;
+                    bestSegment = { prev, curr };
+                }
             }
-            return markers;
+
+            if (!bestSegment) return [];
+            const marker = applyWrapBridgeRepairForSegment(ctx, bestSegment.prev, bestSegment.curr, null);
+            return marker && Number.isInteger(marker.depthIndex) ? [marker] : [];
         }
 
         function applyWrapMarkersForEraserBox(ctx, markers) {
@@ -2974,7 +2976,6 @@
             const undoValues = (found && found.entry && Array.isArray(found.entry.values))
                 ? found.entry.values.map((value, idx) => ({ idx, oldValue: value }))
                 : [];
-            const repairPoints = collectWrapEdgeRepairPoints(points, { x1, y1, x2, y2 }, ctx.track);
             const wrapMarkers = collectWrapMarkersForEraserBox(ctx, points, { x1, y1, x2, y2 });
 
             const boxAdded = addWrapEraseBoxForCurve(ctx.curveKey, { x1, y1, x2, y2 });
@@ -2983,7 +2984,6 @@
                 return 0;
             }
             const markerCount = applyWrapMarkersForEraserBox(ctx, wrapMarkers);
-            const edgePointCount = applyWrapEdgeRepairPoints(ctx, traceKey, points, repairPoints);
             editUndoStack.push({
                 type: 'wrap_eraser',
                 curveKey: curveKeyForUndo,
@@ -2995,7 +2995,7 @@
                 undoValues,
             });
             if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
-            showStatus(`Wrap Eraser cut the middle, snapped ${edgePointCount} broken ends to edges, and added ${markerCount} LAS wrap offset${markerCount === 1 ? '' : 's'}. Ctrl+Z to undo.`, 'success');
+            showStatus(`Wrap Eraser removed the connector${markerCount ? ' and added one wrap offset' : ''}. Ctrl+Z to undo.`, 'success');
             return 1;
         }
 
@@ -12740,11 +12740,7 @@
                             const xDom = (currPoint[0] * scaleX);
                             const yDom = (currPoint[1] * scaleY);
                             const jumpX = Math.abs(Number(currPoint[0]) - Number(prevPoint[0]));
-                            const wrapVisiblePieces = getVisibleSegmentPiecesOutsideWrapErasers(name, prevPoint, currPoint, trackMeta);
-                            if (wrapVisiblePieces !== null) {
-                                addVisibleWrapEraserSegmentPieces(ctx, wrapVisiblePieces, scaleX, scaleY);
-                                ctx.moveTo(xDom, yDom);
-                            } else if (isScaleWrapDisplayJump(name, prevPoint, currPoint, trackMeta) ||
+                            if (isSegmentHiddenByWrapEraser(name, prevPoint, currPoint, trackMeta) ||
                                 (splitWrappedJumps && Number.isFinite(jumpX) && jumpX > wrapJumpThreshold)) {
                                 ctx.moveTo(xDom, yDom);
                             } else {
