@@ -7033,42 +7033,45 @@
                 }
                 const centerPtY = pts[nearestIdx][1];
                 const influencePx = smoothMode ? 60 : 30; // Visible rubberband size in pixels
-                const maxSearch = 200; // Prevent unbounded loops
 
-                for (let i = -maxSearch; i <= maxSearch; i++) {
-                    const idx = nearestIdx + i;
-                    if (idx < 0 || idx >= pts.length) continue;
+                // Scan outward in both directions to get ALL points within influencePx
+                for (let dir of [-1, 1]) {
+                    for (let i = (dir === -1 ? -1 : 0); ; i += dir) {
+                        const idx = nearestIdx + i;
+                        if (idx < 0 || idx >= pts.length) break;
 
-                    const ptX = pts[idx][0];
-                    const ptY = pts[idx][1];
-                    const distPx = Math.abs(ptY - centerPtY);
-                    
-                    if (distPx > influencePx) continue; // Skip points outside physical influence
-                    const depth = pixelToDepthFromConfig(ptY, depthCfg);
-                    if (!Number.isFinite(depth)) continue;
+                        const ptX = pts[idx][0];
+                        const ptY = pts[idx][1];
+                        const distPx = Math.abs(ptY - centerPtY);
+                        
+                        if (distPx > influencePx) break; // Array is sorted by Y, so we can stop searching this direction
+                        
+                        const depth = pixelToDepthFromConfig(ptY, depthCfg);
+                        if (!Number.isFinite(depth)) continue;
 
-                    const dIdx = findNearestDepthIndex(depth, lastDigitizedDepth);
-                    if (dIdx < 0 || dIdx >= entry.values.length) continue;
+                        const dIdx = findNearestDepthIndex(depth, lastDigitizedDepth);
+                        if (dIdx < 0 || dIdx >= entry.values.length) continue;
 
-                    pts[idx][2] = dIdx;
+                        pts[idx][2] = dIdx;
 
-                    if (idx === nearestIdx) {
-                        centerDepthIdx = dIdx;
+                        if (idx === nearestIdx) {
+                            centerDepthIdx = dIdx;
+                        }
+
+                        neighbors.push({
+                            pointIndex: idx,
+                            offsetFromCenter: Math.abs(idx - nearestIdx),
+                            distPx: distPx,
+                            influencePx: influencePx,
+                            depthIndex: dIdx,
+                            originalDepthIndex: dIdx,
+                            currentDepthIndex: dIdx,
+                            originalX: ptX,
+                            originalY: ptY,
+                            pointKind: String(pts[idx][3] || ''),
+                            originalValue: entry.values[dIdx],
+                        });
                     }
-
-                    neighbors.push({
-                        pointIndex: idx,
-                        offsetFromCenter: Math.abs(idx - nearestIdx),
-                        distPx: distPx,
-                        influencePx: influencePx,
-                        depthIndex: dIdx,
-                        originalDepthIndex: dIdx,
-                        currentDepthIndex: dIdx,
-                        originalX: ptX,
-                        originalY: ptY,
-                        pointKind: String(pts[idx][3] || ''),
-                        originalValue: entry.values[dIdx],
-                    });
                 }
 
                 if (!neighbors.length) return false;
@@ -7341,16 +7344,17 @@
                 if (weight < 0.001) {
                     // Safe restore: process normally to restore depth index, but don't move
                     newX = n.originalX;
-                    newY = n.originalY;
                 } else if (n.pointIndex === centerIndex) {
-                    // Center point follows mouse exactly
+                    // Center point follows mouse exactly in X, but Y remains locked to its depth
                     newX = xImg;
-                    newY = yImg;
                 } else {
-                    // Neighbors get weighted motion
+                    // Neighbors get weighted horizontal motion
                     newX = n.originalX + deltaX * weight;
-                    newY = n.originalY + deltaY * weight * yWeight;
                 }
+                
+                // CRITICAL: Force Y to remain original. Shifting points vertically causes 
+                // Y-inversions which breaks the polyline rendering and causes horizontal zig-zag lines.
+                newY = n.originalY;
 
                 if (imgW > 1) newX = Math.max(0, Math.min(imgW - 1, newX));
                 if (imgH > 1) newY = Math.max(0, Math.min(imgH - 1, newY));
