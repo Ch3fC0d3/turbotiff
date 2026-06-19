@@ -7323,38 +7323,69 @@
                 }
             });
 
+            // Sort neighbors by point index just to be safe
+            neighbors.sort((a, b) => a.pointIndex - b.pointIndex);
+
+            // Pass 1.5: Pre-calculate weights and find maximum safe Y movement to prevent any depth inversions
+            const getWeight = (idx) => {
+                const n = neighbors.find(x => x.pointIndex === idx);
+                if (!n) return 0;
+                if (n.pointIndex === centerIndex) return 1.0;
+                const normDist = Math.min(1.0, (n.distPx || 0) / (n.influencePx || 30));
+                return smoothMode ? Math.exp(- (normDist * normDist) * 4.0) : Math.pow(1.0 - normDist, 1.5);
+            };
+
+            const yWeightMultiplier = smoothMode ? 0.8 : 0.72;
+            let maxDownY = Infinity;
+            let maxUpY = -Infinity;
+
+            if (neighbors.length > 0) {
+                const minIdx = Math.max(0, neighbors[0].pointIndex - 1);
+                const maxIdx = Math.min(pts.length - 1, neighbors[neighbors.length - 1].pointIndex + 1);
+
+                for (let i = minIdx; i < maxIdx; i++) {
+                    const wA = getWeight(i) * yWeightMultiplier;
+                    const wB = getWeight(i + 1) * yWeightMultiplier;
+                    const yA = pts[i][1];
+                    const yB = pts[i + 1][1];
+                    const gap = yB - yA;
+
+                    const weightDiff = wA - wB;
+                    if (Math.abs(weightDiff) > 0.0001) {
+                        const limit = gap / weightDiff;
+                        if (weightDiff > 0) {
+                            // A moves faster down than B. Limit positive deltaY
+                            maxDownY = Math.min(maxDownY, limit * 0.95);
+                        } else {
+                            // B moves faster up than A. Limit negative deltaY
+                            maxUpY = Math.max(maxUpY, limit * 0.95);
+                        }
+                    }
+                }
+            }
+
+            const safeDeltaY = Math.max(maxUpY, Math.min(maxDownY, deltaY));
+
             // Pass 2: Calculate new positions and write to new depth indices
             neighbors.forEach(n => {
                 if (isDepthIndexPinned(state.curveId, n.depthIndex) && n.pointIndex !== centerIndex) return;
 
-                // Physical pixel falloff: guarantees a visible rubberband regardless of data density
-                let weight = 1.0;
-                if (n.pointIndex !== centerIndex) {
-                    const normDist = Math.min(1.0, (n.distPx || 0) / (n.influencePx || 30));
-                    if (smoothMode) {
-                        // Gaussian-like falloff matching the edge at normDist=1
-                        weight = Math.exp(- (normDist * normDist) * 4.0);
-                    } else {
-                        // "Tent" rubberband with a slight curve
-                        weight = Math.pow(1.0 - normDist, 1.5);
-                    }
-                }
+                const weight = getWeight(n.pointIndex);
 
                 let newX, newY;
                 if (weight < 0.001) {
                     // Safe restore: process normally to restore depth index, but don't move
                     newX = n.originalX;
+                    newY = n.originalY;
                 } else if (n.pointIndex === centerIndex) {
-                    // Center point follows mouse exactly in X, but Y remains locked to its depth
+                    // Center point follows mouse exactly in X, and clamped mouse in Y
                     newX = xImg;
+                    newY = n.originalY + safeDeltaY;
                 } else {
-                    // Neighbors get weighted horizontal motion
+                    // Neighbors get weighted horizontal and clamped vertical motion
                     newX = n.originalX + deltaX * weight;
+                    newY = n.originalY + safeDeltaY * weight * yWeightMultiplier;
                 }
-                
-                // CRITICAL: Force Y to remain original. Shifting points vertically causes 
-                // Y-inversions which breaks the polyline rendering and causes horizontal zig-zag lines.
-                newY = n.originalY;
 
                 if (imgW > 1) newX = Math.max(0, Math.min(imgW - 1, newX));
                 if (imgH > 1) newY = Math.max(0, Math.min(imgH - 1, newY));
