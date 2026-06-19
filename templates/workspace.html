@@ -2420,14 +2420,15 @@
             const x1 = Number(currPoint[0]);
             const y1 = Number(currPoint[1]);
             if (![x0, y0, x1, y1].every(Number.isFinite)) return false;
-            const boxes = getEffectiveWrapEraseBoxesForRenderCurve(curveId, track);
-            const touchesBox = boxes.some(box => segmentTouchesBox(x0, y0, x1, y1, box.x1, box.y1, box.x2, box.y2));
-            if (!touchesBox) return false;
 
             const prevIsEdge = prevPoint[3] === 'wrap_edge';
             const currIsEdge = currPoint[3] === 'wrap_edge';
-            if (prevIsEdge !== currIsEdge) return false;
             if (prevIsEdge && currIsEdge) return true;
+            if (prevIsEdge !== currIsEdge) return false;
+
+            const boxes = getEffectiveWrapEraseBoxesForRenderCurve(curveId, track);
+            const touchesBox = boxes.some(box => segmentTouchesBox(x0, y0, x1, y1, box.x1, box.y1, box.x2, box.y2));
+            if (!touchesBox) return false;
 
             if (track) {
                 const left = Math.min(Number(track.leftX), Number(track.rightX));
@@ -2549,18 +2550,20 @@
             });
         }
 
-        function collectWrapEdgeRepairPoints(points, box, track) {
-            if (!Array.isArray(points) || points.length < 2 || !track) return [];
+        function findWrapConnectorForBox(points, box, track) {
+            if (!Array.isArray(points) || points.length < 2 || !track) return null;
             const effectiveBox = getEffectiveWrapEraseBoxForTrack(box, track);
-            if (!effectiveBox) return [];
+            if (!effectiveBox) return null;
 
             const sorted = points
                 .filter(pt => Array.isArray(pt) && pt.length >= 2 &&
                     Number.isFinite(Number(pt[0])) && Number.isFinite(Number(pt[1])))
                 .slice()
                 .sort((a, b) => Number(a[1]) - Number(b[1]));
+            const centerX = (effectiveBox.x1 + effectiveBox.x2) * 0.5;
+            const centerY = (effectiveBox.y1 + effectiveBox.y2) * 0.5;
             let bestSegment = null;
-            let bestSpan = -1;
+            let bestScore = Infinity;
 
             for (let i = 1; i < sorted.length; i++) {
                 const prev = sorted[i - 1];
@@ -2575,11 +2578,17 @@
                 if (!interval) continue;
 
                 const span = Math.abs(bx - ax);
-                if (span > bestSpan) {
-                    bestSpan = span;
+                const score = distancePointToSegment(centerX, centerY, ax, ay, bx, by) - span * 0.02;
+                if (score < bestScore) {
+                    bestScore = score;
                     bestSegment = { prev, curr, ax, ay, bx, by };
                 }
             }
+            return bestSegment;
+        }
+
+        function collectWrapEdgeRepairPoints(points, box, track) {
+            const bestSegment = findWrapConnectorForBox(points, box, track);
 
             if (!bestSegment) return [];
             const left = Math.min(Number(track.leftX), Number(track.rightX));
@@ -2595,35 +2604,7 @@
 
         function collectWrapMarkersForEraserBox(ctx, points, box) {
             if (!ctx || !ctx.track || !ctx.curveKey || !Array.isArray(points) || points.length < 2) return [];
-            const effectiveBox = getEffectiveWrapEraseBoxForTrack(box, ctx.track);
-            if (!effectiveBox) return [];
-
-            const sorted = points
-                .filter(pt => Array.isArray(pt) && pt.length >= 2 &&
-                    Number.isFinite(Number(pt[0])) && Number.isFinite(Number(pt[1])))
-                .slice()
-                .sort((a, b) => Number(a[1]) - Number(b[1]));
-            let bestSegment = null;
-            let bestSpan = -1;
-
-            for (let i = 1; i < sorted.length; i++) {
-                const prev = sorted[i - 1];
-                const curr = sorted[i];
-                const ax = Number(prev[0]);
-                const ay = Number(prev[1]);
-                const bx = Number(curr[0]);
-                const by = Number(curr[1]);
-                if (![ax, ay, bx, by].every(Number.isFinite)) continue;
-                if (!segmentTouchesBox(ax, ay, bx, by, effectiveBox.x1, effectiveBox.y1, effectiveBox.x2, effectiveBox.y2)) continue;
-                const interval = segmentBoxOverlapInterval(ax, ay, bx, by, effectiveBox);
-                if (!interval) continue;
-
-                const span = Math.abs(bx - ax);
-                if (span > bestSpan) {
-                    bestSpan = span;
-                    bestSegment = { prev, curr };
-                }
-            }
+            const bestSegment = findWrapConnectorForBox(points, box, ctx.track);
 
             if (!bestSegment) return [];
             const marker = applyWrapBridgeRepairForSegment(ctx, bestSegment.prev, bestSegment.curr, null);
@@ -2997,10 +2978,8 @@
                 : [];
             const repairPoints = collectWrapEdgeRepairPoints(points, { x1, y1, x2, y2 }, ctx.track);
             const wrapMarkers = collectWrapMarkersForEraserBox(ctx, points, { x1, y1, x2, y2 });
-
-            const boxAdded = addWrapEraseBoxForCurve(ctx.curveKey, { x1, y1, x2, y2 });
-            if (!boxAdded) {
-                showStatus('Wrap Eraser box was too small to apply.', 'info');
+            if (repairPoints.length !== 2 || wrapMarkers.length !== 1) {
+                showStatus('Wrap Eraser could not find one clear connector in that box.', 'info');
                 return 0;
             }
             const markerCount = applyWrapMarkersForEraserBox(ctx, wrapMarkers);
@@ -12815,22 +12794,13 @@
                         const firstX = (renderPoints[0][0] * scaleX);
                         const firstY = (renderPoints[0][1] * scaleY);
                         ctx.moveTo(firstX, firstY);
-                        const trackWidth = trackMeta
-                            ? Math.abs(Number(trackMeta.rightX) - Number(trackMeta.leftX))
-                            : NaN;
-                        const wrapJumpThreshold = Number.isFinite(trackWidth) && trackWidth > 0
-                            ? Math.max(24, trackWidth * 0.68)
-                            : Infinity;
-
                         for (let i = 1; i < renderPoints.length; i++) {
                             const prevPoint = renderPoints[i - 1];
                             const currPoint = renderPoints[i];
                             const xDom = (currPoint[0] * scaleX);
                             const yDom = (currPoint[1] * scaleY);
-                            const jumpX = Math.abs(Number(currPoint[0]) - Number(prevPoint[0]));
-                            const isWrapTail = (prevPoint[3] === 'wrap_edge') !== (currPoint[3] === 'wrap_edge');
                             if (isSegmentHiddenByWrapEraser(name, prevPoint, currPoint, trackMeta) ||
-                                (!isWrapTail && Number.isFinite(jumpX) && jumpX > wrapJumpThreshold)) {
+                                isScaleWrapBoundaryForPoints(name, prevPoint, currPoint)) {
                                 ctx.moveTo(xDom, yDom);
                             } else {
                                 ctx.lineTo(xDom, yDom);
