@@ -2365,38 +2365,7 @@
         }
 
         function isScaleWrapDisplayJump(curveId, prevPoint, currPoint, track) {
-            if (isSegmentHiddenByWrapEraser(curveId, prevPoint, currPoint, track)) return true;
-            if (isScaleWrapBoundaryForPoints(curveId, prevPoint, currPoint)) return true;
-            if (!track || !Array.isArray(prevPoint) || !Array.isArray(currPoint)) return false;
-            const markers = getWrapMarkersForRenderCurve(curveId, track);
-            if (!markers.length) return false;
-
-            const left = Math.min(Number(track.leftX), Number(track.rightX));
-            const right = Math.max(Number(track.leftX), Number(track.rightX));
-            const width = right - left;
-            if (!Number.isFinite(width) || width <= 0) return false;
-
-            const x0 = Number(prevPoint[0]);
-            const y0 = Number(prevPoint[1]);
-            const x1 = Number(currPoint[0]);
-            const y1 = Number(currPoint[1]);
-            if (![x0, y0, x1, y1].every(Number.isFinite)) return false;
-
-            const dx = Math.abs(x1 - x0);
-            const dy = Math.abs(y1 - y0);
-            const edgeMargin = Math.max(6, width * 0.07);
-            const nearLeft0 = x0 <= left + edgeMargin;
-            const nearRight0 = x0 >= right - edgeMargin;
-            const nearLeft1 = x1 <= left + edgeMargin;
-            const nearRight1 = x1 >= right - edgeMargin;
-            const oppositeEdges = (nearLeft0 && nearRight1) || (nearRight0 && nearLeft1);
-            const longFlatBridge = dx >= width * 0.36 && dy <= Math.max(24, width * 0.18);
-
-            if (longFlatBridge) return true;
-
-            return oppositeEdges &&
-                dx >= width * 0.45 &&
-                dy <= Math.max(24, width * 0.18);
+            return isSegmentHiddenByWrapEraser(curveId, prevPoint, currPoint, track);
         }
 
         function getSelectedWrapCurveContext() {
@@ -12251,14 +12220,6 @@
                         ctx.moveTo(firstX, firstY);
                         const splitWrappedJumps = false;
                         const wrapJumpThreshold = Infinity;
-                        const nearestTrackEdgeX = (xImg) => {
-                            if (!trackMeta) return null;
-                            const left = Number(trackMeta.leftX);
-                            const right = Number(trackMeta.rightX);
-                            const xVal = Number(xImg);
-                            if (!Number.isFinite(left) || !Number.isFinite(right) || !Number.isFinite(xVal)) return null;
-                            return Math.abs(xVal - left) <= Math.abs(xVal - right) ? left : right;
-                        };
 
                         for (let i = 1; i < renderPoints.length; i++) {
                             const prevPoint = renderPoints[i - 1];
@@ -12268,14 +12229,6 @@
                             const jumpX = Math.abs(Number(currPoint[0]) - Number(prevPoint[0]));
                             if (isScaleWrapDisplayJump(name, prevPoint, currPoint, trackMeta) ||
                                 (splitWrappedJumps && Number.isFinite(jumpX) && jumpX > wrapJumpThreshold)) {
-                                const prevEdgeX = nearestTrackEdgeX(prevPoint[0]);
-                                const currEdgeX = nearestTrackEdgeX(currPoint[0]);
-                                if (Number.isFinite(prevEdgeX) && Number.isFinite(currEdgeX)) {
-                                    const prevYDom = Number(prevPoint[1]) * scaleY;
-                                    ctx.lineTo(prevEdgeX * scaleX, prevYDom);
-                                    ctx.moveTo(currEdgeX * scaleX, yDom);
-                                    ctx.lineTo(xDom, yDom);
-                                }
                                 ctx.moveTo(xDom, yDom);
                             } else {
                                 ctx.lineTo(xDom, yDom);
