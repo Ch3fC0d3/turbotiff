@@ -7266,6 +7266,43 @@
             return newCenterIndex >= 0 ? newCenterIndex : centerIndex;
         }
 
+        function limitDragHorizontalConnectors(pts, centerPoint, entry, targetTrack) {
+            if (!Array.isArray(pts) || !Array.isArray(centerPoint) || !entry || !Array.isArray(entry.values) || !targetTrack) return;
+            const left = Math.min(Number(targetTrack.leftX), Number(targetTrack.rightX));
+            const right = Math.max(Number(targetTrack.leftX), Number(targetTrack.rightX));
+            const trackWidth = right - left;
+            if (!Number.isFinite(trackWidth) || trackWidth <= 0) return;
+
+            const centerIndex = pts.indexOf(centerPoint);
+            if (centerIndex < 0) return;
+            const maxStep = Math.max(10, trackWidth * 0.10);
+
+            const relaxSide = direction => {
+                let anchorX = Number(centerPoint[0]);
+                for (let i = centerIndex + direction; i >= 0 && i < pts.length; i += direction) {
+                    const point = pts[i];
+                    if (!Array.isArray(point) || !Number.isFinite(Number(point[0]))) break;
+                    const depthIndex = Number.isInteger(point[2]) ? point[2] : -1;
+                    if (depthIndex >= 0 && isDepthIndexPinned(editCurveId, depthIndex)) break;
+
+                    const delta = Number(point[0]) - anchorX;
+                    if (Math.abs(delta) <= maxStep) break;
+                    const newX = Math.max(left, Math.min(right, anchorX + Math.sign(delta) * maxStep));
+                    point[0] = newX;
+                    point[3] = 'manual';
+                    point[4] = Date.now();
+                    if (depthIndex >= 0 && depthIndex < entry.values.length) {
+                        const value = pixelToTrackValue(newX, targetTrack, { depthIndex, values: entry.values });
+                        if (Number.isFinite(value)) entry.values[depthIndex] = value;
+                    }
+                    anchorX = newX;
+                }
+            };
+
+            relaxSide(-1);
+            relaxSide(1);
+        }
+
         function _doDragUpdate() {
             if (!editMode || !editDragState) {
                 // console.log('_doDragUpdate: early return - editMode:', editMode, 'editDragState:', !!editDragState);
@@ -7508,6 +7545,7 @@
 
             // Re-sort pts by Y coordinate to ensure line connects smoothly top-to-bottom without zig-zags
             pts.sort((a, b) => Number(a && a[1] || 0) - Number(b && b[1] || 0));
+            limitDragHorizontalConnectors(pts, centerN.ptRef, entry, targetTrack);
             state.centerIndex = pts.indexOf(centerN.ptRef);
         }
 
