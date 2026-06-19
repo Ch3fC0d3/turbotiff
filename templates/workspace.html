@@ -2577,18 +2577,20 @@
                 const span = Math.abs(bx - ax);
                 if (span > bestSpan) {
                     bestSpan = span;
-                    bestSegment = { ax, ay, bx, by, interval };
+                    bestSegment = { prev, curr, ax, ay, bx, by };
                 }
             }
 
             if (!bestSegment) return [];
-            const pointAt = (t) => ({
-                x: bestSegment.ax + (bestSegment.bx - bestSegment.ax) * t,
-                y: bestSegment.ay + (bestSegment.by - bestSegment.ay) * t,
-            });
-            return [pointAt(bestSegment.interval[0]), pointAt(bestSegment.interval[1])]
-                .map(pt => ({ x: nearestTrackEdgeX(track, pt.x), y: pt.y }))
-                .filter(pt => Number.isFinite(pt.x) && Number.isFinite(pt.y));
+            const left = Math.min(Number(track.leftX), Number(track.rightX));
+            const right = Math.max(Number(track.leftX), Number(track.rightX));
+            if (!Number.isFinite(left) || !Number.isFinite(right)) return [];
+
+            const prevGoesLeft = bestSegment.ax <= bestSegment.bx;
+            return [
+                { point: bestSegment.prev, x: prevGoesLeft ? left : right, y: bestSegment.ay },
+                { point: bestSegment.curr, x: prevGoesLeft ? right : left, y: bestSegment.by },
+            ];
         }
 
         function collectWrapMarkersForEraserBox(ctx, points, box) {
@@ -2652,19 +2654,24 @@
             let applied = 0;
 
             repairs.forEach(repair => {
-                const dIdx = getDepthIndexAtImageY(repair.y);
+                const targetPoint = Array.isArray(repair.point) ? repair.point : null;
+                const dIdx = targetPoint && Number.isInteger(targetPoint[2])
+                    ? targetPoint[2]
+                    : getDepthIndexAtImageY(repair.y);
                 if (!Number.isInteger(dIdx) || dIdx < 0) return;
                 if (isDepthIndexPinned(ctx.curveKey, dIdx) || isDepthIndexPinned(ctx.curveId, dIdx)) return;
-                const yUse = getPixelYForDepthIndex(dIdx, depthCfg) ?? repair.y;
+                const yUse = Number.isFinite(Number(repair.y))
+                    ? Number(repair.y)
+                    : (getPixelYForDepthIndex(dIdx, depthCfg) ?? repair.y);
                 const xUse = Number(repair.x);
                 if (!Number.isFinite(xUse) || !Number.isFinite(yUse)) return;
 
-                const duplicate = points.some(pt => Array.isArray(pt) &&
-                    Number.isInteger(pt[2]) && pt[2] === dIdx &&
-                    Math.abs(Number(pt[0]) - xUse) <= 1.5 &&
-                    Math.abs(Number(pt[1]) - yUse) <= 2.5);
-                if (!duplicate) {
-                    points.push([xUse, yUse, dIdx, 'wrap_edge', stamp]);
+                if (targetPoint) {
+                    targetPoint[0] = xUse;
+                    targetPoint[1] = yUse;
+                    targetPoint[2] = dIdx;
+                    targetPoint[3] = 'wrap_edge';
+                    targetPoint[4] = stamp;
                 }
 
                 if (entry && dIdx < entry.values.length) {
