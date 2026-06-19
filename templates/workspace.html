@@ -7332,29 +7332,63 @@
             };
 
             const yWeightMultiplier = smoothMode ? 0.8 : 0.72;
+            const getEffectiveYWeight = (n) => {
+                if (!n) return 0;
+                if (n.isCenter) return 1.0;
+                return getWeight(n) * yWeightMultiplier;
+            };
+
             let maxDownY = Infinity;
             let maxUpY = -Infinity;
 
-            if (neighbors.length > 1) {
-                for (let i = 0; i < neighbors.length - 1; i++) {
-                    const nA = neighbors[i];
-                    const nB = neighbors[i + 1];
-                    const wA = getWeight(nA) * yWeightMultiplier;
-                    const wB = getWeight(nB) * yWeightMultiplier;
-                    const yA = nA.ptRef[1];
-                    const yB = nB.ptRef[1];
-                    const gap = yB - yA;
+            if (neighbors.length > 0) {
+                // Prevent neighbors from crossing each other
+                if (neighbors.length > 1) {
+                    for (let i = 0; i < neighbors.length - 1; i++) {
+                        const nA = neighbors[i];
+                        const nB = neighbors[i + 1];
+                        const wA = getEffectiveYWeight(nA);
+                        const wB = getEffectiveYWeight(nB);
+                        const yA = nA.originalY;
+                        const yB = nB.originalY;
+                        const gap = yB - yA;
 
-                    const weightDiff = wA - wB;
-                    if (Math.abs(weightDiff) > 0.0001) {
-                        const limit = gap / weightDiff;
-                        if (weightDiff > 0) {
-                            // A moves faster down than B. Limit positive deltaY
-                            maxDownY = Math.min(maxDownY, limit * 0.95);
-                        } else {
-                            // B moves faster up than A. Limit negative deltaY
-                            maxUpY = Math.max(maxUpY, limit * 0.95);
+                        const weightDiff = wA - wB;
+                        if (Math.abs(weightDiff) > 0.0001) {
+                            const limit = gap / weightDiff;
+                            if (weightDiff > 0) {
+                                // A moves faster down than B. Limit positive deltaY
+                                maxDownY = Math.min(maxDownY, limit * 0.95);
+                            } else {
+                                // B moves faster up than A. Limit negative deltaY
+                                maxUpY = Math.max(maxUpY, limit * 0.95);
+                            }
                         }
+                    }
+                }
+
+                // Prevent outermost neighbors from crossing the fixed points outside the window
+                const firstN = neighbors[0];
+                const fixedAboveIdx = firstN.pointIndex - 1;
+                if (fixedAboveIdx >= 0) {
+                    const yFixed = pts[fixedAboveIdx][1];
+                    const gap = firstN.originalY - yFixed;
+                    const wA = getEffectiveYWeight(firstN);
+                    if (wA > 0.0001) {
+                        const limit = -(gap / wA) * 0.95;
+                        maxUpY = Math.max(maxUpY, limit);
+                    }
+                }
+
+                const lastN = neighbors[neighbors.length - 1];
+                const fixedBelowIdx = lastN.pointIndex + 1;
+                if (fixedBelowIdx < pts.length) {
+                    const yFixed = pts[fixedBelowIdx][1];
+                    const gap = yFixed - lastN.originalY;
+                    const wB = getEffectiveYWeight(lastN);
+                    if (wB > 0.0001) {
+                        const limit = (gap / wB) * 0.95;
+                        maxDownY = Math.min(maxDownY, limit);
                     }
                 }
             }
@@ -7372,14 +7406,10 @@
                     // Safe restore: process normally to restore depth index, but don't move
                     newX = n.originalX;
                     newY = n.originalY;
-                } else if (n.isCenter) {
-                    // Center point follows mouse exactly in X, and clamped mouse in Y
-                    newX = xImg;
-                    newY = n.originalY + safeDeltaY;
                 } else {
                     // Neighbors get weighted horizontal and clamped vertical motion
                     newX = n.originalX + deltaX * weight;
-                    newY = n.originalY + safeDeltaY * weight * yWeightMultiplier;
+                    newY = n.originalY + safeDeltaY * getEffectiveYWeight(n);
                 }
 
                 if (imgW > 1) newX = Math.max(0, Math.min(imgW - 1, newX));
