@@ -7055,6 +7055,8 @@
                     }
 
                     neighbors.push({
+                        ptRef: pts[i],
+                        isCenter: (i === nearestIdx),
                         pointIndex: i,
                         offsetFromCenter: Math.abs(i - nearestIdx),
                         distPx: distPx,
@@ -7257,7 +7259,7 @@
             const imgH = imageHeight || (img && (img.naturalHeight || img.height)) || 1;
 
             // Find the center neighbor to compute deltas
-            const centerN = neighbors.find(n => n.pointIndex === centerIndex);
+            const centerN = neighbors.find(n => n.isCenter);
             if (!centerN) return;
 
             if (isDepthIndexPinned(state.curveId, centerN.depthIndex)) {
@@ -7285,7 +7287,7 @@
 
             // Pass 1: Clear old indices to prevent values overwriting each other when shifting up/down
             neighbors.forEach(n => {
-                if (isDepthIndexPinned(state.curveId, n.depthIndex) && n.pointIndex !== centerIndex) return;
+                if (isDepthIndexPinned(state.curveId, n.depthIndex) && !n.isCenter) return;
                 const oldIdx = Number.isInteger(n.currentDepthIndex) ? n.currentDepthIndex : n.depthIndex;
                 const originalIdx = Number.isInteger(n.originalDepthIndex) ? n.originalDepthIndex : n.depthIndex;
                 [oldIdx, originalIdx].forEach(idx => {
@@ -7318,14 +7320,13 @@
                 }
             });
 
-            // Sort neighbors by point index just to be safe
-            neighbors.sort((a, b) => a.pointIndex - b.pointIndex);
+            // Sort neighbors by their original Y coordinates to compute safe limits
+            neighbors.sort((a, b) => a.originalY - b.originalY);
 
             // Pass 1.5: Pre-calculate weights and find maximum safe Y movement to prevent any depth inversions
-            const getWeight = (idx) => {
-                const n = neighbors.find(x => x.pointIndex === idx);
+            const getWeight = (n) => {
                 if (!n) return 0;
-                if (n.pointIndex === centerIndex) return 1.0;
+                if (n.isCenter) return 1.0;
                 const normDist = Math.min(1.0, (n.distPx || 0) / (n.influencePx || 30));
                 return smoothMode ? Math.exp(- (normDist * normDist) * 4.0) : Math.pow(1.0 - normDist, 1.5);
             };
@@ -7334,15 +7335,14 @@
             let maxDownY = Infinity;
             let maxUpY = -Infinity;
 
-            if (neighbors.length > 0) {
-                const minIdx = Math.max(0, neighbors[0].pointIndex - 1);
-                const maxIdx = Math.min(pts.length - 1, neighbors[neighbors.length - 1].pointIndex + 1);
-
-                for (let i = minIdx; i < maxIdx; i++) {
-                    const wA = getWeight(i) * yWeightMultiplier;
-                    const wB = getWeight(i + 1) * yWeightMultiplier;
-                    const yA = pts[i][1];
-                    const yB = pts[i + 1][1];
+            if (neighbors.length > 1) {
+                for (let i = 0; i < neighbors.length - 1; i++) {
+                    const nA = neighbors[i];
+                    const nB = neighbors[i + 1];
+                    const wA = getWeight(nA) * yWeightMultiplier;
+                    const wB = getWeight(nB) * yWeightMultiplier;
+                    const yA = nA.ptRef[1];
+                    const yB = nB.ptRef[1];
                     const gap = yB - yA;
 
                     const weightDiff = wA - wB;
@@ -7363,16 +7363,16 @@
 
             // Pass 2: Calculate new positions and write to new depth indices
             neighbors.forEach(n => {
-                if (isDepthIndexPinned(state.curveId, n.depthIndex) && n.pointIndex !== centerIndex) return;
+                if (isDepthIndexPinned(state.curveId, n.depthIndex) && !n.isCenter) return;
 
-                const weight = getWeight(n.pointIndex);
+                const weight = getWeight(n);
 
                 let newX, newY;
                 if (weight < 0.001) {
                     // Safe restore: process normally to restore depth index, but don't move
                     newX = n.originalX;
                     newY = n.originalY;
-                } else if (n.pointIndex === centerIndex) {
+                } else if (n.isCenter) {
                     // Center point follows mouse exactly in X, and clamped mouse in Y
                     newX = xImg;
                     newY = n.originalY + safeDeltaY;
@@ -7385,10 +7385,10 @@
                 if (imgW > 1) newX = Math.max(0, Math.min(imgW - 1, newX));
                 if (imgH > 1) newY = Math.max(0, Math.min(imgH - 1, newY));
 
-                pts[n.pointIndex][0] = newX;
-                pts[n.pointIndex][1] = newY;
-                pts[n.pointIndex][3] = 'manual';
-                pts[n.pointIndex][4] = Date.now();
+                n.ptRef[0] = newX;
+                n.ptRef[1] = newY;
+                n.ptRef[3] = 'manual';
+                n.ptRef[4] = Date.now();
 
                 // Map new Y position to depth index
                 const newDepth = pixelToDepthFromConfig(newY, depthCfg);
@@ -7400,9 +7400,9 @@
                     }
                 }
                 
-                pts[n.pointIndex][2] = newDepthIndex;
+                n.ptRef[2] = newDepthIndex;
                 n.currentDepthIndex = newDepthIndex;
-                if (n.pointIndex === centerIndex) {
+                if (n.isCenter) {
                     state.depthIndex = newDepthIndex;
                 }
 
@@ -7411,6 +7411,10 @@
                     entry.values[newDepthIndex] = newVal;
                 }
             });
+
+            // Re-sort pts by Y coordinate to ensure line connects smoothly top-to-bottom without zig-zags
+            pts.sort((a, b) => Number(a && a[1] || 0) - Number(b && b[1] || 0));
+            state.centerIndex = pts.indexOf(centerN.ptRef);
         }
 
         // Snap-to-curve: find the curve color in a small region around the point
