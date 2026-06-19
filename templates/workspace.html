@@ -2459,6 +2459,30 @@
             return Math.abs(x - left) <= Math.abs(x - right) ? left : right;
         }
 
+        function shouldBreakManualFlatConnector(prevPoint, currPoint, track) {
+            if (!Array.isArray(prevPoint) || !Array.isArray(currPoint)) return false;
+            const ax = Number(prevPoint[0]);
+            const ay = Number(prevPoint[1]);
+            const bx = Number(currPoint[0]);
+            const by = Number(currPoint[1]);
+            if (![ax, ay, bx, by].every(Number.isFinite)) return false;
+
+            const prevKind = String(prevPoint[3] || '');
+            const currKind = String(currPoint[3] || '');
+            const touchesManualPoint = prevKind === 'manual' || currKind === 'manual';
+            const touchesWrapEdge = prevKind === 'wrap_edge' || currKind === 'wrap_edge';
+            if (!touchesManualPoint || touchesWrapEdge) return false;
+
+            const left = track ? Math.min(Number(track.leftX), Number(track.rightX)) : NaN;
+            const right = track ? Math.max(Number(track.leftX), Number(track.rightX)) : NaN;
+            const trackWidth = (Number.isFinite(left) && Number.isFinite(right) && right > left)
+                ? (right - left)
+                : Math.max(120, imageWidth || 120);
+            const dx = Math.abs(bx - ax);
+            const dy = Math.abs(by - ay);
+            return dx >= Math.max(42, trackWidth * 0.18) && dy <= Math.max(8, trackWidth * 0.04);
+        }
+
         function getVisibleSegmentPiecesOutsideWrapErasers(curveId, prevPoint, currPoint, track) {
             if (!Array.isArray(prevPoint) || !Array.isArray(currPoint)) return null;
             const ax = Number(prevPoint[0]);
@@ -7045,7 +7069,7 @@
                 const neighbors = [];
                 let centerDepthIdx = -1;
                 const smoothMode = document.getElementById('smoothEditToggle')?.checked;
-                const windowRadius = smoothMode ? 8 : 3;
+                const windowRadius = smoothMode ? 8 : 0;
                 for (let offset = -windowRadius; offset <= windowRadius; offset++) {
                     const idx = nearestIdx + offset;
                     if (idx < 0 || idx >= pts.length) continue;
@@ -12647,6 +12671,8 @@
                             const wrapVisiblePieces = getVisibleSegmentPiecesOutsideWrapErasers(name, prevPoint, currPoint, trackMeta);
                             if (wrapVisiblePieces !== null) {
                                 addVisibleWrapEraserSegmentPieces(ctx, wrapVisiblePieces, scaleX, scaleY);
+                                ctx.moveTo(xDom, yDom);
+                            } else if (shouldBreakManualFlatConnector(prevPoint, currPoint, trackMeta)) {
                                 ctx.moveTo(xDom, yDom);
                             } else if (isScaleWrapDisplayJump(name, prevPoint, currPoint, trackMeta) ||
                                 (splitWrappedJumps && Number.isFinite(jumpX) && jumpX > wrapJumpThreshold)) {
