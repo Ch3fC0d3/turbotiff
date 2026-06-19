@@ -7021,13 +7021,15 @@
                 let centerDepthIdx = -1;
                 const smoothMode = document.getElementById('smoothEditToggle')?.checked;
                 const windowRadius = smoothMode ? 8 : 4;
-                if (!smoothMode && Array.isArray(pts[nearestIdx])) {
-                    const centerDepth = pixelToDepthFromConfig(pts[nearestIdx][1], depthCfg);
-                    const centerDIdx = Number.isFinite(centerDepth) ? findNearestDepthIndex(centerDepth, lastDigitizedDepth) : -1;
-                    if (centerDIdx >= 0 && centerDIdx < entry.values.length) {
-                        nearestIdx = ensurePointerDragShoulders(pts, nearestIdx, centerDIdx, entry, targetTrack, depthCfg);
-                        lastCurveTraces[traceKey] = pts;
-                    }
+
+                // Remove any accumulated shoulder points from previous drags before building neighbors
+                const centerPtRef = pts[nearestIdx];
+                const purgedPts = pts.filter(pt => !Array.isArray(pt) || pt[3] !== 'manual_shoulder');
+                if (purgedPts.length !== pts.length) {
+                    pts.splice(0, pts.length, ...purgedPts);
+                    lastCurveTraces[traceKey] = pts;
+                    nearestIdx = pts.indexOf(centerPtRef);
+                    if (nearestIdx < 0) nearestIdx = 0;
                 }
                 for (let offset = -windowRadius; offset <= windowRadius; offset++) {
                     const idx = nearestIdx + offset;
@@ -7326,9 +7328,7 @@
                         weight = Math.exp(-(depthDelta * depthDelta) / (2 * sigmaDepth * sigmaDepth));
                     } else {
                         const offset = Math.max(1, Number.isFinite(n.offsetFromCenter) ? n.offsetFromCenter : Math.abs(n.pointIndex - centerIndex));
-                        if (n.pointKind === 'manual_shoulder') {
-                            weight = 0.62;
-                        } else if (offset === 1) {
+                        if (offset === 1) {
                             weight = 0.46;
                         } else if (offset === 2) {
                             weight = 0.22;
@@ -7353,10 +7353,6 @@
                 if (n.pointIndex === centerIndex) {
                     // Center point follows mouse exactly
                     newY = yImg;
-                } else if (n.pointKind === 'manual_shoulder') {
-                    // Shoulder points must stay at their original depth so they
-                    // can be found and reused on the next drag start (prevents accumulation).
-                    newY = n.originalY;
                 } else {
                     // Neighbors get weighted Y motion
                     newY = n.originalY + deltaY * weight * yWeight;
@@ -7367,9 +7363,7 @@
 
                 pts[n.pointIndex][0] = newX;
                 pts[n.pointIndex][1] = newY;
-                if (pts[n.pointIndex][3] !== 'manual_shoulder') {
-                    pts[n.pointIndex][3] = 'manual';
-                }
+                pts[n.pointIndex][3] = 'manual';
                 pts[n.pointIndex][4] = Date.now();
 
                 // Map new Y position to depth index
