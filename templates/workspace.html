@@ -7032,7 +7032,7 @@
                     if (nearestIdx < 0) nearestIdx = 0;
                 }
                 const centerPtY = pts[nearestIdx][1];
-                const influencePx = smoothMode ? 60 : 30; // Visible rubberband size in pixels
+                const influencePx = smoothMode ? 80 : 40; // Visible rubberband size in pixels
 
                 // Scan the entire array to guarantee we never miss points, even if pts is temporarily unsorted
                 for (let i = 0; i < pts.length; i++) {
@@ -7331,7 +7331,7 @@
                 return smoothMode ? Math.exp(- (normDist * normDist) * 4.0) : Math.pow(1.0 - normDist, 1.5);
             };
 
-            const yWeightMultiplier = smoothMode ? 0.8 : 0.72;
+            const yWeightMultiplier = smoothMode ? 0.92 : 0.85;
             const getEffectiveYWeight = (n) => {
                 if (!n) return 0;
                 if (n.isCenter) return 1.0;
