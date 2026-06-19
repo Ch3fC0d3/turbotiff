@@ -5900,13 +5900,6 @@
             ensureTracePointsHaveDepthIndex(curveId);
 
             const targetDepthIdx = getDepthIndexAtImageY(yImg);
-            if (targetDepthIdx >= 0) {
-                const exactIdx = findBestPointIndexForDepth(points, targetDepthIdx, yImg, xImg);
-                if (exactIdx >= 0) {
-                    return { pointIndex: exactIdx, depthIndex: targetDepthIdx };
-                }
-            }
-
             const maxYDist = Number.isFinite(options.maxYDist) ? options.maxYDist : 14;
             const maxDist = Number.isFinite(options.maxDist) ? options.maxDist : 24;
             const maxDist2 = maxDist * maxDist;
@@ -5928,6 +5921,18 @@
             }
 
             if (bestIdx < 0) {
+                if (targetDepthIdx >= 0 && options.allowDepthFallback !== false) {
+                    const exactIdx = findBestPointIndexForDepth(points, targetDepthIdx, yImg, xImg);
+                    if (exactIdx >= 0 && Array.isArray(points[exactIdx])) {
+                        const pt = points[exactIdx];
+                        const dx = Number.isFinite(xImg) ? (Number(pt[0]) - xImg) : 0;
+                        const dy = Number.isFinite(yImg) ? (Number(pt[1]) - yImg) : 0;
+                        const dist = Math.hypot(dx, dy);
+                        if (dist <= maxDist * 1.5 && Math.abs(dy) <= maxYDist * 1.5) {
+                            return { pointIndex: exactIdx, depthIndex: targetDepthIdx };
+                        }
+                    }
+                }
                 return { pointIndex: -1, depthIndex: targetDepthIdx };
             }
 
@@ -7002,8 +7007,33 @@
             pts = dedupedPts;
             lastCurveTraces[traceKey] = pts;
 
-            const picked = findEditablePointIndex(pts, xImg, yImg, editCurveId, { maxYDist: 16, maxDist: 24 });
-            const nearestIdx = picked.pointIndex;
+            const undoTracePointsForDrag = cloneTracePoints(pts);
+            const undoValuesForDrag = entry.values.map((value, valueIdx) => ({ idx: valueIdx, oldValue: value }));
+
+            const picked = findEditablePointIndex(pts, xImg, yImg, editCurveId, {
+                maxYDist: 18,
+                maxDist: 30,
+                allowDepthFallback: false,
+            });
+            let nearestIdx = picked.pointIndex;
+            if (nearestIdx < 0) {
+                const depthCfg = lastDepthConfig || getDepthConfigFromInputs();
+                const depth = pixelToDepthFromConfig(yImg, depthCfg);
+                const dIdx = Number.isFinite(depth) ? findNearestDepthIndex(depth, lastDigitizedDepth) : -1;
+                if (dIdx >= 0 && dIdx < entry.values.length && !isDepthIndexPinned(editCurveId, dIdx)) {
+                    const editX = Math.max(0, Math.min((imageWidth || xImg + 1) - 1, xImg));
+                    const editY = Math.max(0, Math.min((imageHeight || yImg + 1) - 1, yImg));
+                    const newValue = pixelToTrackValue(editX, targetTrack, { depthIndex: dIdx, values: entry.values });
+                    if (Number.isFinite(newValue)) {
+                        const stamp = Date.now();
+                        entry.values[dIdx] = newValue;
+                        pts.push([editX, editY, dIdx, 'manual', stamp]);
+                        pts.sort((a, b) => Number(a[1] || 0) - Number(b[1] || 0));
+                        lastCurveTraces[traceKey] = pts;
+                        nearestIdx = pts.findIndex(pt => Array.isArray(pt) && pt[4] === stamp);
+                    }
+                }
+            }
 
             // If close to an existing point, start a drag with minimal rubber-band (±1 neighbor)
             if (nearestIdx >= 0) {
@@ -7064,8 +7094,8 @@
                     targetTrack: targetTrack,
                     entry: entry,
                     pts: pts,
-                    undoTracePoints: cloneTracePoints(pts),
-                    undoValues: entry.values.map((value, valueIdx) => ({ idx: valueIdx, oldValue: value })),
+                    undoTracePoints: undoTracePointsForDrag,
+                    undoValues: undoValuesForDrag,
                     currentX: xImg,  // Initialize with click position
                     currentY: yImg,
                 };
@@ -8771,7 +8801,13 @@
 
                 // Optionally snap the center point back onto the colored curve (async)
                 const snapToggle = document.getElementById('snapToCurveToggle');
-                if (snapToggle && snapToggle.checked && editDragState.curveId) {
+                const dragTrackForSnap = editDragState && editDragState.curveId ? findTrackByCurveId(editDragState.curveId) : null;
+                const dragXForSnap = editDragState ? Number(editDragState.currentX) : NaN;
+                const snapInsideTrack = dragTrackForSnap &&
+                    Number.isFinite(dragXForSnap) &&
+                    dragXForSnap >= Math.min(Number(dragTrackForSnap.leftX), Number(dragTrackForSnap.rightX)) &&
+                    dragXForSnap <= Math.max(Number(dragTrackForSnap.leftX), Number(dragTrackForSnap.rightX));
+                if (snapToggle && snapToggle.checked && editDragState.curveId && snapInsideTrack) {
                     // Save state before nulling since applySnapToCurve is async
                     const savedState = { ...editDragState };
                     try {
