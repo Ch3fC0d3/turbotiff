@@ -7034,44 +7034,39 @@
                 const centerPtY = pts[nearestIdx][1];
                 const influencePx = smoothMode ? 60 : 30; // Visible rubberband size in pixels
 
-                // Scan outward in both directions to get ALL points within influencePx
-                for (let dir of [-1, 1]) {
-                    for (let i = (dir === -1 ? -1 : 0); ; i += dir) {
-                        const idx = nearestIdx + i;
-                        if (idx < 0 || idx >= pts.length) break;
+                // Scan the entire array to guarantee we never miss points, even if pts is temporarily unsorted
+                for (let i = 0; i < pts.length; i++) {
+                    const ptX = pts[i][0];
+                    const ptY = pts[i][1];
+                    const distPx = Math.abs(ptY - centerPtY);
+                    
+                    if (distPx > influencePx) continue; 
+                    
+                    const depth = pixelToDepthFromConfig(ptY, depthCfg);
+                    if (!Number.isFinite(depth)) continue;
 
-                        const ptX = pts[idx][0];
-                        const ptY = pts[idx][1];
-                        const distPx = Math.abs(ptY - centerPtY);
-                        
-                        if (distPx > influencePx) break; // Array is sorted by Y, so we can stop searching this direction
-                        
-                        const depth = pixelToDepthFromConfig(ptY, depthCfg);
-                        if (!Number.isFinite(depth)) continue;
+                    const dIdx = findNearestDepthIndex(depth, lastDigitizedDepth);
+                    if (dIdx < 0 || dIdx >= entry.values.length) continue;
 
-                        const dIdx = findNearestDepthIndex(depth, lastDigitizedDepth);
-                        if (dIdx < 0 || dIdx >= entry.values.length) continue;
+                    pts[i][2] = dIdx;
 
-                        pts[idx][2] = dIdx;
-
-                        if (idx === nearestIdx) {
-                            centerDepthIdx = dIdx;
-                        }
-
-                        neighbors.push({
-                            pointIndex: idx,
-                            offsetFromCenter: Math.abs(idx - nearestIdx),
-                            distPx: distPx,
-                            influencePx: influencePx,
-                            depthIndex: dIdx,
-                            originalDepthIndex: dIdx,
-                            currentDepthIndex: dIdx,
-                            originalX: ptX,
-                            originalY: ptY,
-                            pointKind: String(pts[idx][3] || ''),
-                            originalValue: entry.values[dIdx],
-                        });
+                    if (i === nearestIdx) {
+                        centerDepthIdx = dIdx;
                     }
+
+                    neighbors.push({
+                        pointIndex: i,
+                        offsetFromCenter: Math.abs(i - nearestIdx),
+                        distPx: distPx,
+                        influencePx: influencePx,
+                        depthIndex: dIdx,
+                        originalDepthIndex: dIdx,
+                        currentDepthIndex: dIdx,
+                        originalX: ptX,
+                        originalY: ptY,
+                        pointKind: String(pts[i][3] || ''),
+                        originalValue: entry.values[dIdx],
+                    });
                 }
 
                 if (!neighbors.length) return false;
