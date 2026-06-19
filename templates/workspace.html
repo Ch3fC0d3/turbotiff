@@ -6080,8 +6080,8 @@
             const entry = lastDigitizedCurves[curveKey];
             if (!entry || !Array.isArray(entry.values) || idx >= entry.values.length) return;
 
-            const clampedX = Math.max(targetTrack.leftX, Math.min(targetTrack.rightX, xImg));
-            const newValue = pixelToTrackValue(clampedX, targetTrack, { depthIndex: idx, values: entry.values });
+            const editX = Math.max(0, Math.min((imageWidth || xImg + 1) - 1, xImg));
+            const newValue = pixelToTrackValue(editX, targetTrack, { depthIndex: idx, values: entry.values });
             if (!Number.isFinite(newValue)) return;
 
             // Save old value for undo
@@ -6094,7 +6094,7 @@
             const pts = activeTrace.points;
             if (Array.isArray(pts) && pts.length) {
                 ensureTracePointsHaveDepthIndex(editCurveId);
-                const picked = findEditablePointIndex(pts, clampedX, yImgUse, editCurveId, { maxYDist: 14, maxDist: 24 });
+                const picked = findEditablePointIndex(pts, editX, yImgUse, editCurveId, { maxYDist: 14, maxDist: 24 });
                 const bestIdxPt = picked.pointIndex;
                 const bestDy = (bestIdxPt >= 0 && Array.isArray(pts[bestIdxPt])) ? Math.abs(pts[bestIdxPt][1] - yImgUse) : Infinity;
                 if (bestIdxPt >= 0 && bestDy <= 10) {
@@ -6117,23 +6117,22 @@
 
             if (pts2.length) {
                 ensureTracePointsHaveDepthIndex(editCurveId);
-                const picked = findEditablePointIndex(pts2, clampedX, yImg, editCurveId, { maxYDist: 14, maxDist: 24 });
+                const picked = findEditablePointIndex(pts2, editX, yImg, editCurveId, { maxYDist: 14, maxDist: 24 });
                 const bestIdxPt = picked.pointIndex;
                 const bestDy = (bestIdxPt >= 0 && Array.isArray(pts2[bestIdxPt])) ? Math.abs(pts2[bestIdxPt][1] - yImg) : Infinity;
 
                 if (bestIdxPt >= 0 && bestDy <= 10) {
-                    pts2[bestIdxPt][0] = clampedX;
+                    pts2[bestIdxPt][0] = editX;
                     pts2[bestIdxPt][1] = yImg;
                     pts2[bestIdxPt][2] = idx;
                 } else {
-                    pts2.push([clampedX, yImg, idx]);
+                    pts2.push([editX, yImg, idx]);
                 }
             } else {
-                pts2.push([clampedX, yImg, idx]);
+                pts2.push([editX, yImg, idx]);
             }
 
             lastCurveTraces[traceKey] = pts2;
-            rebuildCurveTraceFromDigitized(editCurveId);
             renderCurveTraceOverlays(lastCurveTraces);
         }
 
@@ -6263,8 +6262,8 @@
             const entry = lastDigitizedCurves[curveKey];
             if (!entry || !Array.isArray(entry.values) || idx >= entry.values.length) return;
 
-            const clampedX = Math.max(targetTrack.leftX, Math.min(targetTrack.rightX, xImg));
-            const newValue = pixelToTrackValue(clampedX, targetTrack, { depthIndex: idx, values: entry.values });
+            const editX = Math.max(0, Math.min((imageWidth || xImg + 1) - 1, xImg));
+            const newValue = pixelToTrackValue(editX, targetTrack, { depthIndex: idx, values: entry.values });
             if (!Number.isFinite(newValue)) return;
 
             const oldValue = entry.values[idx];
@@ -6306,14 +6305,14 @@
             for (let dIdx = Math.max(0, idx - crestRadius); dIdx <= Math.min(entry.values.length - 1, idx + crestRadius); dIdx++) {
                 if (isDepthIndexPinned(editCurveId, dIdx)) continue;
                 const pointY = (dIdx === idx) ? yTrace : (getPixelYForDepthIndex(dIdx, depthCfg) ?? yTrace);
-                const pointValue = pixelToTrackValue(clampedX, targetTrack, { depthIndex: dIdx, values: entry.values });
+                const pointValue = pixelToTrackValue(editX, targetTrack, { depthIndex: dIdx, values: entry.values });
                 if (!Number.isFinite(pointValue)) continue;
                 entry.values[dIdx] = pointValue;
                 touchedDepths.push(dIdx);
 
-                let existingIdx = findBestPointIndexForDepth(pts, dIdx, pointY, clampedX);
+                let existingIdx = findBestPointIndexForDepth(pts, dIdx, pointY, editX);
                 if (existingIdx < 0) {
-                    const picked = findEditablePointIndex(pts, clampedX, pointY, editCurveId, { maxYDist: 6, maxDist: 18 });
+                    const picked = findEditablePointIndex(pts, editX, pointY, editCurveId, { maxYDist: 6, maxDist: 18 });
                     existingIdx = picked.pointIndex;
                     if (existingIdx >= 0 && Array.isArray(pts[existingIdx]) && Number.isInteger(pts[existingIdx][2]) && pts[existingIdx][2] !== dIdx) {
                         existingIdx = -1;
@@ -6321,13 +6320,13 @@
                 }
 
                 if (existingIdx >= 0) {
-                    pts[existingIdx][0] = clampedX;
+                    pts[existingIdx][0] = editX;
                     pts[existingIdx][1] = pointY;
                     pts[existingIdx][2] = dIdx;
                     pts[existingIdx][3] = 'manual';
                     pts[existingIdx][4] = manualPointStamp;
                 } else {
-                    pts.push([clampedX, pointY, dIdx, 'manual', manualPointStamp]);
+                    pts.push([editX, pointY, dIdx, 'manual', manualPointStamp]);
                 }
             }
 
@@ -6696,7 +6695,7 @@
             }
 
             if (last.type === 'drag_group_v2') {
-                const { curveKey, curveId, points, values } = last;
+                const { curveKey, curveId, points, values, undoTracePoints } = last;
                 const traceKey = last.traceKey || curveId;
 
                 if (lastDigitizedCurves && lastDigitizedCurves[curveKey] && Array.isArray(lastDigitizedCurves[curveKey].values)) {
@@ -6708,6 +6707,13 @@
                             }
                         });
                     }
+                }
+
+                if (lastCurveTraces && traceKey && Array.isArray(undoTracePoints)) {
+                    lastCurveTraces[traceKey] = cloneTracePoints(undoTracePoints);
+                    renderCurveTraceOverlays(lastCurveTraces);
+                    showStatus('Undo: restored drag.', 'info');
+                    return;
                 }
 
                 if (lastCurveTraces && lastCurveTraces[traceKey] && Array.isArray(points)) {
@@ -6731,7 +6737,6 @@
                         }
                     });
                     pts.sort((a, b) => a[1] - b[1]);
-                    rebuildCurveTraceFromDigitized(curveId);
                     renderCurveTraceOverlays(lastCurveTraces);
                 }
 
@@ -6908,7 +6913,6 @@
                         pts.sort((a, b) => a[1] - b[1]);
                     }
                 }
-                rebuildCurveTraceFromDigitized(curveId);
                 renderCurveTraceOverlays(lastCurveTraces);
             }
             showStatus(`Undo: restored depth index ${idx} to ${oldValue !== null && oldValue !== undefined ? oldValue.toFixed(2) : 'null'}`, 'info');
@@ -6925,7 +6929,6 @@
                 showStatus(`Cannot edit: curve "${curveKey}" not found in digitized data. Available: ${Object.keys(lastDigitizedCurves).join(', ')}`, 'error');
                 return false;
             }
-            rebuildCurveTraceFromDigitized(editCurveId);
             const targetTrack = findTrackByCurveId(editCurveId);
             if (!targetTrack) {
                 const tracks = getTrackCalibrationsSnapshot();
@@ -6940,7 +6943,11 @@
             let pts = activeTrace.points;
             const entry = lastDigitizedCurves[curveKey];
             if (!Array.isArray(pts) || !Array.isArray(entry.values)) {
-                return false;
+                const rebuilt = rebuildCurveTraceFromDigitized(editCurveId);
+                pts = rebuilt && Array.isArray(rebuilt.points) ? rebuilt.points : null;
+                if (!Array.isArray(pts) || !Array.isArray(entry.values)) {
+                    return false;
+                }
             }
 
             ensureTracePointsHaveDepthIndex(editCurveId);
@@ -7030,6 +7037,8 @@
                     neighbors.push({
                         pointIndex: idx,
                         depthIndex: dIdx,
+                        originalDepthIndex: dIdx,
+                        currentDepthIndex: dIdx,
                         originalX: ptX,
                         originalY: ptY,
                         originalValue: entry.values[dIdx],
@@ -7055,6 +7064,8 @@
                     targetTrack: targetTrack,
                     entry: entry,
                     pts: pts,
+                    undoTracePoints: cloneTracePoints(pts),
+                    undoValues: entry.values.map((value, valueIdx) => ({ idx: valueIdx, oldValue: value })),
                     currentX: xImg,  // Initialize with click position
                     currentY: yImg,
                 };
@@ -7209,8 +7220,35 @@
             // Pass 1: Clear old indices to prevent values overwriting each other when shifting up/down
             neighbors.forEach(n => {
                 if (isDepthIndexPinned(state.curveId, n.depthIndex) && n.pointIndex !== centerIndex) return;
-                if (n.depthIndex >= 0 && n.depthIndex < entry.values.length) {
-                    entry.values[n.depthIndex] = null;
+                const oldIdx = Number.isInteger(n.currentDepthIndex) ? n.currentDepthIndex : n.depthIndex;
+                const originalIdx = Number.isInteger(n.originalDepthIndex) ? n.originalDepthIndex : n.depthIndex;
+                [oldIdx, originalIdx].forEach(idx => {
+                    if (idx >= 0 && idx < entry.values.length) {
+                        entry.values[idx] = null;
+                    }
+                });
+            });
+
+            if (Array.isArray(state.undoValues)) {
+                state.undoValues.forEach(v => {
+                    if (v && Number.isInteger(v.idx) && v.idx >= 0 && v.idx < entry.values.length) {
+                        const stillOwnedByMovingPoint = neighbors.some(n => {
+                            const oldIdx = Number.isInteger(n.currentDepthIndex) ? n.currentDepthIndex : n.depthIndex;
+                            const originalIdx = Number.isInteger(n.originalDepthIndex) ? n.originalDepthIndex : n.depthIndex;
+                            return oldIdx === v.idx || originalIdx === v.idx;
+                        });
+                        if (!stillOwnedByMovingPoint && isMissingDigitizedValue(entry.values[v.idx])) {
+                            entry.values[v.idx] = v.oldValue;
+                        }
+                    }
+                });
+            }
+
+            neighbors.forEach(n => {
+                if (isDepthIndexPinned(state.curveId, n.depthIndex) && n.pointIndex !== centerIndex) return;
+                const priorIdx = Number.isInteger(n.currentDepthIndex) ? n.currentDepthIndex : n.depthIndex;
+                if (priorIdx >= 0 && priorIdx < entry.values.length) {
+                    entry.values[priorIdx] = null;
                 }
             });
 
@@ -7265,7 +7303,7 @@
                 }
                 
                 pts[n.pointIndex][2] = newDepthIndex;
-                n.depthIndex = newDepthIndex; // Update neighbor state for future iterations in this drag
+                n.currentDepthIndex = newDepthIndex;
 
                 const newVal = pixelToTrackValue(newX, targetTrack, { depthIndex: newDepthIndex, values: entry.values });
                 if (Number.isFinite(newVal)) {
@@ -8243,7 +8281,9 @@
                 }
 
                 const clickedTrack = getTrackUnderImageX(xImg);
-                if (!clickedTrack) {
+                const allowSelectedCurveOffTrackEdit = !clickedTrack &&
+                    (activeTool === 'pointer' || activeTool === 'addPoint' || activeTool === 'draw');
+                if (!clickedTrack && !allowSelectedCurveOffTrackEdit) {
                     event.preventDefault();
                     return;
                 }
@@ -8254,8 +8294,8 @@
                 // "locked to GR" warning when the track's internal id differs
                 // from its display mnemonic (e.g. id="curve_0" name="GR").
                 const target = normalizeCurveKey(editCurveId);
-                const trackIds = [clickedTrack.id, clickedTrack.name, clickedTrack.displayName];
-                const matchesSelected = trackIds.some(v => normalizeCurveKey(v) === target);
+                const trackIds = clickedTrack ? [clickedTrack.id, clickedTrack.name, clickedTrack.displayName] : [];
+                const matchesSelected = !clickedTrack || trackIds.some(v => normalizeCurveKey(v) === target);
                 if (!matchesSelected) {
                     showStatus(`Edit mode is locked to ${editCurveId}. Change the curve in the dropdown first.`, 'info');
                     event.preventDefault();
@@ -8687,34 +8727,14 @@
                     const pts = (traceKey && lastCurveTraces) ? lastCurveTraces[traceKey] : null;
                     const entry = (curveKey && lastDigitizedCurves) ? lastDigitizedCurves[curveKey] : null;
                     if (state && curveKey && curveId && Array.isArray(pts) && entry && Array.isArray(entry.values)) {
-                        const pointsUndo = [];
-                        const valuesUndoMap = new Map();
-
-                        const neighbors = Array.isArray(state.neighbors) ? state.neighbors : [];
-                        neighbors.forEach(n => {
-                            if (!n || !Number.isInteger(n.pointIndex)) return;
-                            pointsUndo.push({
-                                pointIndex: n.pointIndex,
-                                oldX: n.originalX,
-                                oldY: n.originalY,
-                                oldDepthIndex: n.depthIndex,
-                            });
-                            if (Number.isInteger(n.depthIndex)) {
-                                valuesUndoMap.set(n.depthIndex, n.originalValue);
-                            }
-                        });
-
-                        const valuesUndo = Array.from(valuesUndoMap.entries()).map(([idx, oldValue]) => ({ idx, oldValue }));
                         editUndoStack.push({
                             type: 'drag_group_v2',
                             curveKey,
                             curveId,
                             traceKey,
-                            points: pointsUndo,
-                            values: valuesUndo,
+                            undoTracePoints: cloneTracePoints(state.undoTracePoints),
+                            values: Array.isArray(state.undoValues) ? state.undoValues.map(v => ({ ...v })) : [],
                         });
-
-                        rebuildCurveTraceFromDigitized(curveId);
                     }
                 } catch (e) {
                     console.warn('Drag finalize failed', e);
@@ -8776,7 +8796,6 @@
                     editDragState = null;
                     try {
                         await applySnapToCurve(savedState);
-                        rebuildCurveTraceFromDigitized(savedState.curveId);
                         if (lastCurveTraces) {
                             renderCurveTraceOverlays(lastCurveTraces);
                         }
