@@ -12846,7 +12846,7 @@
                             const xDom = (currPoint[0] * scaleX);
                             const yDom = (currPoint[1] * scaleY);
                             const dx = Math.abs(currPoint[0] - prevPoint[0]);
-                            const tWidth = trackMeta ? Math.abs((trackMeta.right || 0) - (trackMeta.left || 0)) : 0;
+                            const tWidth = trackMeta ? Math.abs((trackMeta.rightX || 0) - (trackMeta.leftX || 0)) : 0;
                             const isHeuristicWrap = tWidth > 0 && dx > tWidth * 0.5;
 
                             if (isSegmentHiddenByWrapEraser(name, prevPoint, currPoint, trackMeta) ||
