@@ -2353,6 +2353,37 @@
             return [];
         }
 
+        function getEffectiveWrapEraseBoxesForRenderCurve(curveId, track) {
+            const boxes = getWrapEraseBoxesForRenderCurve(curveId, track);
+            if (!boxes.length) return [];
+
+            const left = track ? Math.min(Number(track.leftX), Number(track.rightX)) : NaN;
+            const right = track ? Math.max(Number(track.leftX), Number(track.rightX)) : NaN;
+            const trackWidth = right - left;
+
+            return boxes.map(box => {
+                const clean = {
+                    x1: Math.min(Number(box.x1), Number(box.x2)),
+                    y1: Math.min(Number(box.y1), Number(box.y2)),
+                    x2: Math.max(Number(box.x1), Number(box.x2)),
+                    y2: Math.max(Number(box.y1), Number(box.y2)),
+                };
+                if (![clean.x1, clean.y1, clean.x2, clean.y2].every(Number.isFinite)) return null;
+
+                if (Number.isFinite(trackWidth) && trackWidth > 0) {
+                    const edgePad = Math.min(32, Math.max(10, trackWidth * 0.08));
+                    const boxWidth = clean.x2 - clean.x1;
+                    const reachesLeft = clean.x1 <= left + edgePad;
+                    const reachesRight = clean.x2 >= right - edgePad;
+                    if (boxWidth >= trackWidth * 0.5 && reachesLeft && reachesRight && trackWidth > edgePad * 3) {
+                        clean.x1 = Math.max(clean.x1, left + edgePad);
+                        clean.x2 = Math.min(clean.x2, right - edgePad);
+                    }
+                }
+                return clean.x2 > clean.x1 && clean.y2 > clean.y1 ? clean : null;
+            }).filter(Boolean);
+        }
+
         function isSegmentHiddenByWrapEraser(curveId, prevPoint, currPoint, track) {
             if (!Array.isArray(prevPoint) || !Array.isArray(currPoint)) return false;
             const x0 = Number(prevPoint[0]);
@@ -2360,8 +2391,100 @@
             const x1 = Number(currPoint[0]);
             const y1 = Number(currPoint[1]);
             if (![x0, y0, x1, y1].every(Number.isFinite)) return false;
-            const boxes = getWrapEraseBoxesForRenderCurve(curveId, track);
+            const boxes = getEffectiveWrapEraseBoxesForRenderCurve(curveId, track);
             return boxes.some(box => segmentTouchesBox(x0, y0, x1, y1, box.x1, box.y1, box.x2, box.y2));
+        }
+
+        function segmentBoxOverlapInterval(ax, ay, bx, by, box) {
+            const dx = bx - ax;
+            const dy = by - ay;
+            let t0 = 0;
+            let t1 = 1;
+            const clip = (p, q) => {
+                if (Math.abs(p) < 1e-9) return q >= 0;
+                const r = q / p;
+                if (p < 0) {
+                    if (r > t1) return false;
+                    if (r > t0) t0 = r;
+                } else {
+                    if (r < t0) return false;
+                    if (r < t1) t1 = r;
+                }
+                return true;
+            };
+
+            if (!clip(-dx, ax - box.x1)) return null;
+            if (!clip(dx, box.x2 - ax)) return null;
+            if (!clip(-dy, ay - box.y1)) return null;
+            if (!clip(dy, box.y2 - ay)) return null;
+            if (t1 <= t0) return null;
+            return [Math.max(0, t0), Math.min(1, t1)];
+        }
+
+        function getVisibleSegmentPiecesOutsideWrapErasers(curveId, prevPoint, currPoint, track) {
+            if (!Array.isArray(prevPoint) || !Array.isArray(currPoint)) return null;
+            const ax = Number(prevPoint[0]);
+            const ay = Number(prevPoint[1]);
+            const bx = Number(currPoint[0]);
+            const by = Number(currPoint[1]);
+            if (![ax, ay, bx, by].every(Number.isFinite)) return null;
+
+            const boxes = getEffectiveWrapEraseBoxesForRenderCurve(curveId, track);
+            if (!boxes.length) return null;
+
+            const hidden = [];
+            boxes.forEach(box => {
+                if (!segmentTouchesBox(ax, ay, bx, by, box.x1, box.y1, box.x2, box.y2)) return;
+                const interval = segmentBoxOverlapInterval(ax, ay, bx, by, box);
+                if (interval) hidden.push(interval);
+            });
+            if (!hidden.length) return null;
+
+            hidden.sort((a, b) => a[0] - b[0]);
+            const merged = [];
+            hidden.forEach(interval => {
+                const last = merged.length ? merged[merged.length - 1] : null;
+                if (!last || interval[0] > last[1]) {
+                    merged.push(interval.slice());
+                } else {
+                    last[1] = Math.max(last[1], interval[1]);
+                }
+            });
+
+            const pointAt = (t) => ({
+                x: ax + (bx - ax) * t,
+                y: ay + (by - ay) * t,
+            });
+            const pieces = [];
+            let cursor = 0;
+            merged.forEach(interval => {
+                const start = Math.max(0, interval[0]);
+                const end = Math.min(1, interval[1]);
+                if (start > cursor + 1e-4) {
+                    const a = pointAt(cursor);
+                    const b = pointAt(start);
+                    if (Math.hypot(b.x - a.x, b.y - a.y) >= 1.0) pieces.push([a, b]);
+                }
+                cursor = Math.max(cursor, end);
+            });
+            if (cursor < 1 - 1e-4) {
+                const a = pointAt(cursor);
+                const b = pointAt(1);
+                if (Math.hypot(b.x - a.x, b.y - a.y) >= 1.0) pieces.push([a, b]);
+            }
+            return pieces;
+        }
+
+        function addVisibleWrapEraserSegmentPieces(ctx, pieces, scaleX, scaleY) {
+            if (!ctx || !Array.isArray(pieces)) return;
+            pieces.forEach(piece => {
+                if (!Array.isArray(piece) || piece.length < 2) return;
+                const a = piece[0];
+                const b = piece[1];
+                if (!a || !b || ![a.x, a.y, b.x, b.y].every(Number.isFinite)) return;
+                ctx.moveTo(a.x * scaleX, a.y * scaleY);
+                ctx.lineTo(b.x * scaleX, b.y * scaleY);
+            });
         }
 
         function isScaleWrapDisplayJump(curveId, prevPoint, currPoint, track) {
@@ -2676,7 +2799,7 @@
                 return 0;
             }
             if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
-            showStatus('Wrap Eraser hid the selected foreground area.', 'success');
+            showStatus('Wrap Eraser hid the middle and kept edge pieces visible for editing.', 'success');
             return 1;
         }
 
@@ -12227,7 +12350,11 @@
                             const xDom = (currPoint[0] * scaleX);
                             const yDom = (currPoint[1] * scaleY);
                             const jumpX = Math.abs(Number(currPoint[0]) - Number(prevPoint[0]));
-                            if (isScaleWrapDisplayJump(name, prevPoint, currPoint, trackMeta) ||
+                            const wrapVisiblePieces = getVisibleSegmentPiecesOutsideWrapErasers(name, prevPoint, currPoint, trackMeta);
+                            if (wrapVisiblePieces !== null) {
+                                addVisibleWrapEraserSegmentPieces(ctx, wrapVisiblePieces, scaleX, scaleY);
+                                ctx.moveTo(xDom, yDom);
+                            } else if (isScaleWrapDisplayJump(name, prevPoint, currPoint, trackMeta) ||
                                 (splitWrappedJumps && Number.isFinite(jumpX) && jumpX > wrapJumpThreshold)) {
                                 ctx.moveTo(xDom, yDom);
                             } else {
