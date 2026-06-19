@@ -7334,62 +7334,7 @@
                 return getWeight(n);
             };
 
-            let maxDownY = Infinity;
-            let maxUpY = -Infinity;
-
-            if (neighbors.length > 0) {
-                // Prevent neighbors from crossing each other
-                if (neighbors.length > 1) {
-                    for (let i = 0; i < neighbors.length - 1; i++) {
-                        const nA = neighbors[i];
-                        const nB = neighbors[i + 1];
-                        const wA = getEffectiveYWeight(nA);
-                        const wB = getEffectiveYWeight(nB);
-                        const yA = nA.originalY;
-                        const yB = nB.originalY;
-                        const gap = yB - yA;
-
-                        const weightDiff = wA - wB;
-                        if (Math.abs(weightDiff) > 0.0001) {
-                            const limit = gap / weightDiff;
-                            if (weightDiff > 0) {
-                                // A moves faster down than B. Limit positive deltaY
-                                maxDownY = Math.min(maxDownY, limit * 0.95);
-                            } else {
-                                // B moves faster up than A. Limit negative deltaY
-                                maxUpY = Math.max(maxUpY, limit * 0.95);
-                            }
-                        }
-                    }
-                }
-
-                // Prevent outermost neighbors from crossing the fixed points outside the window
-                const firstN = neighbors[0];
-                const fixedAboveIdx = firstN.pointIndex - 1;
-                if (fixedAboveIdx >= 0) {
-                    const yFixed = pts[fixedAboveIdx][1];
-                    const gap = firstN.originalY - yFixed;
-                    const wA = getEffectiveYWeight(firstN);
-                    if (wA > 0.0001) {
-                        const limit = -(gap / wA) * 0.95;
-                        maxUpY = Math.max(maxUpY, limit);
-                    }
-                }
-
-                const lastN = neighbors[neighbors.length - 1];
-                const fixedBelowIdx = lastN.pointIndex + 1;
-                if (fixedBelowIdx < pts.length) {
-                    const yFixed = pts[fixedBelowIdx][1];
-                    const gap = yFixed - lastN.originalY;
-                    const wB = getEffectiveYWeight(lastN);
-                    if (wB > 0.0001) {
-                        const limit = (gap / wB) * 0.95;
-                        maxDownY = Math.min(maxDownY, limit);
-                    }
-                }
-            }
-
-            const safeDeltaY = Math.max(maxUpY, Math.min(maxDownY, deltaY));
+            const safeDeltaY = deltaY;
 
             // Pass 2: Calculate new positions and write to new depth indices
             neighbors.forEach(n => {
