@@ -12821,12 +12821,8 @@
                             const xDom = (currPoint[0] * scaleX);
                             const yDom = (currPoint[1] * scaleY);
                             const jumpX = Math.abs(Number(currPoint[0]) - Number(prevPoint[0]));
-                            const depthGap = Number.isInteger(prevPoint[2]) && Number.isInteger(currPoint[2])
-                                ? Math.abs(currPoint[2] - prevPoint[2])
-                                : 0;
                             const isWrapTail = (prevPoint[3] === 'wrap_edge') !== (currPoint[3] === 'wrap_edge');
                             if (isSegmentHiddenByWrapEraser(name, prevPoint, currPoint, trackMeta) ||
-                                depthGap > 3 ||
                                 (!isWrapTail && Number.isFinite(jumpX) && jumpX > wrapJumpThreshold)) {
                                 ctx.moveTo(xDom, yDom);
                             } else {
