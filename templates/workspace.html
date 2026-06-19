@@ -7037,6 +7037,41 @@
             if (nearestIdx >= 0) {
                 const depthCfg = lastDepthConfig || getDepthConfigFromInputs();
 
+                const selectedPoint = pts[nearestIdx];
+                if (Array.isArray(selectedPoint) && selectedPoint[3] === 'wrap_edge') {
+                    const selectedDepth = pixelToDepthFromConfig(selectedPoint[1], depthCfg);
+                    const selectedDepthIdx = Number.isFinite(selectedDepth)
+                        ? findNearestDepthIndex(selectedDepth, lastDigitizedDepth)
+                        : selectedPoint[2];
+                    if (!Number.isInteger(selectedDepthIdx) || selectedDepthIdx < 0 || selectedDepthIdx >= entry.values.length) {
+                        return false;
+                    }
+                    if (isDepthIndexPinned(editCurveId, selectedDepthIdx)) {
+                        showStatus('That point is pinned and cannot be moved.', 'info');
+                        return false;
+                    }
+                    editDragState = {
+                        curveId: editCurveId,
+                        curveKey,
+                        traceKey,
+                        centerIndex: nearestIdx,
+                        pointIndex: nearestIdx,
+                        depthIndex: selectedDepthIdx,
+                        isWrapEdge: true,
+                        wrapEdgePoint: selectedPoint,
+                        wrapEdgeX: nearestTrackEdgeX(targetTrack, selectedPoint[0]),
+                        neighbors: [],
+                        targetTrack,
+                        entry,
+                        pts,
+                        undoTracePoints: cloneTracePoints(pts),
+                        undoValues: entry.values.map((value, valueIdx) => ({ idx: valueIdx, oldValue: value })),
+                        currentX: selectedPoint[0],
+                        currentY: selectedPoint[1],
+                    };
+                    return true;
+                }
+
                 // Cache the target track
                 // Build neighbor set with wider window for smooth Gaussian falloff
                 // Wider window (±8) prevents kinks at the boundary of the edit region
@@ -7280,6 +7315,40 @@
             const img = document.getElementById('imagePreview');
             const imgW = imageWidth || (img && (img.naturalWidth || img.width)) || 1;
             const imgH = imageHeight || (img && (img.naturalHeight || img.height)) || 1;
+
+            if (state.isWrapEdge && Array.isArray(state.wrapEdgePoint)) {
+                const point = state.wrapEdgePoint;
+                const oldDepthIndex = Number.isInteger(state.depthIndex) ? state.depthIndex : point[2];
+                if (Number.isInteger(oldDepthIndex) && oldDepthIndex >= 0 && oldDepthIndex < entry.values.length) {
+                    entry.values[oldDepthIndex] = null;
+                }
+
+                const edgeX = Number.isFinite(Number(state.wrapEdgeX))
+                    ? Number(state.wrapEdgeX)
+                    : nearestTrackEdgeX(targetTrack, point[0]);
+                const newY = Math.max(0, Math.min(imgH - 1, Number(yImg)));
+                const depthCfg = lastDepthConfig || getDepthConfigFromInputs();
+                const newDepth = pixelToDepthFromConfig(newY, depthCfg);
+                const newDepthIndex = Number.isFinite(newDepth)
+                    ? findNearestDepthIndex(newDepth, lastDigitizedDepth)
+                    : oldDepthIndex;
+                if (!Number.isFinite(edgeX) || !Number.isInteger(newDepthIndex) || newDepthIndex < 0 || newDepthIndex >= entry.values.length) {
+                    return;
+                }
+
+                point[0] = edgeX;
+                point[1] = newY;
+                point[2] = newDepthIndex;
+                point[3] = 'wrap_edge';
+                point[4] = Date.now();
+                const newValue = pixelToTrackValue(edgeX, targetTrack, { depthIndex: newDepthIndex, values: entry.values });
+                if (Number.isFinite(newValue)) entry.values[newDepthIndex] = newValue;
+                state.depthIndex = newDepthIndex;
+                pts.sort((a, b) => Number(a && a[1] || 0) - Number(b && b[1] || 0));
+                state.centerIndex = pts.indexOf(point);
+                state.pointIndex = state.centerIndex;
+                return;
+            }
 
             // Find the center neighbor to compute deltas
             const centerN = neighbors.find(n => n.isCenter);
@@ -8895,7 +8964,7 @@
                 }
 
                 const smoothToggle = document.getElementById('smoothEditToggle');
-                if (smoothToggle && smoothToggle.checked) {
+                if (smoothToggle && smoothToggle.checked && !editDragState.isWrapEdge) {
                     try {
                         const state = editDragState;
                         const traceKey = state ? (state.traceKey || getActiveCurveTraceKey(state.curveId) || state.curveId) : null;
@@ -8926,7 +8995,7 @@
                     Number.isFinite(dragXForSnap) &&
                     dragXForSnap >= Math.min(Number(dragTrackForSnap.leftX), Number(dragTrackForSnap.rightX)) &&
                     dragXForSnap <= Math.max(Number(dragTrackForSnap.leftX), Number(dragTrackForSnap.rightX));
-                if (snapToggle && snapToggle.checked && editDragState.curveId && snapInsideTrack) {
+                if (snapToggle && snapToggle.checked && editDragState.curveId && snapInsideTrack && !editDragState.isWrapEdge) {
                     // Save state before nulling since applySnapToCurve is async
                     const savedState = { ...editDragState };
                     try {
