@@ -7015,7 +7015,7 @@
                 const neighbors = [];
                 let centerDepthIdx = -1;
                 const smoothMode = document.getElementById('smoothEditToggle')?.checked;
-                const windowRadius = smoothMode ? 8 : 3;
+                const windowRadius = smoothMode ? 8 : 0;
                 for (let offset = -windowRadius; offset <= windowRadius; offset++) {
                     const idx = nearestIdx + offset;
                     if (idx < 0 || idx >= pts.length) continue;
@@ -7291,6 +7291,8 @@
 
                 pts[n.pointIndex][0] = newX;
                 pts[n.pointIndex][1] = newY;
+                pts[n.pointIndex][3] = 'manual';
+                pts[n.pointIndex][4] = Date.now();
 
                 // Map new Y position to depth index
                 const newDepth = pixelToDepthFromConfig(newY, depthCfg);
@@ -7304,6 +7306,9 @@
                 
                 pts[n.pointIndex][2] = newDepthIndex;
                 n.currentDepthIndex = newDepthIndex;
+                if (n.pointIndex === centerIndex) {
+                    state.depthIndex = newDepthIndex;
+                }
 
                 const newVal = pixelToTrackValue(newX, targetTrack, { depthIndex: newDepthIndex, values: entry.values });
                 if (Number.isFinite(newVal)) {
@@ -12136,7 +12141,9 @@
             const img = document.getElementById('imagePreview');
             const canvas = document.getElementById('curveCanvas');
 
-            const focusCurveId = opts && opts.focusCurveId ? String(opts.focusCurveId) : null;
+            const focusCurveId = opts && opts.focusCurveId
+                ? String(opts.focusCurveId)
+                : ((editMode && editCurveId) ? String(editCurveId) : null);
             const fastMode = !!(opts && opts.fastMode);
             const editTraceKey = (editMode && editCurveId) ? getActiveCurveTraceKey(editCurveId) : null;
             const editTraceNorm = editMode && editCurveId ? normalizeCurveKey(editCurveId) : '';
