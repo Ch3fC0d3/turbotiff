@@ -7353,6 +7353,10 @@
                 if (n.pointIndex === centerIndex) {
                     // Center point follows mouse exactly
                     newY = yImg;
+                } else if (n.pointKind === 'manual_shoulder') {
+                    // Shoulder points must stay at their original depth so they
+                    // can be found and reused on the next drag start (prevents accumulation).
+                    newY = n.originalY;
                 } else {
                     // Neighbors get weighted Y motion
                     newY = n.originalY + deltaY * weight * yWeight;
@@ -7363,7 +7367,9 @@
 
                 pts[n.pointIndex][0] = newX;
                 pts[n.pointIndex][1] = newY;
-                pts[n.pointIndex][3] = 'manual';
+                if (pts[n.pointIndex][3] !== 'manual_shoulder') {
+                    pts[n.pointIndex][3] = 'manual';
+                }
                 pts[n.pointIndex][4] = Date.now();
 
                 // Map new Y position to depth index
