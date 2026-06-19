@@ -6323,14 +6323,9 @@
                 entry.values[dIdx] = pointValue;
                 touchedDepths.push(dIdx);
 
+                // Only match by exact depth index — never grab a nearby point at a
+                // different depth, which would silently overwrite it ("disappearing" points).
                 let existingIdx = findBestPointIndexForDepth(pts, dIdx, pointY, editX);
-                if (existingIdx < 0) {
-                    const picked = findEditablePointIndex(pts, editX, pointY, editCurveId, { maxYDist: 6, maxDist: 18 });
-                    existingIdx = picked.pointIndex;
-                    if (existingIdx >= 0 && Array.isArray(pts[existingIdx]) && Number.isInteger(pts[existingIdx][2]) && pts[existingIdx][2] !== dIdx) {
-                        existingIdx = -1;
-                    }
-                }
 
                 if (existingIdx >= 0) {
                     pts[existingIdx][0] = editX;
