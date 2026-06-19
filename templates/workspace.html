@@ -7008,7 +7008,7 @@
             lastCurveTraces[traceKey] = pts;
 
             const picked = findEditablePointIndex(pts, xImg, yImg, editCurveId, { maxYDist: 16, maxDist: 24 });
-            const nearestIdx = picked.pointIndex;
+            let nearestIdx = picked.pointIndex;
 
             // If close to an existing point, start a drag with minimal rubber-band (±1 neighbor)
             if (nearestIdx >= 0) {
@@ -7021,6 +7021,14 @@
                 let centerDepthIdx = -1;
                 const smoothMode = document.getElementById('smoothEditToggle')?.checked;
                 const windowRadius = smoothMode ? 8 : 2;
+                if (!smoothMode && Array.isArray(pts[nearestIdx])) {
+                    const centerDepth = pixelToDepthFromConfig(pts[nearestIdx][1], depthCfg);
+                    const centerDIdx = Number.isFinite(centerDepth) ? findNearestDepthIndex(centerDepth, lastDigitizedDepth) : -1;
+                    if (centerDIdx >= 0 && centerDIdx < entry.values.length) {
+                        nearestIdx = ensurePointerDragShoulders(pts, nearestIdx, centerDIdx, entry, targetTrack, depthCfg);
+                        lastCurveTraces[traceKey] = pts;
+                    }
+                }
                 for (let offset = -windowRadius; offset <= windowRadius; offset++) {
                     const idx = nearestIdx + offset;
                     if (idx < 0 || idx >= pts.length) continue;
@@ -7166,6 +7174,44 @@
                     if (depthIdx >= 0 && depthIdx < entry.values.length) entry.values[depthIdx] = newVal;
                 }
             });
+        }
+
+        function ensurePointerDragShoulders(pts, centerIndex, centerDepthIdx, entry, targetTrack, depthCfg) {
+            if (!Array.isArray(pts) || !Number.isInteger(centerIndex) || !Number.isInteger(centerDepthIdx)) return centerIndex;
+            if (!entry || !Array.isArray(entry.values) || !targetTrack) return centerIndex;
+
+            const centerPt = pts[centerIndex];
+            if (!Array.isArray(centerPt) || centerPt.length < 2) return centerIndex;
+            const centerX = Number(centerPt[0]);
+            if (!Number.isFinite(centerX)) return centerIndex;
+
+            const stamp = Date.now();
+            let changed = false;
+            [-1, 1].forEach((offset) => {
+                const dIdx = centerDepthIdx + offset;
+                if (dIdx < 0 || dIdx >= entry.values.length) return;
+                if (isDepthIndexPinned(editCurveId, dIdx)) return;
+
+                const y = getPixelYForDepthIndex(dIdx, depthCfg);
+                if (!Number.isFinite(y)) return;
+
+                let existingIdx = findBestPointIndexForDepth(pts, dIdx, y, centerX);
+                if (existingIdx >= 0) return;
+
+                const sourceValue = entry.values[dIdx];
+                let x = trackValueToPixelX(sourceValue, targetTrack, { depthIndex: dIdx, values: entry.values });
+                if (!Number.isFinite(x)) x = centerX;
+
+                pts.push([x, y, dIdx, 'manual_shoulder', stamp]);
+                changed = true;
+            });
+
+            if (!changed) return centerIndex;
+            const centerStamp = centerPt[4] || stamp;
+            centerPt[4] = centerStamp;
+            pts.sort((a, b) => Number(a && a[1] || 0) - Number(b && b[1] || 0));
+            const newCenterIndex = pts.findIndex(pt => pt === centerPt || (Array.isArray(pt) && pt[4] === centerStamp && Number(pt[0]) === centerX));
+            return newCenterIndex >= 0 ? newCenterIndex : centerIndex;
         }
 
         function _doDragUpdate() {
