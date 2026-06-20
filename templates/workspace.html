@@ -12806,18 +12806,30 @@
                             } else if (currPoint[3] === 'manual_arch') {
                                 const prevXDom = prevPoint[0] * scaleX;
                                 const prevYDom = prevPoint[1] * scaleY;
+                                const noseHalfHeight = 7;
                                 ctx.quadraticCurveTo(
                                     (prevXDom + xDom) * 0.5,
-                                    Math.min(prevYDom, yDom) - 12,
+                                    Math.min(prevYDom, yDom - noseHalfHeight) - 12,
                                     xDom,
-                                    yDom
+                                    yDom - noseHalfHeight
                                 );
                             } else if (prevPoint[3] === 'manual_arch') {
                                 const prevXDom = prevPoint[0] * scaleX;
                                 const prevYDom = prevPoint[1] * scaleY;
+                                const beforePoint = i >= 2 ? renderPoints[i - 2] : null;
+                                const beforeXDom = Array.isArray(beforePoint) ? beforePoint[0] * scaleX : xDom;
+                                const baseXDom = (beforeXDom + xDom) * 0.5;
+                                const noseDirection = prevXDom >= baseXDom ? 1 : -1;
+                                const noseHalfHeight = 7;
+                                ctx.quadraticCurveTo(
+                                    prevXDom + noseDirection * 6,
+                                    prevYDom,
+                                    prevXDom,
+                                    prevYDom + noseHalfHeight
+                                );
                                 ctx.quadraticCurveTo(
                                     (prevXDom + xDom) * 0.5,
-                                    Math.max(prevYDom, yDom) + 12,
+                                    Math.max(prevYDom + noseHalfHeight, yDom) + 12,
                                     xDom,
                                     yDom
                                 );
