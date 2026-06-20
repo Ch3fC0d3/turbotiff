@@ -583,6 +583,28 @@
             backdrop-filter: blur(10px);
             z-index: 110;
         }
+        .toolbar-drag-handle {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 22px;
+            color: #64748b;
+            background: rgba(241, 245, 249, 0.96);
+            border-bottom: 1px solid rgba(226, 232, 240, 0.95);
+            cursor: grab;
+            user-select: none;
+            touch-action: none;
+            font-size: 0.72rem;
+            font-weight: 800;
+            letter-spacing: 0.14em;
+        }
+        .toolbar-drag-handle:active,
+        .viewer-frame-toolbar.is-dragging .toolbar-drag-handle {
+            cursor: grabbing;
+        }
+        .viewer-frame-toolbar.is-dragging {
+            opacity: 0.92;
+        }
         .viewer-frame-toolbar .control-section {
             display: flex;
             flex-direction: column;
@@ -591,6 +613,9 @@
             border-top: 1px solid rgba(226, 232, 240, 0.95);
         }
         .viewer-frame-toolbar .control-section:first-child {
+            border-top: none;
+        }
+        .viewer-frame-toolbar .toolbar-drag-handle + .control-section {
             border-top: none;
         }
         .viewer-frame-toolbar .toolbar-icon-grid,
@@ -1565,6 +1590,7 @@
                                 </div>
                             </div>
                             <div class="viewer-frame-toolbar hidden" id="digitizerToolbar">
+                                <div class="toolbar-drag-handle" id="digitizerToolbarHandle" title="Drag toolbar. Double-click to reset.">MOVE</div>
                                 <div class="control-section">
                                     <span class="control-title">Edit</span>
                                     <div class="toolbar-icon-grid toolbar-icon-grid-compact">
@@ -3210,6 +3236,94 @@
         let drawStrokeActive = false;
         let drawStrokePoints = [];   // raw [xImg, yImg] samples collected this stroke
         let drawCursorRing = null;   // live visual ring element
+        const DIGITIZER_TOOLBAR_POS_KEY = 'turbotiff.digitizerToolbarPosition.v1';
+
+        function placeDigitizerToolbar(left, top, save = false) {
+            const toolbar = document.getElementById('digitizerToolbar');
+            const frame = toolbar ? toolbar.closest('.viewer-frame') : null;
+            if (!toolbar || !frame || toolbar.classList.contains('hidden')) return;
+            const maxLeft = Math.max(0, frame.clientWidth - toolbar.offsetWidth);
+            const maxTop = Math.max(0, frame.clientHeight - toolbar.offsetHeight);
+            const nextLeft = Math.max(0, Math.min(maxLeft, Number(left) || 0));
+            const nextTop = Math.max(0, Math.min(maxTop, Number(top) || 0));
+            toolbar.style.left = `${nextLeft}px`;
+            toolbar.style.top = `${nextTop}px`;
+            toolbar.style.right = 'auto';
+            if (save) {
+                try {
+                    localStorage.setItem(DIGITIZER_TOOLBAR_POS_KEY, JSON.stringify({ left: nextLeft, top: nextTop }));
+                } catch (e) {
+                    // Ignore storage restrictions.
+                }
+            }
+        }
+
+        function restoreDigitizerToolbarPosition() {
+            try {
+                const saved = JSON.parse(localStorage.getItem(DIGITIZER_TOOLBAR_POS_KEY) || 'null');
+                if (saved && Number.isFinite(Number(saved.left)) && Number.isFinite(Number(saved.top))) {
+                    placeDigitizerToolbar(saved.left, saved.top);
+                }
+            } catch (e) {
+                // Keep the default top-right position.
+            }
+        }
+
+        function initDigitizerToolbarDrag() {
+            const toolbar = document.getElementById('digitizerToolbar');
+            const handle = document.getElementById('digitizerToolbarHandle');
+            if (!toolbar || !handle || handle.dataset.dragReady === '1') return;
+            handle.dataset.dragReady = '1';
+
+            let drag = null;
+            handle.addEventListener('pointerdown', event => {
+                if (event.button !== 0 || window.matchMedia('(max-width: 900px)').matches) return;
+                const frame = toolbar.closest('.viewer-frame');
+                if (!frame) return;
+                const toolbarRect = toolbar.getBoundingClientRect();
+                const frameRect = frame.getBoundingClientRect();
+                drag = {
+                    pointerId: event.pointerId,
+                    offsetX: event.clientX - toolbarRect.left,
+                    offsetY: event.clientY - toolbarRect.top,
+                    frameLeft: frameRect.left,
+                    frameTop: frameRect.top,
+                };
+                toolbar.classList.add('is-dragging');
+                handle.setPointerCapture(event.pointerId);
+                event.preventDefault();
+                event.stopPropagation();
+            });
+
+            handle.addEventListener('pointermove', event => {
+                if (!drag || event.pointerId !== drag.pointerId) return;
+                placeDigitizerToolbar(
+                    event.clientX - drag.frameLeft - drag.offsetX,
+                    event.clientY - drag.frameTop - drag.offsetY
+                );
+                event.preventDefault();
+            });
+
+            const finishDrag = event => {
+                if (!drag || event.pointerId !== drag.pointerId) return;
+                const left = parseFloat(toolbar.style.left) || 0;
+                const top = parseFloat(toolbar.style.top) || 0;
+                placeDigitizerToolbar(left, top, true);
+                toolbar.classList.remove('is-dragging');
+                drag = null;
+            };
+            handle.addEventListener('pointerup', finishDrag);
+            handle.addEventListener('pointercancel', finishDrag);
+            handle.addEventListener('dblclick', () => {
+                try { localStorage.removeItem(DIGITIZER_TOOLBAR_POS_KEY); } catch (e) { /* ignore */ }
+                toolbar.style.left = '';
+                toolbar.style.top = '10px';
+                toolbar.style.right = '10px';
+            });
+            window.addEventListener('resize', restoreDigitizerToolbarPosition);
+        }
+
+        initDigitizerToolbarDrag();
 
         function ensureWrapEraserToolbarButton() {
             if (document.getElementById('toolWrapEraser')) return;
@@ -3235,6 +3349,7 @@
                 if (container) container.classList.add('edit-mode');
                 document.body.classList.add('edit-mode-active');
                 if (toolbar) toolbar.classList.remove('hidden');
+                requestAnimationFrame(restoreDigitizerToolbarPosition);
                 ensureWrapEraserToolbarButton();
                 setTool('pointer'); // Reset to pointer on entry
                 if (btn) btn.textContent = 'Disable edit mode';
