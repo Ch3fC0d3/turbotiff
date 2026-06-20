@@ -3062,6 +3062,7 @@
         }
 
         function renderScaleWrapMarkersOnCanvas(ctx, scaleX, scaleY, tracks) {
+            return;
             if (!ctx || !curveWrapMarkers || typeof curveWrapMarkers !== 'object') return;
             const keys = Object.keys(curveWrapMarkers);
             if (!keys.length) return;
