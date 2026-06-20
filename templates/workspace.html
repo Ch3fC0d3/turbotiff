@@ -6288,28 +6288,36 @@
                 undoValues,
             });
 
-            // Update the digitized value at this depth
-            entry.values[idx] = newValue;
+            // Blend the new point into nearby rows so it forms a rounded arch
+            // instead of two nearly overlapping straight connectors.
+            const archRadius = 42;
+            const sourceValues = entry.values.slice();
+            for (let depthIdx = 0; depthIdx < entry.values.length; depthIdx++) {
+                if (isDepthIndexPinned(editCurveId, depthIdx)) continue;
+                const rowY = getPixelYForDepthIndex(depthIdx, depthCfg);
+                if (!Number.isFinite(rowY)) continue;
+                const distance = Math.abs(rowY - yTrace);
+                if (distance > archRadius) continue;
+                if (depthIdx === idx) {
+                    entry.values[depthIdx] = newValue;
+                    continue;
+                }
 
-            // Only match by exact depth index — never grab a nearby point at a
-            // different depth, which would silently overwrite it ("disappearing" points).
-            let existingIdx = findBestPointIndexForDepth(pts, idx, yTrace, editX);
-
-            if (existingIdx >= 0) {
-                pts[existingIdx][0] = editX;
-                pts[existingIdx][1] = yTrace;
-                pts[existingIdx][2] = idx;
-                pts[existingIdx][3] = 'manual';
-            } else {
-                pts.push([editX, yTrace, idx, 'manual']);
+                const originalX = trackValueToPixelX(sourceValues[depthIdx], targetTrack, {
+                    depthIndex: depthIdx,
+                    values: sourceValues,
+                });
+                if (!Number.isFinite(originalX)) continue;
+                const weight = 0.5 * (1 + Math.cos(Math.PI * distance / archRadius));
+                const archX = originalX + (editX - originalX) * weight;
+                const archValue = pixelToTrackValue(archX, targetTrack, {
+                    depthIndex: depthIdx,
+                    values: sourceValues,
+                });
+                if (Number.isFinite(archValue)) entry.values[depthIdx] = archValue;
             }
 
-            pts.sort((a, b) => {
-                const ay = Array.isArray(a) ? Number(a[1]) : 0;
-                const by = Array.isArray(b) ? Number(b[1]) : 0;
-                return ay - by;
-            });
-            lastCurveTraces[targetKey] = pts;
+            rebuildCurveTraceFromDigitized(editCurveId);
 
             renderCurveTraceOverlays(lastCurveTraces);
             showStatus('Added point.', 'info');
