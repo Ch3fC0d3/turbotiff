@@ -6198,11 +6198,6 @@
             });
 
             // ── Apply samples: one point per unique depth index ──
-            const activeTrace = getActiveCurveTracePoints(editCurveId);
-            const targetTraceKey = activeTrace.traceKey || traceKey;
-            const strokePoints = Array.isArray(activeTrace.points) ? activeTrace.points : [];
-            if (strokePoints.length) ensureTracePointsHaveDepthIndex(editCurveId);
-            const strokeStamp = Date.now();
             const seenDepth = new Set();
             for (const [xImg, yImg] of samples) {
                 const depth = pixelToDepthFromConfig(yImg, depthCfg);
@@ -6212,25 +6207,13 @@
                 seenDepth.add(idx);
                 // Skip pinned depths
                 if (isDepthIndexPinned(editCurveId, idx)) continue;
-                const yImgUse = getPixelYForDepthIndex(idx, depthCfg) ?? yImg;
                 const newValue = pixelToTrackValue(xImg, targetTrack, { depthIndex: idx, values: entry.values });
                 if (!Number.isFinite(newValue)) continue;
                 if (idx >= entry.values.length) continue;
                 entry.values[idx] = newValue;
-                const exist = findBestPointIndexForDepth(strokePoints, idx, yImgUse, xImg);
-                if (exist >= 0) {
-                    strokePoints[exist][0] = xImg;
-                    strokePoints[exist][1] = yImgUse;
-                    strokePoints[exist][2] = idx;
-                    strokePoints[exist][3] = 'manual';
-                    strokePoints[exist][4] = strokeStamp;
-                } else {
-                    strokePoints.push([xImg, yImgUse, idx, 'manual', strokeStamp]);
-                }
             }
 
-            strokePoints.sort((a, b) => Number(a && a[1] || 0) - Number(b && b[1] || 0));
-            lastCurveTraces[targetTraceKey] = strokePoints;
+            rebuildCurveTraceFromDigitized(editCurveId);
             if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
             showStatus(`Pen stroke applied (${seenDepth.size} depth points updated).`, 'info');
         }
