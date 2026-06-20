@@ -12785,34 +12785,6 @@
                         ctx.lineWidth = connectorW;
                         ctx.globalAlpha = isBlackLikeMode ? 0.92 : 1.0;
                         ctx.strokeStyle = lineCoreColor;
-                        ctx.beginPath();
-
-                        const firstX = (renderPoints[0][0] * scaleX);
-                        const firstY = (renderPoints[0][1] * scaleY);
-                        ctx.moveTo(firstX, firstY);
-                        for (let i = 1; i < renderPoints.length; i++) {
-                            const prevPoint = renderPoints[i - 1];
-                            const currPoint = renderPoints[i];
-                            if (currPoint[3] === 'manual_arch') continue;
-                            const pathPrevPoint = prevPoint[3] === 'manual_arch' && i >= 2
-                                ? renderPoints[i - 2]
-                                : prevPoint;
-                            const xDom = (currPoint[0] * scaleX);
-                            const yDom = (currPoint[1] * scaleY);
-                            const dx = Math.abs(currPoint[0] - pathPrevPoint[0]);
-                            const tWidth = trackMeta ? Math.abs((trackMeta.rightX || 0) - (trackMeta.leftX || 0)) : 0;
-                            const isHeuristicWrap = tWidth > 0 && dx > tWidth * 0.5;
-
-                            if (isSegmentHiddenByWrapEraser(name, pathPrevPoint, currPoint, trackMeta) ||
-                                isScaleWrapBoundaryForPoints(name, pathPrevPoint, currPoint) ||
-                                isHeuristicWrap) {
-                                ctx.moveTo(xDom, yDom);
-                            } else {
-                                ctx.lineTo(xDom, yDom);
-                            }
-                        }
-                        ctx.stroke();
-
                         const baseSeparation = 12;
                         const trackWidthImg = trackMeta ? Math.abs((trackMeta.rightX || 0) - (trackMeta.leftX || 0)) : 0;
                         const findArchAnchor = (centerIndex, direction) => {
@@ -12832,13 +12804,48 @@
                             }
                             return lastValid;
                         };
-
+                        const archRanges = [];
                         for (let i = 0; i < renderPoints.length; i++) {
-                            const crest = renderPoints[i];
-                            if (!Array.isArray(crest) || crest[3] !== 'manual_arch') continue;
+                            if (!Array.isArray(renderPoints[i]) || renderPoints[i][3] !== 'manual_arch') continue;
                             const upperIdx = findArchAnchor(i, -1);
                             const lowerIdx = findArchAnchor(i, 1);
-                            if (upperIdx < 0 || lowerIdx < 0) continue;
+                            if (upperIdx >= 0 && lowerIdx >= 0) archRanges.push({ centerIdx: i, upperIdx, lowerIdx });
+                        }
+                        ctx.beginPath();
+
+                        const firstX = (renderPoints[0][0] * scaleX);
+                        const firstY = (renderPoints[0][1] * scaleY);
+                        ctx.moveTo(firstX, firstY);
+                        for (let i = 1; i < renderPoints.length; i++) {
+                            const prevPoint = renderPoints[i - 1];
+                            const currPoint = renderPoints[i];
+                            const pathPrevPoint = prevPoint[3] === 'manual_arch' && i >= 2
+                                ? renderPoints[i - 2]
+                                : prevPoint;
+                            const xDom = (currPoint[0] * scaleX);
+                            const yDom = (currPoint[1] * scaleY);
+                            if (archRanges.some(range => i > range.upperIdx && i <= range.lowerIdx)) {
+                                ctx.moveTo(xDom, yDom);
+                                continue;
+                            }
+                            const dx = Math.abs(currPoint[0] - pathPrevPoint[0]);
+                            const tWidth = trackMeta ? Math.abs((trackMeta.rightX || 0) - (trackMeta.leftX || 0)) : 0;
+                            const isHeuristicWrap = tWidth > 0 && dx > tWidth * 0.5;
+
+                            if (isSegmentHiddenByWrapEraser(name, pathPrevPoint, currPoint, trackMeta) ||
+                                isScaleWrapBoundaryForPoints(name, pathPrevPoint, currPoint) ||
+                                isHeuristicWrap) {
+                                ctx.moveTo(xDom, yDom);
+                            } else {
+                                ctx.lineTo(xDom, yDom);
+                            }
+                        }
+                        ctx.stroke();
+
+                        for (const range of archRanges) {
+                            const crest = renderPoints[range.centerIdx];
+                            const upperIdx = range.upperIdx;
+                            const lowerIdx = range.lowerIdx;
                             const upper = renderPoints[upperIdx];
                             const lower = renderPoints[lowerIdx];
                             const upperX = upper[0] * scaleX;
