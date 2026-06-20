@@ -2437,7 +2437,8 @@
                 if (Number.isFinite(width) && width > 0) {
                     const edgeTolerance = Math.max(3, width * 0.025);
                     const onEdge = x => Math.abs(x - left) <= edgeTolerance || Math.abs(x - right) <= edgeTolerance;
-                    if ((onEdge(x0) || onEdge(x1)) && Math.abs(x1 - x0) < width * 0.55) {
+                    const absDx = Math.abs(x1 - x0);
+                    if ((onEdge(x0) || onEdge(x1)) && absDx < width * 0.35) {
                         return false;
                     }
                 }
@@ -12818,7 +12819,7 @@
                             const yDom = (currPoint[1] * scaleY);
                             const dx = Math.abs(currPoint[0] - prevPoint[0]);
                             const tWidth = trackMeta ? Math.abs((trackMeta.rightX || 0) - (trackMeta.leftX || 0)) : 0;
-                            const isHeuristicWrap = tWidth > 0 && dx > tWidth * 0.5;
+                            const isHeuristicWrap = tWidth > 0 && dx > tWidth * 0.35;
 
                             if (isSegmentHiddenByWrapEraser(name, prevPoint, currPoint, trackMeta) ||
                                 isScaleWrapBoundaryForPoints(name, prevPoint, currPoint) ||
