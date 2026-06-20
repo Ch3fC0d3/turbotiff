@@ -2480,6 +2480,15 @@
             return Math.abs(x - left) <= Math.abs(x - right) ? left : right;
         }
 
+        function farthestTrackEdgeX(track, xImg) {
+            if (!track) return null;
+            const left = Math.min(Number(track.leftX), Number(track.rightX));
+            const right = Math.max(Number(track.leftX), Number(track.rightX));
+            const x = Number(xImg);
+            if (!Number.isFinite(left) || !Number.isFinite(right) || !Number.isFinite(x)) return null;
+            return Math.abs(x - left) <= Math.abs(x - right) ? right : left;
+        }
+
         function getVisibleSegmentPiecesOutsideWrapErasers(curveId, prevPoint, currPoint, track) {
             if (!Array.isArray(prevPoint) || !Array.isArray(currPoint)) return null;
             const ax = Number(prevPoint[0]);
@@ -7022,7 +7031,7 @@
                         depthIndex: selectedDepthIdx,
                         isWrapEdge: true,
                         wrapEdgePoint: selectedPoint,
-                        wrapEdgeX: nearestTrackEdgeX(targetTrack, selectedPoint[0]),
+                        wrapEdgeX: farthestTrackEdgeX(targetTrack, selectedPoint[0]),
                         neighbors: [],
                         targetTrack,
                         entry,
@@ -7323,7 +7332,7 @@
 
                 const edgeX = Number.isFinite(Number(state.wrapEdgeX))
                     ? Number(state.wrapEdgeX)
-                    : nearestTrackEdgeX(targetTrack, point[0]);
+                    : farthestTrackEdgeX(targetTrack, point[0]);
                 const newY = Math.max(0, Math.min(imgH - 1, Number(yImg)));
                 const depthCfg = lastDepthConfig || getDepthConfigFromInputs();
                 const newDepth = pixelToDepthFromConfig(newY, depthCfg);
