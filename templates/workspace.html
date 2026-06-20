@@ -1801,9 +1801,9 @@
                                         <input type="checkbox" id="snapToCurveToggle" class="cursor-pointer w-4 h-4">
                                         <label for="snapToCurveToggle" class="text-sm cursor-pointer">Snap to curve</label>
                                         <select id="snapMaxDistanceSelect" class="text-sm p-0-5">
-                                            <option value="8">tight</option>
-                                            <option value="15" selected>normal</option>
-                                            <option value="25">loose</option>
+                                            <option value="10">tight</option>
+                                            <option value="25" selected>normal</option>
+                                            <option value="40">loose</option>
                                         </select>
                                     </div>
                                     <div class="hint-text" style="font-size: 0.78em; margin-top: 3px;">Drag points to adjust. Ctrl+Z to undo.</div>
@@ -7519,7 +7519,7 @@
             const canvas = document.createElement('canvas');
             const ctx = canvas.getContext('2d');
             // We only need a small patch, not the whole image
-            const radius = 18;
+            const radius = 28;
             const patchSize = radius * 2 + 1;
             canvas.width = patchSize;
             canvas.height = patchSize;
@@ -7584,10 +7584,14 @@
                     const greenBoost = Math.max(0, (g - Math.max(r, b)) / 255);
                     const redBoost = Math.max(0, (r - Math.max(g, b)) / 255);
                     const blueBoost = Math.max(0, (b - Math.max(r, g)) / 255);
+                    const darkMode = mode === 'black' || mode === 'auto';
 
                     // Hard rejects to avoid rails/annotations/white areas
-                    if (saturation < 0.18) continue;
-                    if (brightness > 0.92 || brightness < 0.02) continue;
+                    if (darkMode) {
+                        if (brightness > 0.72 || brightness < 0.01) continue;
+                    } else {
+                        if (saturation < 0.18 || brightness > 0.92 || brightness < 0.02) continue;
+                    }
 
                     const distFromOriginal = Math.sqrt((x - localX) ** 2 + (y - localY) ** 2);
                     const proximityBonus = 1 - distFromOriginal / (radius * 1.2);
@@ -7626,7 +7630,9 @@
                     }
                     edgeBoost = Math.min(1, edgeBoost / (255 * 4)); // normalize 0..1
 
-                    const score = saturation * 2.2 + hueBoost + (1 - brightness) * 0.4 + proximityBonus * 1.2 + hotBias + edgeBoost * 0.6 - railPenalty;
+                    const score = darkMode
+                        ? (1 - brightness) * 3.2 + proximityBonus * 1.5 + edgeBoost * 0.8 - railPenalty
+                        : saturation * 2.2 + hueBoost + (1 - brightness) * 0.4 + proximityBonus * 1.2 + hotBias + edgeBoost * 0.6 - railPenalty;
                     
                     if (score > bestScore) {
                         bestScore = score;
@@ -7864,8 +7870,8 @@
             };
 
             const distSelectForReq = document.getElementById('snapMaxDistanceSelect');
-            const selectedDistForReq = distSelectForReq ? Number(distSelectForReq.value) : 15;
-            const requestMaxSnapDist = Math.min(Math.max(selectedDistForReq || 15, 4), 40);
+            const selectedDistForReq = distSelectForReq ? Number(distSelectForReq.value) : 25;
+            const requestMaxSnapDist = Math.min(Math.max(selectedDistForReq || 25, 4), 60);
 
             // Get current snap settings
             const snapThreshold = parseFloat(document.getElementById('snapThreshold')?.value || 1.20);
@@ -7921,15 +7927,15 @@
 
                     // User-tunable snap distance (center point)
                     const distSelect = document.getElementById('snapMaxDistanceSelect');
-                    const selectedDist = distSelect ? Number(distSelect.value) : 15;
-                    const maxSnapDist = Math.min(Math.max(selectedDist || 15, 4), 40); // clamp 4..40
-                    const minConf = 0.24;   // slightly more permissive; final gate still checks distance
-                    const closeDist = 3;    // always accept very-close refinements
+                    const selectedDist = distSelect ? Number(distSelect.value) : 25;
+                    const maxSnapDist = Math.min(Math.max(selectedDist || 25, 4), 60); // clamp 4..60
+                    const minConf = 0.16;
+                    const closeDist = 5;
 
                     const neighborMaxDist = (function (mode) {
-                        if (mode === 'red') return 5;
-                        if (mode === 'blue' || mode === 'green') return 6;
-                        return 7;
+                        if (mode === 'red') return 9;
+                        if (mode === 'blue' || mode === 'green') return 10;
+                        return 12;
                     })(trackModeForSnap);
 
                     if ((conf >= minConf || dist <= closeDist) && dist <= maxSnapDist) {
@@ -7963,8 +7969,8 @@
                         // NEW: Snap neighbors using the returned path segment
                         // This ensures "lines between points go on the existing lines"
                         if (result.refinedPath && Array.isArray(result.refinedPath)) {
-                            const maxNeighborDY = 35; // only adjust local neighborhood around the edit
-                            const neighborMinConf = Math.max(minConf, 0.30);
+                            const maxNeighborDY = 50;
+                            const neighborMinConf = Math.max(minConf, 0.22);
                             result.refinedPath.forEach(pt => {
                                 // pt is { offsetY, x, confidence }
                                 if (pt.confidence < neighborMinConf) return;
