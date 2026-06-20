@@ -2605,10 +2605,9 @@
             if (!Number.isFinite(left) || !Number.isFinite(right)) return [];
             if (Math.abs(bestSegment.bx - bestSegment.ax) < Math.max(12, (right - left) * 0.20)) return [];
 
-            const prevGoesLeft = bestSegment.ax <= bestSegment.bx;
             return [
-                { point: bestSegment.prev, x: prevGoesLeft ? left : right, y: bestSegment.ay },
-                { point: bestSegment.curr, x: prevGoesLeft ? right : left, y: bestSegment.by },
+                { point: bestSegment.prev, x: nearestTrackEdgeX(track, bestSegment.ax), y: bestSegment.ay },
+                { point: bestSegment.curr, x: nearestTrackEdgeX(track, bestSegment.bx), y: bestSegment.by },
             ];
         }
 
@@ -6996,7 +6995,7 @@
                         depthIndex: selectedDepthIdx,
                         isWrapEdge: true,
                         wrapEdgePoint: selectedPoint,
-                        wrapEdgeX: farthestTrackEdgeX(targetTrack, selectedPoint[0]),
+                        wrapEdgeX: nearestTrackEdgeX(targetTrack, selectedPoint[0]),
                         neighbors: [],
                         targetTrack,
                         entry,
@@ -7298,9 +7297,7 @@
                     entry.values[oldDepthIndex] = null;
                 }
 
-                const edgeX = Number.isFinite(Number(state.wrapEdgeX))
-                    ? Number(state.wrapEdgeX)
-                    : farthestTrackEdgeX(targetTrack, point[0]);
+                const edgeX = nearestTrackEdgeX(targetTrack, Number.isFinite(Number(xImg)) ? Number(xImg) : point[0]);
                 const newY = Math.max(0, Math.min(imgH - 1, Number(yImg)));
                 const depthCfg = lastDepthConfig || getDepthConfigFromInputs();
                 const newDepth = pixelToDepthFromConfig(newY, depthCfg);
@@ -12832,6 +12829,28 @@
                             const yDom = (currPoint[1] * scaleY);
                             if (archRanges.some(range => i > range.upperIdx && i <= range.lowerIdx)) {
                                 ctx.moveTo(xDom, yDom);
+                                continue;
+                            }
+                            const prevIsLooseEnd = pathPrevPoint[3] === 'wrap_edge';
+                            const currIsLooseEnd = currPoint[3] === 'wrap_edge';
+                            if (trackMeta && (prevIsLooseEnd || currIsLooseEnd)) {
+                                if (!prevIsLooseEnd) {
+                                    const prevEdgeX = nearestTrackEdgeX(trackMeta, pathPrevPoint[0]);
+                                    if (Number.isFinite(prevEdgeX)) {
+                                        ctx.lineTo(prevEdgeX * scaleX, pathPrevPoint[1] * scaleY);
+                                    }
+                                }
+                                if (!currIsLooseEnd) {
+                                    const currEdgeX = nearestTrackEdgeX(trackMeta, currPoint[0]);
+                                    if (Number.isFinite(currEdgeX)) {
+                                        ctx.moveTo(currEdgeX * scaleX, yDom);
+                                        ctx.lineTo(xDom, yDom);
+                                    } else {
+                                        ctx.moveTo(xDom, yDom);
+                                    }
+                                } else {
+                                    ctx.moveTo(xDom, yDom);
+                                }
                                 continue;
                             }
                             const dx = Math.abs(currPoint[0] - pathPrevPoint[0]);
