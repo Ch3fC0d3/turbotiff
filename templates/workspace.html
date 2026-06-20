@@ -2938,10 +2938,12 @@
                 Number.isInteger(currIdx) && currIdx >= 0 ? currIdx : Math.max(0, prevIdx + 1)
             ));
             const prevCycle = getWrapCycleForDepth(ctx.curveKey, Math.max(0, markerIdx - 1));
+            const movedLeft = Number(curr[0]) < Number(prev[0]);
+            const scaleLeftToRight = Number(ctx.track.scaleMin) < Number(ctx.track.scaleMax);
             const nextCycle = Number.isFinite(cycleOverride)
                 ? Math.round(Number(cycleOverride))
-                : (Number(curr[0]) < Number(prev[0]) ? prevCycle + 1 : prevCycle - 1);
-            const edge = Number(curr[0]) < Number(prev[0]) ? 'left' : 'right';
+                : (movedLeft === scaleLeftToRight ? prevCycle + 1 : prevCycle - 1);
+            const edge = movedLeft ? 'left' : 'right';
             return {
                 curveKey: ctx.curveKey,
                 depthIndex: markerIdx,
@@ -3060,7 +3062,6 @@
         }
 
         function renderScaleWrapMarkersOnCanvas(ctx, scaleX, scaleY, tracks) {
-            return;
             if (!ctx || !curveWrapMarkers || typeof curveWrapMarkers !== 'object') return;
             const keys = Object.keys(curveWrapMarkers);
             if (!keys.length) return;
@@ -5574,6 +5575,29 @@
             return saveBlackSegment('corrected');
         }
 
+        function resolveCurveTraceKey(idx, curveId, track) {
+            if (curveIndexToTraceKey && curveIndexToTraceKey[idx] && lastCurveTraces[curveIndexToTraceKey[idx]]) {
+                return curveIndexToTraceKey[idx];
+            }
+            if (lastCurveTraces[curveId]) return curveId;
+            const upper = curveId.toUpperCase();
+            const lower = curveId.toLowerCase();
+            for (const k of Object.keys(lastCurveTraces)) {
+                if (!k) continue;
+                if (k === curveId || k.toUpperCase() === upper || k.toLowerCase() === lower) return k;
+            }
+            const nameHint = String(track && track.name || '').trim();
+            if (nameHint) {
+                const u2 = nameHint.toUpperCase();
+                const l2 = nameHint.toLowerCase();
+                for (const k of Object.keys(lastCurveTraces)) {
+                    if (!k) continue;
+                    if (k === nameHint || k.toUpperCase() === u2 || k.toLowerCase() === l2) return k;
+                }
+            }
+            return null;
+        }
+
         function applyCurveXShiftForCurve(index) {
             try {
                 const idx = Number(index);
@@ -5592,29 +5616,7 @@
                 if (!curveId) return;
                 if (!lastCurveTraces || typeof lastCurveTraces !== 'object') return;
 
-                const traceKey = (function () {
-                    if (curveIndexToTraceKey && curveIndexToTraceKey[idx] && lastCurveTraces[curveIndexToTraceKey[idx]]) {
-                        return curveIndexToTraceKey[idx];
-                    }
-                    if (lastCurveTraces[curveId]) return curveId;
-                    const upper = curveId.toUpperCase();
-                    const lower = curveId.toLowerCase();
-                    for (const k of Object.keys(lastCurveTraces)) {
-                        if (!k) continue;
-                        if (k === curveId || k.toUpperCase() === upper || k.toLowerCase() === lower) return k;
-                    }
-                    // Fallback: sometimes traces are keyed by curve type/name.
-                    const nameHint = String(track.name || '').trim();
-                    if (nameHint) {
-                        const u2 = nameHint.toUpperCase();
-                        const l2 = nameHint.toLowerCase();
-                        for (const k of Object.keys(lastCurveTraces)) {
-                            if (!k) continue;
-                            if (k === nameHint || k.toUpperCase() === u2 || k.toLowerCase() === l2) return k;
-                        }
-                    }
-                    return null;
-                })();
+                const traceKey = resolveCurveTraceKey(idx, curveId, track);
                 if (!traceKey || !lastCurveTraces[traceKey]) {
                     showStatus(`Curve X shift failed: could not find trace data for Curve ${idx + 1}. Try running Digitize again.`, 'info');
                     return;
@@ -5688,29 +5690,7 @@
                 if (!curveId) return;
                 if (!lastCurveTraces || typeof lastCurveTraces !== 'object') return;
 
-                const traceKey = (function () {
-                    if (curveIndexToTraceKey && curveIndexToTraceKey[idx] && lastCurveTraces[curveIndexToTraceKey[idx]]) {
-                        return curveIndexToTraceKey[idx];
-                    }
-                    if (lastCurveTraces[curveId]) return curveId;
-                    const upper = curveId.toUpperCase();
-                    const lower = curveId.toLowerCase();
-                    for (const k of Object.keys(lastCurveTraces)) {
-                        if (!k) continue;
-                        if (k === curveId || k.toUpperCase() === upper || k.toLowerCase() === lower) return k;
-                    }
-                    const nameHint = String(track.name || '').trim();
-                    if (nameHint) {
-                        const u2 = nameHint.toUpperCase();
-                        const l2 = nameHint.toLowerCase();
-                        for (const k of Object.keys(lastCurveTraces)) {
-                            if (!k) continue;
-                            if (k === nameHint || k.toUpperCase() === u2 || k.toLowerCase() === l2) return k;
-                        }
-                    }
-                    return null;
-                })();
-
+                const traceKey = resolveCurveTraceKey(idx, curveId, track);
                 if (!traceKey || !lastCurveTraces[traceKey]) {
                     showStatus(`Curve Y shift failed: could not find trace data for Curve ${idx + 1}. Try running Digitize again.`, 'info');
                     return;
@@ -5726,7 +5706,7 @@
                 ensureTracePointsHaveDepthIndex(traceKey);
 
                 const nullVal = (typeof lastNullValue === 'number') ? lastNullValue : -999.25;
-                const newValues = new Array(entry.values.length).fill(nullVal);
+                const newValues = entry.values.slice();
 
                 for (let i = 0; i < pts.length; i++) {
                     const p = pts[i];
@@ -5735,6 +5715,7 @@
                     const oldY = Number(p[1]);
                     if (!Number.isFinite(oldX) || !Number.isFinite(oldY)) continue;
 
+                    const oldDepthIdx = Number.isInteger(p[2]) ? p[2] : null;
                     const newY = oldY + deltaY;
                     p[1] = newY;
 
@@ -5743,6 +5724,10 @@
                     const newDepthIdx = findNearestDepthIndex(depth, lastDigitizedDepth);
                     if (!Number.isInteger(newDepthIdx) || newDepthIdx < 0 || newDepthIdx >= newValues.length) continue;
                     p[2] = newDepthIdx;
+
+                    if (oldDepthIdx !== null && oldDepthIdx !== newDepthIdx && oldDepthIdx >= 0 && oldDepthIdx < newValues.length) {
+                        newValues[oldDepthIdx] = nullVal;
+                    }
 
                     const newVal = pixelToTrackValue(oldX, track, { depthIndex: newDepthIdx, values: newValues });
                     if (Number.isFinite(newVal)) {

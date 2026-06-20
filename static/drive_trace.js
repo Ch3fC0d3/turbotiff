@@ -412,6 +412,7 @@
 
         document.addEventListener('keydown', dtKeyDown);
         document.addEventListener('keyup', dtKeyUp);
+        window.addEventListener('resize', dtUpdateCanvasCenter);
 
         if (canvas) {
             canvas.addEventListener('pointermove', dtPointerMove);
@@ -426,6 +427,7 @@
         if (modal) modal.style.display = 'none';
         document.removeEventListener('keydown', dtKeyDown);
         document.removeEventListener('keyup', dtKeyUp);
+        window.removeEventListener('resize', dtUpdateCanvasCenter);
         const canvas = document.getElementById('dtRoadCanvas');
         if (canvas) {
             canvas.removeEventListener('pointermove', dtPointerMove);
@@ -479,11 +481,7 @@
         document.getElementById('dtCommitBtn').style.display = 'none';
 
         // Set canvas center for mouse steering
-        const canvas = document.getElementById('dtRoadCanvas');
-        if (canvas) {
-            const r = canvas.getBoundingClientRect();
-            DT.canvasCenterX = r.left + r.width / 2;
-        }
+        dtUpdateCanvasCenter();
 
         dtSetStatus('Driving… steer with ← → or move mouse left/right.');
         DT.rafId = requestAnimationFrame(dtLoop);
@@ -610,6 +608,14 @@
     }
 
     function dtPointerLeave() { DT.mouseClientX = null; }
+
+    function dtUpdateCanvasCenter() {
+        const canvas = document.getElementById('dtRoadCanvas');
+        if (canvas) {
+            const r = canvas.getBoundingClientRect();
+            DT.canvasCenterX = r.left + r.width / 2;
+        }
+    }
 
     /**
      * Click on the road canvas before Start to place the car's starting position.
