@@ -6217,8 +6217,10 @@
             const pts = activeTrace.points;
             if (Array.isArray(pts) && pts.length) {
                 ensureTracePointsHaveDepthIndex(editCurveId);
-                const bestIdxPt = findBestPointIndexForDepth(pts, idx, yImgUse, editX);
-                if (bestIdxPt >= 0) {
+                const picked = findEditablePointIndex(pts, editX, yImgUse, editCurveId, { maxYDist: 14, maxDist: 24 });
+                const bestIdxPt = picked.pointIndex;
+                const bestDy = (bestIdxPt >= 0 && Array.isArray(pts[bestIdxPt])) ? Math.abs(pts[bestIdxPt][1] - yImgUse) : Infinity;
+                if (bestIdxPt >= 0 && bestDy <= 10) {
                     oldTraceX = pts[bestIdxPt][0];
                     oldTraceY = pts[bestIdxPt][1];
                     pointIndex = bestIdxPt;
@@ -6238,19 +6240,19 @@
 
             if (pts2.length) {
                 ensureTracePointsHaveDepthIndex(editCurveId);
-                const bestIdxPt = findBestPointIndexForDepth(pts2, idx, yImg, editX);
+                const picked = findEditablePointIndex(pts2, editX, yImg, editCurveId, { maxYDist: 14, maxDist: 24 });
+                const bestIdxPt = picked.pointIndex;
+                const bestDy = (bestIdxPt >= 0 && Array.isArray(pts2[bestIdxPt])) ? Math.abs(pts2[bestIdxPt][1] - yImg) : Infinity;
 
-                if (bestIdxPt >= 0) {
+                if (bestIdxPt >= 0 && bestDy <= 10) {
                     pts2[bestIdxPt][0] = editX;
                     pts2[bestIdxPt][1] = yImg;
                     pts2[bestIdxPt][2] = idx;
-                    pts2[bestIdxPt][3] = 'manual';
-                    pts2[bestIdxPt][4] = Date.now();
                 } else {
-                    pts2.push([editX, yImg, idx, 'manual', Date.now()]);
+                    pts2.push([editX, yImg, idx]);
                 }
             } else {
-                pts2.push([editX, yImg, idx, 'manual', Date.now()]);
+                pts2.push([editX, yImg, idx]);
             }
 
             lastCurveTraces[traceKey] = pts2;
@@ -7165,7 +7167,6 @@
 
                 // Scan the entire array to guarantee we never miss points, even if pts is temporarily unsorted
                 for (let i = 0; i < pts.length; i++) {
-                    if (!smoothMode && i !== nearestIdx) continue;
                     const ptX = pts[i][0];
                     const ptY = pts[i][1];
                     const distPx = Math.abs(ptY - centerPtY);
@@ -12894,13 +12895,15 @@
                             const yDom = (currPoint[1] * scaleY);
                             const dx = Math.abs(currPoint[0] - prevPoint[0]);
                             const tWidth = trackMeta ? Math.abs((trackMeta.rightX || 0) - (trackMeta.leftX || 0)) : 0;
+                            const isHeuristicWrap = tWidth > 0 && dx > tWidth * 0.5;
                             const prevIsManual = prevPoint[3] === 'manual' || prevPoint[3] === 'manual_shoulder';
                             const currIsManual = currPoint[3] === 'manual' || currPoint[3] === 'manual_shoulder';
-                            const isHeuristicWrap = tWidth > 0 && !prevIsManual && !currIsManual && dx > tWidth * 0.5;
+                            const isLargeEditBoundary = tWidth > 0 && prevIsManual !== currIsManual && dx > tWidth * 0.20;
 
                             if (isSegmentHiddenByWrapEraser(name, prevPoint, currPoint, trackMeta) ||
                                 isScaleWrapBoundaryForPoints(name, prevPoint, currPoint) ||
-                                isHeuristicWrap) {
+                                isHeuristicWrap ||
+                                isLargeEditBoundary) {
                                 ctx.moveTo(xDom, yDom);
                             } else {
                                 ctx.lineTo(xDom, yDom);
