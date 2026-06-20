@@ -7028,23 +7028,6 @@
                 }
                 const centerPtY = pts[nearestIdx][1];
                 const influencePx = smoothMode ? 200 : 100; // Visible rubberband size in pixels
-                const pinGuardPx = 18;
-                const pinFadePx = 36;
-                const pinnedYs = pts
-                    .filter(pt => Array.isArray(pt) && Number.isInteger(pt[2]) && isDepthIndexPinned(editCurveId, pt[2]))
-                    .map(pt => Number(pt[1]))
-                    .filter(Number.isFinite)
-                    .sort((a, b) => a - b);
-                const upperPinY = pinnedYs.filter(y => y <= centerPtY).pop();
-                const lowerPinY = pinnedYs.find(y => y >= centerPtY);
-                const nearestCenterPin = Math.min(
-                    Number.isFinite(upperPinY) ? Math.abs(centerPtY - upperPinY) : Infinity,
-                    Number.isFinite(lowerPinY) ? Math.abs(lowerPinY - centerPtY) : Infinity
-                );
-                if (nearestCenterPin <= pinGuardPx) {
-                    showStatus('That section is protected by a pinned point.', 'info');
-                    return false;
-                }
 
                 // Scan the entire array to guarantee we never miss points, even if pts is temporarily unsorted
                 for (let i = 0; i < pts.length; i++) {
@@ -7068,17 +7051,6 @@
 
                     // Skip pinned points — they must stay completely stationary
                     if (i !== nearestIdx && isDepthIndexPinned(editCurveId, dIdx)) continue;
-                    if (Number.isFinite(upperPinY) && ptY <= upperPinY) continue;
-                    if (Number.isFinite(lowerPinY) && ptY >= lowerPinY) continue;
-
-                    const nearestPinDistance = Math.min(
-                        Number.isFinite(upperPinY) ? Math.abs(ptY - upperPinY) : Infinity,
-                        Number.isFinite(lowerPinY) ? Math.abs(lowerPinY - ptY) : Infinity
-                    );
-                    if (nearestPinDistance <= pinGuardPx) continue;
-                    const pinFade = Number.isFinite(nearestPinDistance)
-                        ? Math.max(0, Math.min(1, (nearestPinDistance - pinGuardPx) / pinFadePx))
-                        : 1;
 
                     neighbors.push({
                         ptRef: pts[i],
@@ -7092,7 +7064,6 @@
                         currentDepthIndex: dIdx,
                         originalX: ptX,
                         originalY: ptY,
-                        pinFade,
                         pointKind: String(pts[i][3] || ''),
                         originalValue: entry.values[dIdx],
                     });
@@ -7423,10 +7394,7 @@
             const getWeight = (n) => {
                 if (!n) return 0;
                 const normDist = Math.min(1.0, (n.distPx || 0) / (n.influencePx || 75));
-                const distanceWeight = smoothMode ? Math.exp(- (normDist * normDist) * 4.0) : Math.pow(1.0 - normDist, 1.5);
-                const pinFade = Number.isFinite(n.pinFade) ? n.pinFade : 1;
-                const smoothPinFade = pinFade * pinFade * (3 - 2 * pinFade);
-                return distanceWeight * smoothPinFade;
+                return smoothMode ? Math.exp(- (normDist * normDist) * 4.0) : Math.pow(1.0 - normDist, 1.5);
             };
 
             let maxDownY = Infinity;
