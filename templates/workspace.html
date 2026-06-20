@@ -6288,61 +6288,20 @@
                 undoValues,
             });
 
-            // Blend the new point into nearby rows so it forms a rounded arch
-            // instead of two nearly overlapping straight connectors.
-            const archRadius = 42;
-            const sourceValues = entry.values.slice();
-            const sourceXs = sourceValues.map((value, depthIdx) => trackValueToPixelX(value, targetTrack, {
-                depthIndex: depthIdx,
-                values: sourceValues,
-            }));
-            const trackWidth = Math.abs(Number(targetTrack.rightX) - Number(targetTrack.leftX));
-            const crossesWrap = (leftIdx, rightIdx) => {
-                const leftX = sourceXs[leftIdx];
-                const rightX = sourceXs[rightIdx];
-                return !Number.isFinite(leftX) || !Number.isFinite(rightX) ||
-                    (Number.isFinite(trackWidth) && trackWidth > 0 && Math.abs(rightX - leftX) > trackWidth * 0.5);
-            };
-            let archStart = idx;
-            let archEnd = idx;
-            while (archStart > 0) {
-                const rowY = getPixelYForDepthIndex(archStart - 1, depthCfg);
-                if (!Number.isFinite(rowY) || Math.abs(rowY - yTrace) > archRadius || crossesWrap(archStart - 1, archStart)) break;
-                archStart -= 1;
+            entry.values[idx] = newValue;
+            const existingIdx = findBestPointIndexForDepth(pts, idx, yTrace, editX);
+            const archStamp = Date.now();
+            if (existingIdx >= 0) {
+                pts[existingIdx][0] = editX;
+                pts[existingIdx][1] = yTrace;
+                pts[existingIdx][2] = idx;
+                pts[existingIdx][3] = 'manual_arch';
+                pts[existingIdx][4] = archStamp;
+            } else {
+                pts.push([editX, yTrace, idx, 'manual_arch', archStamp]);
             }
-            while (archEnd + 1 < entry.values.length) {
-                const rowY = getPixelYForDepthIndex(archEnd + 1, depthCfg);
-                if (!Number.isFinite(rowY) || Math.abs(rowY - yTrace) > archRadius || crossesWrap(archEnd, archEnd + 1)) break;
-                archEnd += 1;
-            }
-            const startY = getPixelYForDepthIndex(archStart, depthCfg);
-            const endY = getPixelYForDepthIndex(archEnd, depthCfg);
-            const upperRadius = Number.isFinite(startY) ? Math.max(1, Math.abs(yTrace - startY)) : archRadius;
-            const lowerRadius = Number.isFinite(endY) ? Math.max(1, Math.abs(endY - yTrace)) : archRadius;
-
-            for (let depthIdx = archStart; depthIdx <= archEnd; depthIdx++) {
-                if (isDepthIndexPinned(editCurveId, depthIdx)) continue;
-                const rowY = getPixelYForDepthIndex(depthIdx, depthCfg);
-                if (!Number.isFinite(rowY)) continue;
-                const distance = Math.abs(rowY - yTrace);
-                if (depthIdx === idx) {
-                    entry.values[depthIdx] = newValue;
-                    continue;
-                }
-
-                const originalX = sourceXs[depthIdx];
-                if (!Number.isFinite(originalX)) continue;
-                const sideRadius = rowY < yTrace ? upperRadius : lowerRadius;
-                const weight = 0.5 * (1 + Math.cos(Math.PI * Math.min(1, distance / sideRadius)));
-                const archX = originalX + (editX - originalX) * weight;
-                const archValue = pixelToTrackValue(archX, targetTrack, {
-                    depthIndex: depthIdx,
-                    values: sourceValues,
-                });
-                if (Number.isFinite(archValue)) entry.values[depthIdx] = archValue;
-            }
-
-            rebuildCurveTraceFromDigitized(editCurveId);
+            pts.sort((a, b) => Number(a && a[1] || 0) - Number(b && b[1] || 0));
+            lastCurveTraces[targetKey] = pts;
 
             renderCurveTraceOverlays(lastCurveTraces);
             showStatus('Added point.', 'info');
@@ -12844,6 +12803,24 @@
                                 isScaleWrapBoundaryForPoints(name, prevPoint, currPoint) ||
                                 isHeuristicWrap) {
                                 ctx.moveTo(xDom, yDom);
+                            } else if (currPoint[3] === 'manual_arch') {
+                                const prevXDom = prevPoint[0] * scaleX;
+                                const prevYDom = prevPoint[1] * scaleY;
+                                ctx.quadraticCurveTo(
+                                    (prevXDom + xDom) * 0.5,
+                                    Math.min(prevYDom, yDom) - 12,
+                                    xDom,
+                                    yDom
+                                );
+                            } else if (prevPoint[3] === 'manual_arch') {
+                                const prevXDom = prevPoint[0] * scaleX;
+                                const prevYDom = prevPoint[1] * scaleY;
+                                ctx.quadraticCurveTo(
+                                    (prevXDom + xDom) * 0.5,
+                                    Math.max(prevYDom, yDom) + 12,
+                                    xDom,
+                                    yDom
+                                );
                             } else {
                                 ctx.lineTo(xDom, yDom);
                             }
