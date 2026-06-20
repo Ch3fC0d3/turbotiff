@@ -14145,23 +14145,6 @@
                     if (scrollLocked && !e.ctrlKey && !e.metaKey) {
                         e.preventDefault();
                         e.stopPropagation();
-                        return;
-                    }
-                    if (e.ctrlKey || e.metaKey) return;
-
-                    const unit = e.deltaMode === 1 ? 16 : (e.deltaMode === 2 ? viewerScroll.clientHeight : 1);
-                    const deltaY = e.deltaY * unit;
-                    const deltaX = e.deltaX * unit;
-                    const maxTop = Math.max(0, viewerScroll.scrollHeight - viewerScroll.clientHeight);
-                    const maxLeft = Math.max(0, viewerScroll.scrollWidth - viewerScroll.clientWidth);
-                    const nextTop = Math.max(0, Math.min(maxTop, viewerScroll.scrollTop + deltaY));
-                    const nextLeft = Math.max(0, Math.min(maxLeft, viewerScroll.scrollLeft + deltaX));
-                    const moved = nextTop !== viewerScroll.scrollTop || nextLeft !== viewerScroll.scrollLeft;
-                    if (moved) {
-                        viewerScroll.scrollTop = nextTop;
-                        viewerScroll.scrollLeft = nextLeft;
-                        e.preventDefault();
-                        e.stopPropagation();
                     }
                 }, { passive: false });
                 
