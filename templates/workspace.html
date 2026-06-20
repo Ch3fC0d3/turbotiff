@@ -7084,6 +7084,9 @@
                         centerDepthIdx = dIdx;
                     }
 
+                    // Skip pinned points — they must stay completely stationary
+                    if (i !== nearestIdx && isDepthIndexPinned(editCurveId, dIdx)) continue;
+
                     neighbors.push({
                         ptRef: pts[i],
                         isCenter: (i === nearestIdx),
