@@ -6291,15 +6291,19 @@
             entry.values[idx] = newValue;
             const existingIdx = findBestPointIndexForDepth(pts, idx, yTrace, editX);
             const archStamp = Date.now();
+            let archPoint;
             if (existingIdx >= 0) {
-                pts[existingIdx][0] = editX;
-                pts[existingIdx][1] = yTrace;
-                pts[existingIdx][2] = idx;
-                pts[existingIdx][3] = 'manual_arch';
-                pts[existingIdx][4] = archStamp;
+                archPoint = pts[existingIdx];
+                archPoint[0] = editX;
+                archPoint[1] = yTrace;
+                archPoint[2] = idx;
+                archPoint[3] = 'manual_arch';
+                archPoint[4] = archStamp;
             } else {
-                pts.push([editX, yTrace, idx, 'manual_arch', archStamp]);
+                archPoint = [editX, yTrace, idx, 'manual_arch', archStamp];
+                pts.push(archPoint);
             }
+            pts = pts.filter(point => point === archPoint || !Array.isArray(point) || point[2] !== idx);
             pts.sort((a, b) => Number(a && a[1] || 0) - Number(b && b[1] || 0));
             lastCurveTraces[targetKey] = pts;
 
