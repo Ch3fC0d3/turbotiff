@@ -141,7 +141,7 @@
                             </span>
                         </td>
                         <td class="px-4 py-3 flex items-center gap-2">
-                            <div class="flex flex-wrap items-center gap-2">
+                            <div>
                                 {% if job.status == 'payment_method_saved' and job.stripe_payment_method_id %}
                                     <button onclick="chargeManagedJob('{{ job.id }}', '{{ job.estimated_amount }}')" class="rounded bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-emerald-500 transition-colors">
                                         Charge & Complete
@@ -151,32 +151,12 @@
                                 {% else %}
                                     <span class="text-xs text-slate-500">Pending Setup</span>
                                 {% endif %}
-
-                                {% if job.notes and 'Files: [' in job.notes %}
-                                <button onclick="downloadJobFiles('{{ job.id }}')" class="rounded bg-blue-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-blue-500 transition-colors" title="Download customer source files">
-                                    Source Files
-                                </button>
-                                {% endif %}
-
-                                <input
-                                    type="file"
-                                    id="delivery-files-{{ job.id }}"
-                                    class="hidden"
-                                    multiple
-                                    onchange="uploadDeliveryFiles('{{ job.id }}')"
-                                >
-                                <button onclick="document.getElementById('delivery-files-{{ job.id }}').click()" class="rounded bg-fuchsia-700 px-2.5 py-1 text-xs font-semibold text-white hover:bg-fuchsia-600 transition-colors" title="Upload one or more completed files for this customer">
-                                    Upload Files
-                                </button>
-
-                                {% if job.notes and 'Admin Files: [' in job.notes %}
-                                <button onclick="downloadDeliveryFiles('{{ job.id }}')" class="rounded bg-cyan-700 px-2.5 py-1 text-xs font-semibold text-white hover:bg-cyan-600 transition-colors" title="Download files uploaded by admin">
-                                    Delivery Files
-                                </button>
-                                {% endif %}
-
-                                <span id="delivery-status-{{ job.id }}" class="text-xs text-slate-400"></span>
                             </div>
+                            {% if job.notes and 'Files: [' in job.notes %}
+                            <button onclick="downloadJobFiles('{{ job.id }}')" class="rounded bg-blue-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-blue-500 transition-colors" title="Download Uploaded Images">
+                                Files
+                            </button>
+                            {% endif %}
                         </td>
                     </tr>
                     {% else %}
@@ -462,95 +442,6 @@
                     });
                 } else {
                     alert('Failed to get files: ' + data.error);
-                }
-            } catch (e) {
-                alert('Request failed: ' + e);
-            }
-        }
-
-        async function uploadDeliveryFiles(jobId) {
-            const input = document.getElementById(`delivery-files-${jobId}`);
-            const status = document.getElementById(`delivery-status-${jobId}`);
-            const files = input ? Array.from(input.files || []) : [];
-            if (!files.length) return;
-
-            const uploadedFiles = [];
-            try {
-                if (status) status.textContent = `Uploading 0/${files.length}...`;
-
-                for (let i = 0; i < files.length; i += 1) {
-                    const file = files[i];
-                    const contentType = file.type || 'application/octet-stream';
-                    const urlRes = await fetch(`/api/admin/managed-jobs/${jobId}/delivery-upload-url`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            filename: file.name,
-                            contentType: contentType
-                        })
-                    });
-                    const urlData = await urlRes.json();
-                    if (!urlData.success) {
-                        throw new Error(urlData.error || `Failed to prepare upload for ${file.name}`);
-                    }
-
-                    const uploadRes = await fetch(urlData.uploadUrl, {
-                        method: 'PUT',
-                        headers: { 'Content-Type': contentType },
-                        body: file
-                    });
-                    if (!uploadRes.ok) {
-                        throw new Error(`Failed to upload ${file.name}`);
-                    }
-
-                    uploadedFiles.push({
-                        name: file.name,
-                        size: file.size,
-                        type: contentType,
-                        gcs_key: urlData.fileKey
-                    });
-                    if (status) status.textContent = `Uploading ${i + 1}/${files.length}...`;
-                }
-
-                const saveRes = await fetch(`/api/admin/managed-jobs/${jobId}/delivery-files`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ files: uploadedFiles })
-                });
-                const saveData = await saveRes.json();
-                if (!saveData.success) {
-                    throw new Error(saveData.error || 'Uploaded files could not be saved to the job.');
-                }
-
-                if (status) status.textContent = `Uploaded ${saveData.uploaded} file(s).`;
-                input.value = '';
-                window.setTimeout(() => window.location.reload(), 700);
-            } catch (e) {
-                if (status) status.textContent = '';
-                alert('Upload failed: ' + e.message);
-            }
-        }
-
-        async function downloadDeliveryFiles(jobId) {
-            try {
-                const res = await fetch(`/api/admin/managed-jobs/${jobId}/delivery-files`);
-                const data = await res.json();
-                if (data.success) {
-                    if (data.urls.length === 0) {
-                        alert("No delivery files uploaded for this job.");
-                        return;
-                    }
-                    data.urls.forEach(file => {
-                        const a = document.createElement('a');
-                        a.href = file.url;
-                        a.download = file.filename;
-                        a.target = "_blank";
-                        document.body.appendChild(a);
-                        a.click();
-                        document.body.removeChild(a);
-                    });
-                } else {
-                    alert('Failed to get delivery files: ' + data.error);
                 }
             } catch (e) {
                 alert('Request failed: ' + e);
