@@ -4900,6 +4900,20 @@
             return left + wrappedOffset;
         }
 
+        function unwrapDisplayXNearReference(displayX, referenceRawX, track) {
+            const visibleX = Number(displayX);
+            const referenceX = Number(referenceRawX);
+            const left = Number(track && track.leftX);
+            const right = Number(track && track.rightX);
+            const width = right - left;
+            if (![visibleX, referenceX, left, right, width].every(Number.isFinite) || width <= 0) {
+                return visibleX;
+            }
+            const baseX = wrapRawXToTrack(visibleX, track);
+            const nearestCycle = Math.round((referenceX - baseX) / width);
+            return baseX + nearestCycle * width;
+        }
+
         function trackValueToPixelX(value, track, options = {}) {
             if (!track) return null;
             const leftX = track.leftX;
@@ -6202,7 +6216,15 @@
             const entry = lastDigitizedCurves[curveKey];
             if (!entry || !Array.isArray(entry.values) || idx >= entry.values.length) return;
 
-            const rawEditX = Math.max(0, Math.min((imageWidth || xImg + 1) - 1, xImg));
+            const clickedX = Math.max(0, Math.min((imageWidth || xImg + 1) - 1, xImg));
+            const referenceRawX = !isMissingDigitizedValue(entry.values[idx])
+                ? trackValueToPixelX(entry.values[idx], targetTrack, { rawValue: true })
+                : null;
+            const clickInsideTrack = clickedX >= Math.min(targetTrack.leftX, targetTrack.rightX) &&
+                clickedX <= Math.max(targetTrack.leftX, targetTrack.rightX);
+            const rawEditX = targetTrack.wrapped && clickInsideTrack && Number.isFinite(referenceRawX)
+                ? unwrapDisplayXNearReference(clickedX, referenceRawX, targetTrack)
+                : clickedX;
             const editX = targetTrack.wrapped ? wrapRawXToTrack(rawEditX, targetTrack) : rawEditX;
             const newValue = targetTrack.wrapped
                 ? pixelToTrackValue(rawEditX, targetTrack, { rawX: true })
@@ -6378,7 +6400,15 @@
             const entry = lastDigitizedCurves[curveKey];
             if (!entry || !Array.isArray(entry.values) || idx >= entry.values.length) return;
 
-            const rawEditX = Math.max(0, Math.min((imageWidth || xImg + 1) - 1, xImg));
+            const clickedX = Math.max(0, Math.min((imageWidth || xImg + 1) - 1, xImg));
+            const referenceRawX = !isMissingDigitizedValue(entry.values[idx])
+                ? trackValueToPixelX(entry.values[idx], targetTrack, { rawValue: true })
+                : null;
+            const clickInsideTrack = clickedX >= Math.min(targetTrack.leftX, targetTrack.rightX) &&
+                clickedX <= Math.max(targetTrack.leftX, targetTrack.rightX);
+            const rawEditX = targetTrack.wrapped && clickInsideTrack && Number.isFinite(referenceRawX)
+                ? unwrapDisplayXNearReference(clickedX, referenceRawX, targetTrack)
+                : clickedX;
             const editX = targetTrack.wrapped ? wrapRawXToTrack(rawEditX, targetTrack) : rawEditX;
             const newValue = targetTrack.wrapped
                 ? pixelToTrackValue(rawEditX, targetTrack, { rawX: true })
