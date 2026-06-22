@@ -12973,6 +12973,24 @@
                                 });
                             }
                         }
+                        const addPointGroupGapPx = 48;
+                        const archGroups = [];
+                        for (const range of archRanges) {
+                            const currentGroup = archGroups.length ? archGroups[archGroups.length - 1] : null;
+                            const previousRange = currentGroup && currentGroup.length
+                                ? currentGroup[currentGroup.length - 1]
+                                : null;
+                            const previousCrest = previousRange ? renderPoints[previousRange.centerIdx] : null;
+                            const currentCrest = renderPoints[range.centerIdx];
+                            const gapPx = previousCrest && currentCrest
+                                ? Math.abs((currentCrest[1] - previousCrest[1]) * scaleY)
+                                : Infinity;
+                            if (currentGroup && gapPx <= addPointGroupGapPx) {
+                                currentGroup.push(range);
+                            } else {
+                                archGroups.push([range]);
+                            }
+                        }
                         ctx.beginPath();
 
                         const firstRawX = wrapActive
@@ -12998,7 +13016,11 @@
                                 : Number(currPoint[0]);
                             const xDom = (currDisplayX * scaleX);
                             const yDom = (currPoint[1] * scaleY);
-                            if (archRanges.some(range => i > range.upperIdx && i <= range.lowerIdx)) {
+                            if (archGroups.some(group => {
+                                const firstRange = group[0];
+                                const lastRange = group[group.length - 1];
+                                return i > firstRange.upperIdx && i <= lastRange.lowerIdx;
+                            })) {
                                 ctx.moveTo(xDom, yDom);
                                 continue;
                             }
@@ -13058,22 +13080,8 @@
                         }
                         ctx.stroke();
 
-                        for (let rangePos = 0; rangePos < archRanges.length; rangePos++) {
-                            const range = archRanges[rangePos];
-                            if (rangePos > 0) {
-                                const priorRange = archRanges[rangePos - 1];
-                                if (priorRange.nextArchIdx === range.centerIdx && priorRange.nextArchIdx < priorRange.lowerIdx) {
-                                    continue;
-                                }
-                            }
-
-                            const joinedRanges = [range];
-                            while (rangePos + joinedRanges.length < archRanges.length) {
-                                const lastJoined = joinedRanges[joinedRanges.length - 1];
-                                const candidate = archRanges[rangePos + joinedRanges.length];
-                                if (lastJoined.nextArchIdx !== candidate.centerIdx || lastJoined.nextArchIdx >= lastJoined.lowerIdx) break;
-                                joinedRanges.push(candidate);
-                            }
+                        for (const joinedRanges of archGroups) {
+                            const range = joinedRanges[0];
 
                             if (joinedRanges.length > 1) {
                                 const firstRange = joinedRanges[0];
