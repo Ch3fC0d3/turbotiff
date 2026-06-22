@@ -13058,7 +13058,110 @@
                         }
                         ctx.stroke();
 
-                        for (const range of archRanges) {
+                        for (let rangePos = 0; rangePos < archRanges.length; rangePos++) {
+                            const range = archRanges[rangePos];
+                            if (rangePos > 0) {
+                                const priorRange = archRanges[rangePos - 1];
+                                if (priorRange.nextArchIdx === range.centerIdx && priorRange.nextArchIdx < priorRange.lowerIdx) {
+                                    continue;
+                                }
+                            }
+
+                            const joinedRanges = [range];
+                            while (rangePos + joinedRanges.length < archRanges.length) {
+                                const lastJoined = joinedRanges[joinedRanges.length - 1];
+                                const candidate = archRanges[rangePos + joinedRanges.length];
+                                if (lastJoined.nextArchIdx !== candidate.centerIdx || lastJoined.nextArchIdx >= lastJoined.lowerIdx) break;
+                                joinedRanges.push(candidate);
+                            }
+
+                            if (joinedRanges.length > 1) {
+                                const firstRange = joinedRanges[0];
+                                const lastRange = joinedRanges[joinedRanges.length - 1];
+                                const upper = renderPoints[firstRange.upperIdx];
+                                const lower = renderPoints[lastRange.lowerIdx];
+                                const crests = joinedRanges.map(joined => renderPoints[joined.centerIdx]);
+                                const firstCrest = crests[0];
+                                const lastCrest = crests[crests.length - 1];
+                                const upperY = upper[1] * scaleY;
+                                const lowerY = lower[1] * scaleY;
+                                const firstCrestY = firstCrest[1] * scaleY;
+                                const lastCrestY = lastCrest[1] * scaleY;
+                                const upperAnchorY = Math.max(upperY, firstCrestY - archHalfSpan);
+                                const lowerAnchorY = Math.min(lowerY, lastCrestY + archHalfSpan);
+
+                                if (wrapActive) {
+                                    const upperRawX = getTracePointRawX(upper, trackMeta, name);
+                                    const lowerRawX = getTracePointRawX(lower, trackMeta, name);
+                                    const firstRawX = getTracePointRawX(firstCrest, trackMeta, name);
+                                    const lastRawX = getTracePointRawX(lastCrest, trackMeta, name);
+                                    if (![upperRawX, lowerRawX, firstRawX, lastRawX, upperY, lowerY].every(Number.isFinite)) {
+                                        continue;
+                                    }
+                                    const interpolateRawX = (targetY, startRawX, startY, endRawX, endY) => {
+                                        const dy = endY - startY;
+                                        if (Math.abs(dy) < 0.001) return (startRawX + endRawX) * 0.5;
+                                        const t = Math.max(0, Math.min(1, (targetY - startY) / dy));
+                                        return startRawX + (endRawX - startRawX) * t;
+                                    };
+                                    const upperAnchorRawX = interpolateRawX(upperAnchorY, upperRawX, upperY, firstRawX, firstCrestY);
+                                    const lowerAnchorRawX = interpolateRawX(lowerAnchorY, lastRawX, lastCrestY, lowerRawX, lowerY);
+
+                                    let pathRawX = upperRawX;
+                                    let pathY = upperY;
+                                    ctx.beginPath();
+                                    ctx.moveTo(wrapRawXToTrack(pathRawX, trackMeta) * scaleX, pathY);
+                                    const appendWrappedPoint = (nextRawX, nextY) => {
+                                        drawWrappedTrackSegment(
+                                            ctx,
+                                            pathRawX,
+                                            pathY / scaleY,
+                                            nextRawX,
+                                            nextY / scaleY,
+                                            trackMeta,
+                                            scaleX,
+                                            scaleY
+                                        );
+                                        pathRawX = nextRawX;
+                                        pathY = nextY;
+                                    };
+                                    appendWrappedPoint(upperAnchorRawX, upperAnchorY);
+                                    for (const crestPoint of crests) {
+                                        appendWrappedPoint(
+                                            getTracePointRawX(crestPoint, trackMeta, name),
+                                            crestPoint[1] * scaleY
+                                        );
+                                    }
+                                    appendWrappedPoint(lowerAnchorRawX, lowerAnchorY);
+                                    appendWrappedPoint(lowerRawX, lowerY);
+                                    ctx.stroke();
+                                } else {
+                                    const upperX = upper[0] * scaleX;
+                                    const lowerX = lower[0] * scaleX;
+                                    const firstCrestX = firstCrest[0] * scaleX;
+                                    const lastCrestX = lastCrest[0] * scaleX;
+                                    const interpolateX = (targetY, startX, startY, endX, endY) => {
+                                        const dy = endY - startY;
+                                        if (Math.abs(dy) < 0.001) return (startX + endX) * 0.5;
+                                        const t = Math.max(0, Math.min(1, (targetY - startY) / dy));
+                                        return startX + (endX - startX) * t;
+                                    };
+                                    const upperAnchorX = interpolateX(upperAnchorY, upperX, upperY, firstCrestX, firstCrestY);
+                                    const lowerAnchorX = interpolateX(lowerAnchorY, lastCrestX, lastCrestY, lowerX, lowerY);
+
+                                    ctx.beginPath();
+                                    ctx.moveTo(upperX, upperY);
+                                    ctx.lineTo(upperAnchorX, upperAnchorY);
+                                    for (const crestPoint of crests) {
+                                        ctx.lineTo(crestPoint[0] * scaleX, crestPoint[1] * scaleY);
+                                    }
+                                    ctx.lineTo(lowerAnchorX, lowerAnchorY);
+                                    ctx.lineTo(lowerX, lowerY);
+                                    ctx.stroke();
+                                }
+                                continue;
+                            }
+
                             const crest = renderPoints[range.centerIdx];
                             const upperIdx = range.upperIdx;
                             const lowerIdx = range.lowerIdx;
