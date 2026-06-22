@@ -1193,15 +1193,6 @@
             position: relative !important;
             z-index: 2103 !important;
         }
-        .curve-trace-dot {
-            position: absolute;
-            width: 1px;
-            height: 1px;
-            border-radius: 50%;
-            background: rgba(56, 189, 248, 0.8); /* cyan */
-            pointer-events: none;
-            z-index: 30;
-        }
         .scale-wrap-controls {
             display: flex;
             flex-wrap: wrap;
@@ -6305,8 +6296,8 @@
         /**
          * commitDrawStroke()
          * At pen-up, convert the collected stroke samples into curve control points.
-         * Thin the samples to one per depth-index, then call handleCurveAddPoint
-         * for each, batching the whole stroke as one undoable action.
+         * Thin samples to one per depth index, write the curve values, then
+         * rebuild the display trace as one undoable action.
          */
         function commitDrawStroke() {
             drawStrokeActive = false;
@@ -6446,7 +6437,7 @@
             entry.values[idx] = newValue;
             const existingIdx = findBestPointIndexForDepth(pts, idx, yTrace, editX);
             const archStamp = Date.now();
-            const pointKind = targetTrack.wrapped ? 'manual' : 'manual_arch';
+            const pointKind = 'manual_arch';
             let archPoint;
             if (existingIdx >= 0) {
                 archPoint = pts[existingIdx];
@@ -8683,19 +8674,6 @@
                     event.preventDefault();
                     return;
                 }
-                // DRAW (PEN) TOOL
-                if (activeTool === 'draw' && (event.button === 0 || (event.pointerType && event.pointerType !== 'mouse'))) {
-                    drawStrokeActive = true;
-                    drawStrokePoints = [[xImg, yImg]];
-                    // Create a visual cursor ring that follows the pen
-                    if (!drawCursorRing && overlay) {
-                        drawCursorRing = document.createElement('div');
-                        drawCursorRing.className = 'draw-cursor-ring';
-                        overlay.appendChild(drawCursorRing);
-                    }
-                    event.preventDefault();
-                    return;
-                }
                 // ERASER TOOL
                 if (activeTool === 'eraser' && event.button === 0) {
                     eraserStart = { x: xImg, y: yImg, clientX: event.clientX, clientY: event.clientY };
@@ -8787,18 +8765,6 @@
             // Update crosshair
             updateCrosshair(xImg, yImg, rect, event);
             
-            // Handle Draw (Pen) Stroke Sampling
-            if (drawStrokeActive && activeTool === 'draw') {
-                handleDrawSample(xImg, yImg);
-                // Move the visual cursor ring
-                if (drawCursorRing && imageWidth && imageHeight) {
-                    drawCursorRing.style.left = `${(xImg / (imageWidth - 1)) * 100}%`;
-                    drawCursorRing.style.top  = `${(yImg / (imageHeight - 1)) * 100}%`;
-                }
-                event.preventDefault();
-                return;
-            }
-
             // Handle Eraser Drag
             if (eraserStart && eraserBox) {
                 const x1 = Math.min(eraserStart.x, xImg);
@@ -12317,61 +12283,6 @@
                 }
             }
 
-            // Legacy cleanup: remove any old DOM-based overlays if they exist
-            const overlay = document.getElementById('overlay');
-            if (!overlay) return;
-            const dots = overlay.querySelectorAll('.curve-trace-dot');
-            dots.forEach((el) => el.remove());
-            const chains = overlay.querySelectorAll('.curve-trace-chain');
-            chains.forEach((el) => el.remove());
-        }
-
-        // Fast update: only reposition existing dots and update SVG path (no DOM recreation)
-        function updateCurveTracePositions(curveId) {
-            if (!lastCurveTraces || !lastCurveTraces[curveId]) return;
-            
-            const overlay = document.getElementById('overlay');
-            const img = document.getElementById('imagePreview');
-            if (!overlay || !img) return;
-            
-            const rect = img.getBoundingClientRect();
-            if (!rect.width || !rect.height) return;
-            
-            const w = imageWidth || img.naturalWidth || 1;
-            const h = imageHeight || img.naturalHeight || 1;
-            const scaleX = rect.width / w;
-            const scaleY = rect.height / h;
-            
-            const points = lastCurveTraces[curveId] || [];
-            const dots = overlay.querySelectorAll('.curve-trace-dot');
-            const chain = overlay.querySelector('.curve-trace-chain path');
-            
-            // Sort points by Y for chain
-            const sortedPoints = points
-                .filter(pt => Array.isArray(pt) && pt.length >= 2)
-                .slice()
-                .sort((a, b) => a[1] - b[1]);
-            
-            // Update dots positions (dots are in sorted order)
-            sortedPoints.forEach((pt, idx) => {
-                if (idx < dots.length) {
-                    const xDom = pt[0] * scaleX;
-                    const yDom = pt[1] * scaleY;
-                    dots[idx].style.left = `${xDom - 1}px`;
-                    dots[idx].style.top = `${yDom - 1}px`;
-                }
-            });
-            
-            // Update SVG path
-            if (chain && sortedPoints.length >= 2) {
-                let d = '';
-                sortedPoints.forEach((pt, idx) => {
-                    const xDom = pt[0] * scaleX;
-                    const yDom = pt[1] * scaleY;
-                    d += (idx === 0 ? 'M ' : ' L ') + xDom.toFixed(2) + ' ' + yDom.toFixed(2);
-                });
-                chain.setAttribute('d', d);
-            }
         }
 
         function toggleOverlayVisibility() {
@@ -12560,12 +12471,6 @@
                 clearCurveTraceOverlays();
                 return;
             }
-
-            const legacyDots = overlay.querySelectorAll('.curve-trace-dot');
-            legacyDots.forEach((el) => el.remove());
-            const legacyChains = overlay.querySelectorAll('.curve-trace-chain');
-            legacyChains.forEach((el) => el.remove());
-
 
             // Use overlay box if available so canvas matches the scrolled container
             const rect = overlay.getBoundingClientRect();
@@ -12989,7 +12894,7 @@
                         // Keep add-point bends local even when the rendered trace samples
                         // are far apart. Actual samples select a safe replacement range;
                         // interpolated anchors below control the visible size of the bend.
-                        const archHalfSpan = 5;
+                        const archHalfSpan = 7;
                         const trackWidthImg = trackMeta ? Math.abs((trackMeta.rightX || 0) - (trackMeta.leftX || 0)) : 0;
                         const findArchAnchor = (centerIndex, direction) => {
                             const center = renderPoints[centerIndex];
@@ -12998,10 +12903,16 @@
                                 const point = renderPoints[j];
                                 const prior = renderPoints[j - direction];
                                 if (!Array.isArray(point) || point[3] === 'manual_arch') continue;
-                                if (Array.isArray(prior)) {
-                                    const jump = Math.abs(point[0] - prior[0]);
+                                if (Array.isArray(prior) && prior[3] !== 'manual_arch') {
+                                    const pointX = trackMeta && trackMeta.wrapped
+                                        ? getTracePointRawX(point, trackMeta, name)
+                                        : Number(point[0]);
+                                    const priorX = trackMeta && trackMeta.wrapped
+                                        ? getTracePointRawX(prior, trackMeta, name)
+                                        : Number(prior[0]);
+                                    const jump = Math.abs(pointX - priorX);
                                     if ((trackWidthImg > 0 && jump > trackWidthImg * 0.5) ||
-                                        isScaleWrapBoundaryForPoints(name, prior, point)) break;
+                                        (!(trackMeta && trackMeta.wrapped) && isScaleWrapBoundaryForPoints(name, prior, point))) break;
                                 }
                                 lastValid = j;
                                 if (Math.abs((point[1] - center[1]) * scaleY) >= archHalfSpan) break;
@@ -13009,11 +12920,9 @@
                             return lastValid;
                         };
                         const manualArchIndexes = [];
-                        if (!(trackMeta && trackMeta.wrapped)) {
-                            for (let i = 0; i < renderPoints.length; i++) {
-                                if (Array.isArray(renderPoints[i]) && renderPoints[i][3] === 'manual_arch') {
-                                    manualArchIndexes.push(i);
-                                }
+                        for (let i = 0; i < renderPoints.length; i++) {
+                            if (Array.isArray(renderPoints[i]) && renderPoints[i][3] === 'manual_arch') {
+                                manualArchIndexes.push(i);
                             }
                         }
                         const archRanges = [];
@@ -13045,7 +12954,7 @@
                         for (let i = 1; i < renderPoints.length; i++) {
                             const prevPoint = renderPoints[i - 1];
                             const currPoint = renderPoints[i];
-                            const pathPrevPoint = prevPoint[3] === 'manual_arch' && !(trackMeta && trackMeta.wrapped) && i >= 2
+                            const pathPrevPoint = prevPoint[3] === 'manual_arch' && i >= 2
                                 ? renderPoints[i - 2]
                                 : prevPoint;
                             const currRawX = trackMeta && trackMeta.wrapped
@@ -13122,6 +13031,128 @@
                             const lowerIdx = range.lowerIdx;
                             const upper = renderPoints[upperIdx];
                             const lower = renderPoints[lowerIdx];
+                            if (trackMeta && trackMeta.wrapped) {
+                                const upperRawX = getTracePointRawX(upper, trackMeta, name);
+                                const lowerRawX = getTracePointRawX(lower, trackMeta, name);
+                                const crestRawX = getTracePointRawX(crest, trackMeta, name);
+                                const upperY = upper[1] * scaleY;
+                                const lowerY = lower[1] * scaleY;
+                                const crestY = crest[1] * scaleY;
+                                if (![upperRawX, lowerRawX, crestRawX, upperY, lowerY, crestY].every(Number.isFinite)) {
+                                    continue;
+                                }
+
+                                const interpolateBaseRawX = targetY => {
+                                    const dy = lowerY - upperY;
+                                    if (Math.abs(dy) < 0.001) return (upperRawX + lowerRawX) * 0.5;
+                                    const t = Math.max(0, Math.min(1, (targetY - upperY) / dy));
+                                    return upperRawX + (lowerRawX - upperRawX) * t;
+                                };
+                                const previousCrest = range.previousArchIdx >= 0 ? renderPoints[range.previousArchIdx] : null;
+                                const nextCrest = range.nextArchIdx >= 0 ? renderPoints[range.nextArchIdx] : null;
+                                const previousBoundaryY = previousCrest
+                                    ? ((previousCrest[1] * scaleY) + crestY) * 0.5
+                                    : -Infinity;
+                                const nextBoundaryY = nextCrest
+                                    ? (crestY + (nextCrest[1] * scaleY)) * 0.5
+                                    : Infinity;
+                                const upperAnchorY = Math.max(upperY, crestY - archHalfSpan, previousBoundaryY);
+                                const lowerAnchorY = Math.min(lowerY, crestY + archHalfSpan, nextBoundaryY);
+                                const hasPreviousArchInRange = range.previousArchIdx > upperIdx;
+                                const hasNextArchInRange = range.nextArchIdx >= 0 && range.nextArchIdx < lowerIdx;
+                                const previousCrestRawX = hasPreviousArchInRange
+                                    ? getTracePointRawX(previousCrest, trackMeta, name)
+                                    : null;
+                                const nextCrestRawX = hasNextArchInRange
+                                    ? getTracePointRawX(nextCrest, trackMeta, name)
+                                    : null;
+                                const upperAnchorRawX = hasPreviousArchInRange && Number.isFinite(previousCrestRawX)
+                                    ? (previousCrestRawX + crestRawX) * 0.5
+                                    : interpolateBaseRawX(upperAnchorY);
+                                const lowerAnchorRawX = hasNextArchInRange && Number.isFinite(nextCrestRawX)
+                                    ? (crestRawX + nextCrestRawX) * 0.5
+                                    : interpolateBaseRawX(lowerAnchorY);
+                                const upperMinHeight = hasPreviousArchInRange ? 0.4 : 1.5;
+                                const lowerMinHeight = hasNextArchInRange ? 0.4 : 1.5;
+                                const upperNoseHeight = Math.min(4, Math.max(upperMinHeight, (crestY - upperAnchorY) * 0.6));
+                                const lowerNoseHeight = Math.min(4, Math.max(lowerMinHeight, (lowerAnchorY - crestY) * 0.6));
+                                const noseDirection = crestRawX >= (upperAnchorRawX + lowerAnchorRawX) * 0.5 ? 1 : -1;
+                                // A quadratic reaches half its control-point offset at
+                                // the nose. Eighteen pixels therefore guarantees about
+                                // nine visible pixels of carryover beyond the rail.
+                                const wrappedArchOverflowControlPx = 18;
+                                const capOffsetRawX = noseDirection * (wrappedArchOverflowControlPx / Math.max(0.001, scaleX));
+
+                                const cubicAt = (p0, p1, p2, p3, t) => {
+                                    const u = 1 - t;
+                                    return u * u * u * p0 + 3 * u * u * t * p1 + 3 * u * t * t * p2 + t * t * t * p3;
+                                };
+                                const quadraticAt = (p0, p1, p2, t) => {
+                                    const u = 1 - t;
+                                    return u * u * p0 + 2 * u * t * p1 + t * t * p2;
+                                };
+
+                                let pathRawX = hasPreviousArchInRange ? upperAnchorRawX : upperRawX;
+                                let pathY = hasPreviousArchInRange ? upperAnchorY : upperY;
+                                ctx.beginPath();
+                                ctx.moveTo(wrapRawXToTrack(pathRawX, trackMeta) * scaleX, pathY);
+                                const appendWrappedPoint = (nextRawX, nextY) => {
+                                    drawWrappedTrackSegment(
+                                        ctx,
+                                        pathRawX,
+                                        pathY / scaleY,
+                                        nextRawX,
+                                        nextY / scaleY,
+                                        trackMeta,
+                                        scaleX,
+                                        scaleY
+                                    );
+                                    pathRawX = nextRawX;
+                                    pathY = nextY;
+                                };
+                                if (!hasPreviousArchInRange) appendWrappedPoint(upperAnchorRawX, upperAnchorY);
+
+                                const upperEndY = crestY - upperNoseHeight;
+                                for (let step = 1; step <= 8; step++) {
+                                    const t = step / 8;
+                                    appendWrappedPoint(
+                                        cubicAt(
+                                            upperAnchorRawX,
+                                            upperAnchorRawX + (crestRawX - upperAnchorRawX) * 0.55,
+                                            crestRawX,
+                                            crestRawX,
+                                            t
+                                        ),
+                                        cubicAt(upperAnchorY, upperAnchorY, upperEndY, upperEndY, t)
+                                    );
+                                }
+
+                                const lowerStartY = crestY + lowerNoseHeight;
+                                for (let step = 1; step <= 8; step++) {
+                                    const t = step / 8;
+                                    appendWrappedPoint(
+                                        quadraticAt(crestRawX, crestRawX + capOffsetRawX, crestRawX, t),
+                                        quadraticAt(upperEndY, crestY, lowerStartY, t)
+                                    );
+                                }
+
+                                for (let step = 1; step <= 8; step++) {
+                                    const t = step / 8;
+                                    appendWrappedPoint(
+                                        cubicAt(
+                                            crestRawX,
+                                            crestRawX,
+                                            lowerAnchorRawX + (crestRawX - lowerAnchorRawX) * 0.55,
+                                            lowerAnchorRawX,
+                                            t
+                                        ),
+                                        cubicAt(lowerStartY, lowerStartY, lowerAnchorY, lowerAnchorY, t)
+                                    );
+                                }
+                                if (!hasNextArchInRange) appendWrappedPoint(lowerRawX, lowerY);
+                                ctx.stroke();
+                                continue;
+                            }
                             const upperX = upper[0] * scaleX;
                             const upperY = upper[1] * scaleY;
                             const lowerX = lower[0] * scaleX;
@@ -13144,13 +13175,17 @@
                                 : Infinity;
                             const upperAnchorY = Math.max(upperY, crestY - archHalfSpan, previousBoundaryY);
                             const lowerAnchorY = Math.min(lowerY, crestY + archHalfSpan, nextBoundaryY);
-                            const upperAnchorX = interpolateBaseX(upperAnchorY);
-                            const lowerAnchorX = interpolateBaseX(lowerAnchorY);
+                            const hasPreviousArchInRange = range.previousArchIdx > upperIdx;
+                            const hasNextArchInRange = range.nextArchIdx >= 0 && range.nextArchIdx < lowerIdx;
+                            const upperAnchorX = hasPreviousArchInRange && previousCrest
+                                ? ((previousCrest[0] * scaleX) + crestX) * 0.5
+                                : interpolateBaseX(upperAnchorY);
+                            const lowerAnchorX = hasNextArchInRange && nextCrest
+                                ? (crestX + (nextCrest[0] * scaleX)) * 0.5
+                                : interpolateBaseX(lowerAnchorY);
                             const upperNoseHeight = Math.min(3, Math.max(0, (crestY - upperAnchorY) * 0.6));
                             const lowerNoseHeight = Math.min(3, Math.max(0, (lowerAnchorY - crestY) * 0.6));
                             const noseDirection = crestX >= (upperAnchorX + lowerAnchorX) * 0.5 ? 1 : -1;
-                            const hasPreviousArchInRange = range.previousArchIdx > upperIdx;
-                            const hasNextArchInRange = range.nextArchIdx >= 0 && range.nextArchIdx < lowerIdx;
 
                             ctx.beginPath();
                             if (hasPreviousArchInRange) {
