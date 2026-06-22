@@ -4943,6 +4943,34 @@
             return Number(point[0]);
         }
 
+        function isTrackWrapActive(track, curveId = null, points = null) {
+            if (!track) return false;
+            if (track.wrapped) return true;
+            if (getWrapMarkersForCurve(curveId || track.id).length) return true;
+
+            const left = Math.min(Number(track.leftX), Number(track.rightX));
+            const right = Math.max(Number(track.leftX), Number(track.rightX));
+            if (!Number.isFinite(left) || !Number.isFinite(right) || right <= left) return false;
+            const tolerance = Math.max(1, (right - left) * 0.002);
+
+            if (Array.isArray(points) && points.some(point => {
+                const rawX = getTracePointRawX(point, track, curveId);
+                return Number.isFinite(rawX) && (rawX < left - tolerance || rawX > right + tolerance);
+            })) {
+                return true;
+            }
+
+            const found = findDigitizedCurveEntry(curveId || track.id);
+            const values = found && found.entry && Array.isArray(found.entry.values)
+                ? found.entry.values
+                : null;
+            return !!(values && values.some(value => {
+                if (isMissingDigitizedValue(value)) return false;
+                const rawX = trackValueToPixelX(value, track, { rawValue: true });
+                return Number.isFinite(rawX) && (rawX < left - tolerance || rawX > right + tolerance);
+            }));
+        }
+
         function drawWrappedTrackSegment(ctx, rawX1, y1, rawX2, y2, track, scaleX, scaleY) {
             const left = Number(track && track.leftX);
             const right = Number(track && track.rightX);
@@ -5077,6 +5105,7 @@
             const values = found.entry.values;
             const count = Math.min(values.length, lastDigitizedDepth.length);
             const rawXs = new Array(count).fill(null);
+            const wrapActive = isTrackWrapActive(track, normalizedId);
 
             for (let depthIndex = 0; depthIndex < count; depthIndex++) {
                 const value = values[depthIndex];
@@ -5120,7 +5149,7 @@
                 const rawX = rawXs[depthIndex];
                 const yImg = getPixelYForDepthIndex(depthIndex, depthCfg);
                 if (!Number.isFinite(rawX) || !Number.isFinite(yImg)) continue;
-                const displayX = track.wrapped
+                const displayX = wrapActive
                     ? wrapRawXToTrack(rawX, track)
                     : clamp(rawX, leftBound, rightBound);
                 const point = [displayX, yImg, depthIndex];
@@ -6206,6 +6235,7 @@
 
             const entry = lastDigitizedCurves[curveKey];
             if (!entry || !Array.isArray(entry.values) || idx >= entry.values.length) return;
+            const wrapActive = isTrackWrapActive(targetTrack, curveKey);
 
             const clickedX = Math.max(0, Math.min((imageWidth || xImg + 1) - 1, xImg));
             const referenceRawX = !isMissingDigitizedValue(entry.values[idx])
@@ -6213,11 +6243,11 @@
                 : null;
             const clickInsideTrack = clickedX >= Math.min(targetTrack.leftX, targetTrack.rightX) &&
                 clickedX <= Math.max(targetTrack.leftX, targetTrack.rightX);
-            const rawEditX = targetTrack.wrapped && clickInsideTrack && Number.isFinite(referenceRawX)
+            const rawEditX = wrapActive && clickInsideTrack && Number.isFinite(referenceRawX)
                 ? unwrapDisplayXNearReference(clickedX, referenceRawX, targetTrack)
                 : clickedX;
-            const editX = targetTrack.wrapped ? wrapRawXToTrack(rawEditX, targetTrack) : rawEditX;
-            const newValue = targetTrack.wrapped
+            const editX = wrapActive ? wrapRawXToTrack(rawEditX, targetTrack) : rawEditX;
+            const newValue = wrapActive
                 ? pixelToTrackValue(rawEditX, targetTrack, { rawX: true })
                 : pixelToTrackValue(editX, targetTrack, { depthIndex: idx, values: entry.values });
             if (!Number.isFinite(newValue)) return;
@@ -6390,6 +6420,7 @@
 
             const entry = lastDigitizedCurves[curveKey];
             if (!entry || !Array.isArray(entry.values) || idx >= entry.values.length) return;
+            const wrapActive = isTrackWrapActive(targetTrack, curveKey);
 
             const clickedX = Math.max(0, Math.min((imageWidth || xImg + 1) - 1, xImg));
             const referenceRawX = !isMissingDigitizedValue(entry.values[idx])
@@ -6397,11 +6428,11 @@
                 : null;
             const clickInsideTrack = clickedX >= Math.min(targetTrack.leftX, targetTrack.rightX) &&
                 clickedX <= Math.max(targetTrack.leftX, targetTrack.rightX);
-            const rawEditX = targetTrack.wrapped && clickInsideTrack && Number.isFinite(referenceRawX)
+            const rawEditX = wrapActive && clickInsideTrack && Number.isFinite(referenceRawX)
                 ? unwrapDisplayXNearReference(clickedX, referenceRawX, targetTrack)
                 : clickedX;
-            const editX = targetTrack.wrapped ? wrapRawXToTrack(rawEditX, targetTrack) : rawEditX;
-            const newValue = targetTrack.wrapped
+            const editX = wrapActive ? wrapRawXToTrack(rawEditX, targetTrack) : rawEditX;
+            const newValue = wrapActive
                 ? pixelToTrackValue(rawEditX, targetTrack, { rawX: true })
                 : pixelToTrackValue(editX, targetTrack, { depthIndex: idx, values: entry.values });
             if (!Number.isFinite(newValue)) return;
@@ -7076,6 +7107,7 @@
             }
 
             ensureTracePointsHaveDepthIndex(editCurveId);
+            targetTrack.wrapped = isTrackWrapActive(targetTrack, curveKey, pts);
 
             // Sort by Y for sequential access (important for line drawing)
             pts.sort((a, b) => a[1] - b[1]);
@@ -12780,6 +12812,7 @@
                     const y = pt[1];
                     return Number.isFinite(x) && Number.isFinite(y) && x >= 0 && y >= 0 && x <= w && y <= h;
                 });
+                const wrapActive = !!(trackMeta && isTrackWrapActive(trackMeta, name, sortedPoints));
                 const collapseTraceSamplesByDepth = (pts, curveName) => {
                     if (!Array.isArray(pts) || pts.length <= 1) return Array.isArray(pts) ? pts : [];
                     const collapsed = [];
@@ -12904,15 +12937,15 @@
                                 const prior = renderPoints[j - direction];
                                 if (!Array.isArray(point) || point[3] === 'manual_arch') continue;
                                 if (Array.isArray(prior) && prior[3] !== 'manual_arch') {
-                                    const pointX = trackMeta && trackMeta.wrapped
+                                    const pointX = wrapActive
                                         ? getTracePointRawX(point, trackMeta, name)
                                         : Number(point[0]);
-                                    const priorX = trackMeta && trackMeta.wrapped
+                                    const priorX = wrapActive
                                         ? getTracePointRawX(prior, trackMeta, name)
                                         : Number(prior[0]);
                                     const jump = Math.abs(pointX - priorX);
                                     if ((trackWidthImg > 0 && jump > trackWidthImg * 0.5) ||
-                                        (!(trackMeta && trackMeta.wrapped) && isScaleWrapBoundaryForPoints(name, prior, point))) break;
+                                        (!wrapActive && isScaleWrapBoundaryForPoints(name, prior, point))) break;
                                 }
                                 lastValid = j;
                                 if (Math.abs((point[1] - center[1]) * scaleY) >= archHalfSpan) break;
@@ -12942,10 +12975,10 @@
                         }
                         ctx.beginPath();
 
-                        const firstRawX = trackMeta && trackMeta.wrapped
+                        const firstRawX = wrapActive
                             ? getTracePointRawX(renderPoints[0], trackMeta, name)
                             : Number(renderPoints[0][0]);
-                        const firstDisplayX = trackMeta && trackMeta.wrapped
+                        const firstDisplayX = wrapActive
                             ? wrapRawXToTrack(firstRawX, trackMeta)
                             : Number(renderPoints[0][0]);
                         const firstX = (firstDisplayX * scaleX);
@@ -12957,10 +12990,10 @@
                             const pathPrevPoint = prevPoint[3] === 'manual_arch' && i >= 2
                                 ? renderPoints[i - 2]
                                 : prevPoint;
-                            const currRawX = trackMeta && trackMeta.wrapped
+                            const currRawX = wrapActive
                                 ? getTracePointRawX(currPoint, trackMeta, name)
                                 : Number(currPoint[0]);
-                            const currDisplayX = trackMeta && trackMeta.wrapped
+                            const currDisplayX = wrapActive
                                 ? wrapRawXToTrack(currRawX, trackMeta)
                                 : Number(currPoint[0]);
                             const xDom = (currDisplayX * scaleX);
@@ -12998,7 +13031,7 @@
 
                             if (hiddenByWrapEraser) {
                                 ctx.moveTo(xDom, yDom);
-                            } else if (trackMeta && trackMeta.wrapped) {
+                            } else if (wrapActive) {
                                 const prevRawX = getTracePointRawX(pathPrevPoint, trackMeta, name);
                                 if (Number.isFinite(prevRawX) && Number.isFinite(currRawX)) {
                                     drawWrappedTrackSegment(
@@ -13031,7 +13064,7 @@
                             const lowerIdx = range.lowerIdx;
                             const upper = renderPoints[upperIdx];
                             const lower = renderPoints[lowerIdx];
-                            if (trackMeta && trackMeta.wrapped) {
+                            if (wrapActive) {
                                 const upperRawX = getTracePointRawX(upper, trackMeta, name);
                                 const lowerRawX = getTracePointRawX(lower, trackMeta, name);
                                 const crestRawX = getTracePointRawX(crest, trackMeta, name);
