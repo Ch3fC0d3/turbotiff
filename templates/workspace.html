@@ -13065,9 +13065,15 @@
                             const upper = renderPoints[upperIdx];
                             const lower = renderPoints[lowerIdx];
                             if (wrapActive) {
-                                const upperRawX = getTracePointRawX(upper, trackMeta, name);
-                                const lowerRawX = getTracePointRawX(lower, trackMeta, name);
                                 const crestRawX = getTracePointRawX(crest, trackMeta, name);
+                                const storedUpperRawX = getTracePointRawX(upper, trackMeta, name);
+                                const storedLowerRawX = getTracePointRawX(lower, trackMeta, name);
+                                const upperRawX = Number.isFinite(crestRawX)
+                                    ? unwrapDisplayXNearReference(Number(upper[0]), crestRawX, trackMeta)
+                                    : storedUpperRawX;
+                                const lowerRawX = Number.isFinite(crestRawX)
+                                    ? unwrapDisplayXNearReference(Number(lower[0]), crestRawX, trackMeta)
+                                    : storedLowerRawX;
                                 const upperY = upper[1] * scaleY;
                                 const lowerY = lower[1] * scaleY;
                                 const crestY = crest[1] * scaleY;
@@ -13094,10 +13100,10 @@
                                 const hasPreviousArchInRange = range.previousArchIdx > upperIdx;
                                 const hasNextArchInRange = range.nextArchIdx >= 0 && range.nextArchIdx < lowerIdx;
                                 const previousCrestRawX = hasPreviousArchInRange
-                                    ? getTracePointRawX(previousCrest, trackMeta, name)
+                                    ? unwrapDisplayXNearReference(Number(previousCrest[0]), crestRawX, trackMeta)
                                     : null;
                                 const nextCrestRawX = hasNextArchInRange
-                                    ? getTracePointRawX(nextCrest, trackMeta, name)
+                                    ? unwrapDisplayXNearReference(Number(nextCrest[0]), crestRawX, trackMeta)
                                     : null;
                                 const upperAnchorRawX = hasPreviousArchInRange && Number.isFinite(previousCrestRawX)
                                     ? (previousCrestRawX + crestRawX) * 0.5
