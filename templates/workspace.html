@@ -2271,7 +2271,14 @@
 
         function syncWrapMarkersToDigitizedCurves() {
             if (!curveWrapMarkers || typeof curveWrapMarkers !== 'object') return;
-            Object.keys(curveWrapMarkers).forEach(key => normalizeCurveValuesToWrapMarkers(key));
+            Object.keys(curveWrapMarkers).forEach(key => {
+                const track = findTrackByCurveId(key);
+                // Automatic off-scale wrap writes logical values directly during
+                // editing. Reapplying legacy marker cycles here could overwrite
+                // those raw values just before LAS export.
+                if (track && track.wrapped) return;
+                normalizeCurveValuesToWrapMarkers(key);
+            });
         }
 
         function isScaleWrapBoundaryForPoints(curveId, prevPoint, currPoint) {
@@ -4866,9 +4873,31 @@
             }
             const frac = (xImg - leftX) / denom;
             const visibleValue = scaleMin + frac * (scaleMax - scaleMin);
+            if (options && options.rawX === true) return visibleValue;
             const cycle = getWrapCycleForPixelEdit(track, options);
             const range = getTrackScaleRange(track);
             return Number.isFinite(range) ? (visibleValue + cycle * range) : visibleValue;
+        }
+
+        function positiveModulo(value, width) {
+            if (!Number.isFinite(value) || !Number.isFinite(width) || width <= 0) return value;
+            return ((value % width) + width) % width;
+        }
+
+        function wrapRawXToTrack(rawX, track) {
+            const x = Number(rawX);
+            const left = Number(track && track.leftX);
+            const right = Number(track && track.rightX);
+            const width = right - left;
+            if (![x, left, right, width].every(Number.isFinite) || width <= 0) return x;
+            const offset = x - left;
+            const wrappedOffset = positiveModulo(offset, width);
+            // Keep exact upper-boundary samples on the visible right rail. Once
+            // there is real overflow, positive modulo resumes from the left rail.
+            if (Math.abs(wrappedOffset) < 1e-7 && offset > 0 && Math.abs(offset / width - Math.round(offset / width)) < 1e-7) {
+                return right;
+            }
+            return left + wrappedOffset;
         }
 
         function trackValueToPixelX(value, track, options = {}) {
@@ -4883,9 +4912,89 @@
                 Math.abs(denom) < 1e-3) {
                 return null;
             }
-            const valueForDisplay = options && options.rawValue === true ? value : getVisibleTrackValue(value, track);
+            const valueForDisplay = options && options.rawValue === true
+                ? value
+                : getVisibleTrackValue(value, track);
             const frac = (valueForDisplay - scaleMin) / denom;
             return leftX + frac * (rightX - leftX);
+        }
+
+        function getTracePointRawX(point, track, curveId = null) {
+            if (!Array.isArray(point)) return null;
+            const storedRawX = point[5] === null || point[5] === undefined || point[5] === ''
+                ? null
+                : Number(point[5]);
+            if (Number.isFinite(storedRawX)) return storedRawX;
+
+            const depthIndex = Number.isInteger(point[2]) ? point[2] : -1;
+            if (depthIndex >= 0) {
+                const found = findDigitizedCurveEntry(curveId || (track && track.id));
+                const values = found && found.entry && Array.isArray(found.entry.values) ? found.entry.values : null;
+                if (values && depthIndex < values.length && !isMissingDigitizedValue(values[depthIndex])) {
+                    const rawX = trackValueToPixelX(values[depthIndex], track, { rawValue: true });
+                    if (Number.isFinite(rawX)) return rawX;
+                }
+            }
+            return Number(point[0]);
+        }
+
+        function drawWrappedTrackSegment(ctx, rawX1, y1, rawX2, y2, track, scaleX, scaleY) {
+            const left = Number(track && track.leftX);
+            const right = Number(track && track.rightX);
+            const width = right - left;
+            const x1 = Number(rawX1);
+            const x2 = Number(rawX2);
+            const startY = Number(y1);
+            const endY = Number(y2);
+            if (![left, right, width, x1, x2, startY, endY].every(Number.isFinite) || width <= 0) {
+                ctx.lineTo(Number(rawX2) * scaleX, Number(y2) * scaleY);
+                return;
+            }
+
+            const dx = x2 - x1;
+            if (Math.abs(dx) < 1e-9) {
+                ctx.lineTo(wrapRawXToTrack(x2, track) * scaleX, endY * scaleY);
+                return;
+            }
+
+            const isOnBoundary = rawX => {
+                const cycles = (rawX - left) / width;
+                return Math.abs(cycles - Math.round(cycles)) < 1e-7;
+            };
+            // At an exact boundary, the side used depends on travel direction:
+            // increasing raw X resumes at the left rail; decreasing resumes right.
+            if (isOnBoundary(x1)) {
+                ctx.moveTo((dx > 0 ? left : right) * scaleX, startY * scaleY);
+            }
+
+            const boundaries = [];
+            const eps = 1e-7;
+            if (dx > 0) {
+                let boundary = left + (Math.floor((x1 - left) / width) + 1) * width;
+                while (boundary < x2 - eps) {
+                    boundaries.push(boundary);
+                    boundary += width;
+                }
+            } else {
+                let boundary = left + (Math.ceil((x1 - left) / width) - 1) * width;
+                while (boundary > x2 + eps) {
+                    boundaries.push(boundary);
+                    boundary -= width;
+                }
+            }
+
+            for (const boundary of boundaries) {
+                const t = (boundary - x1) / dx;
+                const crossY = startY + t * (endY - startY);
+                const exitX = dx > 0 ? right : left;
+                const resumeX = dx > 0 ? left : right;
+                ctx.lineTo(exitX * scaleX, crossY * scaleY);
+                ctx.moveTo(resumeX * scaleX, crossY * scaleY);
+            }
+            const endDisplayX = isOnBoundary(x2)
+                ? (dx > 0 ? right : left)
+                : wrapRawXToTrack(x2, track);
+            ctx.lineTo(endDisplayX * scaleX, endY * scaleY);
         }
 
         function getPixelYForDepthIndex(depthIndex, depthCfg = null) {
@@ -4962,51 +5071,56 @@
             const points = [];
             const values = found.entry.values;
             const count = Math.min(values.length, lastDigitizedDepth.length);
-            const displayXs = new Array(count).fill(null);
+            const rawXs = new Array(count).fill(null);
 
             for (let depthIndex = 0; depthIndex < count; depthIndex++) {
                 const value = values[depthIndex];
                 if (isMissingDigitizedValue(value)) continue;
 
-                const xImg = trackValueToPixelX(value, track);
-                if (!Number.isFinite(xImg)) continue;
-                displayXs[depthIndex] = clamp(xImg, leftBound, rightBound);
+                const rawX = trackValueToPixelX(value, track, { rawValue: true });
+                if (!Number.isFinite(rawX)) continue;
+                rawXs[depthIndex] = rawX;
             }
 
             let firstValid = -1;
             let prevValid = -1;
             for (let depthIndex = 0; depthIndex < count; depthIndex++) {
-                const xImg = displayXs[depthIndex];
-                if (!Number.isFinite(xImg)) continue;
+                const rawX = rawXs[depthIndex];
+                if (!Number.isFinite(rawX)) continue;
                 if (firstValid < 0) {
                     firstValid = depthIndex;
                     for (let fillIdx = 0; fillIdx < depthIndex; fillIdx++) {
-                        displayXs[fillIdx] = xImg;
+                        rawXs[fillIdx] = rawX;
                     }
                 } else if (prevValid >= 0 && depthIndex - prevValid > 1) {
-                    const startX = Number(displayXs[prevValid]);
-                    const endX = xImg;
+                    const startX = Number(rawXs[prevValid]);
+                    const endX = rawX;
                     const span = depthIndex - prevValid;
                     for (let fillIdx = prevValid + 1; fillIdx < depthIndex; fillIdx++) {
                         const t = (fillIdx - prevValid) / Math.max(1, span);
-                        displayXs[fillIdx] = startX + (endX - startX) * t;
+                        rawXs[fillIdx] = startX + (endX - startX) * t;
                     }
                 }
                 prevValid = depthIndex;
             }
 
             if (firstValid >= 0 && prevValid >= 0) {
-                const tailX = Number(displayXs[prevValid]);
+                const tailX = Number(rawXs[prevValid]);
                 for (let fillIdx = prevValid + 1; fillIdx < count; fillIdx++) {
-                    displayXs[fillIdx] = tailX;
+                    rawXs[fillIdx] = tailX;
                 }
             }
 
             for (let depthIndex = 0; depthIndex < count; depthIndex++) {
-                const xImg = displayXs[depthIndex];
+                const rawX = rawXs[depthIndex];
                 const yImg = getPixelYForDepthIndex(depthIndex, depthCfg);
-                if (!Number.isFinite(xImg) || !Number.isFinite(yImg)) continue;
-                points.push([clamp(xImg, leftBound, rightBound), yImg, depthIndex]);
+                if (!Number.isFinite(rawX) || !Number.isFinite(yImg)) continue;
+                const displayX = track.wrapped
+                    ? wrapRawXToTrack(rawX, track)
+                    : clamp(rawX, leftBound, rightBound);
+                const point = [displayX, yImg, depthIndex];
+                point[5] = rawX;
+                points.push(point);
             }
 
             if (options.persist !== false) {
@@ -6088,8 +6202,11 @@
             const entry = lastDigitizedCurves[curveKey];
             if (!entry || !Array.isArray(entry.values) || idx >= entry.values.length) return;
 
-            const editX = Math.max(0, Math.min((imageWidth || xImg + 1) - 1, xImg));
-            const newValue = pixelToTrackValue(editX, targetTrack, { depthIndex: idx, values: entry.values });
+            const rawEditX = Math.max(0, Math.min((imageWidth || xImg + 1) - 1, xImg));
+            const editX = targetTrack.wrapped ? wrapRawXToTrack(rawEditX, targetTrack) : rawEditX;
+            const newValue = targetTrack.wrapped
+                ? pixelToTrackValue(rawEditX, targetTrack, { rawX: true })
+                : pixelToTrackValue(editX, targetTrack, { depthIndex: idx, values: entry.values });
             if (!Number.isFinite(newValue)) return;
 
             // Save old value for undo
@@ -6133,11 +6250,16 @@
                     pts2[bestIdxPt][0] = editX;
                     pts2[bestIdxPt][1] = yImg;
                     pts2[bestIdxPt][2] = idx;
+                    pts2[bestIdxPt][5] = rawEditX;
                 } else {
-                    pts2.push([editX, yImg, idx]);
+                    const point = [editX, yImg, idx];
+                    point[5] = rawEditX;
+                    pts2.push(point);
                 }
             } else {
-                pts2.push([editX, yImg, idx]);
+                const point = [editX, yImg, idx];
+                point[5] = rawEditX;
+                pts2.push(point);
             }
 
             lastCurveTraces[traceKey] = pts2;
@@ -6256,8 +6378,11 @@
             const entry = lastDigitizedCurves[curveKey];
             if (!entry || !Array.isArray(entry.values) || idx >= entry.values.length) return;
 
-            const editX = Math.max(0, Math.min((imageWidth || xImg + 1) - 1, xImg));
-            const newValue = pixelToTrackValue(editX, targetTrack, { depthIndex: idx, values: entry.values });
+            const rawEditX = Math.max(0, Math.min((imageWidth || xImg + 1) - 1, xImg));
+            const editX = targetTrack.wrapped ? wrapRawXToTrack(rawEditX, targetTrack) : rawEditX;
+            const newValue = targetTrack.wrapped
+                ? pixelToTrackValue(rawEditX, targetTrack, { rawX: true })
+                : pixelToTrackValue(editX, targetTrack, { depthIndex: idx, values: entry.values });
             if (!Number.isFinite(newValue)) return;
 
             if (!lastCurveTraces) {
@@ -6291,16 +6416,19 @@
             entry.values[idx] = newValue;
             const existingIdx = findBestPointIndexForDepth(pts, idx, yTrace, editX);
             const archStamp = Date.now();
+            const pointKind = targetTrack.wrapped ? 'manual' : 'manual_arch';
             let archPoint;
             if (existingIdx >= 0) {
                 archPoint = pts[existingIdx];
                 archPoint[0] = editX;
                 archPoint[1] = yTrace;
                 archPoint[2] = idx;
-                archPoint[3] = 'manual_arch';
+                archPoint[3] = pointKind;
                 archPoint[4] = archStamp;
+                archPoint[5] = rawEditX;
             } else {
-                archPoint = [editX, yTrace, idx, 'manual_arch', archStamp];
+                archPoint = [editX, yTrace, idx, pointKind, archStamp];
+                archPoint[5] = rawEditX;
                 pts.push(archPoint);
             }
             pts = pts.filter(point => point === archPoint || !Array.isArray(point) || point[2] !== idx);
@@ -6871,13 +6999,20 @@
                                 pts[bestIdxPt][1] = oldTraceY;
                             }
                             pts[bestIdxPt][2] = idx;
+                            const undoTrack = findTrackByCurveId(curveId);
+                            const oldRawX = trackValueToPixelX(oldValue, undoTrack, { rawValue: true });
+                            if (Number.isFinite(oldRawX)) pts[bestIdxPt][5] = oldRawX;
                         } else {
                             // Point was newly added, remove it
                             pts.splice(bestIdxPt, 1);
                         }
                     } else if (oldTraceX !== null) {
                         // Deleted point had no current visual match; re-create it
-                        pts.push([oldTraceX, Number.isFinite(oldTraceY) ? oldTraceY : yImg, idx]);
+                        const restoredPoint = [oldTraceX, Number.isFinite(oldTraceY) ? oldTraceY : yImg, idx];
+                        const undoTrack = findTrackByCurveId(curveId);
+                        const oldRawX = trackValueToPixelX(oldValue, undoTrack, { rawValue: true });
+                        if (Number.isFinite(oldRawX)) restoredPoint[5] = oldRawX;
+                        pts.push(restoredPoint);
                         // Resort to keep order
                         pts.sort((a, b) => a[1] - b[1]);
                     }
@@ -7067,6 +7202,7 @@
                         originalDepthIndex: dIdx,
                         currentDepthIndex: dIdx,
                         originalX: ptX,
+                        originalRawX: getTracePointRawX(pts[i], targetTrack, curveKey),
                         originalY: ptY,
                         pointKind: String(pts[i][3] || ''),
                         originalValue: entry.values[dIdx],
@@ -7162,6 +7298,9 @@
         // Light local smoothing after a drag to remove kinks while preserving spikes
         function _applyPostDragSmooth(centerIndex, pts, entry, targetTrack) {
             if (!Array.isArray(pts) || !entry || !Array.isArray(entry.values)) return;
+            // Smoothing visible wrapped X values would average opposite rails and
+            // destroy the logical off-scale position.
+            if (targetTrack && targetTrack.wrapped) return;
             const windowRadius = 3; // total window size = 7
             const curveId = editCurveId;
             const smoothed = new Map();
@@ -7462,24 +7601,32 @@
 
                 const weight = getWeight(n);
 
-                let newX, newY;
+                let newRawX, newX, newY;
                 if (weight < 0.001) {
                     // Safe restore: process normally to restore depth index, but don't move
-                    newX = n.originalX;
+                    newRawX = Number.isFinite(n.originalRawX) ? n.originalRawX : n.originalX;
                     newY = n.originalY;
                 } else {
                     // Neighbors get weighted horizontal and clamped vertical motion
-                    newX = n.originalX + deltaX * weight;
+                    const originalRawX = Number.isFinite(n.originalRawX) ? n.originalRawX : n.originalX;
+                    newRawX = originalRawX + deltaX * weight;
                     newY = n.originalY + safeDeltaY * getWeight(n);
                 }
 
-                if (imgW > 1) newX = Math.max(0, Math.min(imgW - 1, newX));
+                if (targetTrack.wrapped) {
+                    newX = wrapRawXToTrack(newRawX, targetTrack);
+                } else {
+                    newX = newRawX;
+                    if (imgW > 1) newX = Math.max(0, Math.min(imgW - 1, newX));
+                    newRawX = newX;
+                }
                 if (imgH > 1) newY = Math.max(0, Math.min(imgH - 1, newY));
 
                 n.ptRef[0] = newX;
                 n.ptRef[1] = newY;
                 n.ptRef[3] = 'manual';
                 n.ptRef[4] = Date.now();
+                n.ptRef[5] = newRawX;
 
                 // Map new Y position to depth index
                 const newDepth = pixelToDepthFromConfig(newY, depthCfg);
@@ -7497,7 +7644,7 @@
                     state.depthIndex = newDepthIndex;
                 }
 
-                const newVal = pixelToTrackValue(newX, targetTrack, { depthIndex: newDepthIndex, values: entry.values });
+                const newVal = pixelToTrackValue(newRawX, targetTrack, { rawX: true });
                 if (Number.isFinite(newVal)) {
                     entry.values[newDepthIndex] = newVal;
                 }
@@ -7505,7 +7652,9 @@
 
             // Re-sort pts by Y coordinate to ensure line connects smoothly top-to-bottom without zig-zags
             pts.sort((a, b) => Number(a && a[1] || 0) - Number(b && b[1] || 0));
-            limitDragHorizontalConnectors(pts, centerN.ptRef, entry, targetTrack);
+            if (!targetTrack.wrapped) {
+                limitDragHorizontalConnectors(pts, centerN.ptRef, entry, targetTrack);
+            }
             state.centerIndex = pts.indexOf(centerN.ptRef);
         }
 
@@ -8599,7 +8748,8 @@
 
             const x = event.clientX - rect.left;
             const y = event.clientY - rect.top;
-            const xNorm = Math.max(0, Math.min(1, x / rect.width));
+            const wrappedDragActive = !!(editMode && editDragState && editDragState.targetTrack && editDragState.targetTrack.wrapped);
+            const xNorm = wrappedDragActive ? (x / rect.width) : Math.max(0, Math.min(1, x / rect.width));
             const yNorm = Math.max(0, Math.min(1, y / rect.height));
             const xImg = Math.round(xNorm * (imageWidth - 1));
             const yImg = Math.round(yNorm * (imageHeight - 1));
@@ -11304,8 +11454,8 @@
                                 </select>
                             </div>
                             <div class="field">
-                                <label for="wrapped${i}" style="font-size:0.8em;">Wrapped</label>
-                                <input type="checkbox" id="wrapped${i}" title="Curve re-enters opposite side (common on old resistivity)">
+                                <label for="wrapped${i}" style="font-size:0.8em;">Off-scale wrap</label>
+                                <input type="checkbox" id="wrapped${i}" title="Wrap Curve at Track Boundary: dragging beyond either rail resumes on the opposite side">
                             </div>
                         </div>
                         <div class="hint-text" id="curveHint${i}" style="margin-top:4px;"></div>
@@ -11351,6 +11501,7 @@
                 const pointColorEl = document.getElementById(`pointColor${i}`);
                 const showTraceEl = document.getElementById(`showTrace${i}`);
                 const hideFillEl = document.getElementById(`hideTrackFill${i}`);
+                const wrappedEl = document.getElementById(`wrapped${i}`);
 
                 // When a Left/Right pixel input gains focus, arm a one-click
                 // picker so the next click on the log sets that edge for this
@@ -11445,6 +11596,18 @@
                 if (showTraceEl) {
                     showTraceEl.addEventListener('change', () => {
                         if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
+                    });
+                }
+
+                if (wrappedEl) {
+                    wrappedEl.addEventListener('change', () => {
+                        if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
+                        showStatus(
+                            wrappedEl.checked
+                                ? 'Off-scale curve wrap enabled. Drag past either track rail to loop around.'
+                                : 'Off-scale curve wrap disabled.',
+                            'info'
+                        );
                     });
                 }
 
@@ -12815,25 +12978,53 @@
                             }
                             return lastValid;
                         };
+                        const manualArchIndexes = [];
+                        if (!(trackMeta && trackMeta.wrapped)) {
+                            for (let i = 0; i < renderPoints.length; i++) {
+                                if (Array.isArray(renderPoints[i]) && renderPoints[i][3] === 'manual_arch') {
+                                    manualArchIndexes.push(i);
+                                }
+                            }
+                        }
                         const archRanges = [];
-                        for (let i = 0; i < renderPoints.length; i++) {
-                            if (!Array.isArray(renderPoints[i]) || renderPoints[i][3] !== 'manual_arch') continue;
+                        for (let archPos = 0; archPos < manualArchIndexes.length; archPos++) {
+                            const i = manualArchIndexes[archPos];
                             const upperIdx = findArchAnchor(i, -1);
                             const lowerIdx = findArchAnchor(i, 1);
-                            if (upperIdx >= 0 && lowerIdx >= 0) archRanges.push({ centerIdx: i, upperIdx, lowerIdx });
+                            if (upperIdx >= 0 && lowerIdx >= 0) {
+                                archRanges.push({
+                                    centerIdx: i,
+                                    upperIdx,
+                                    lowerIdx,
+                                    previousArchIdx: archPos > 0 ? manualArchIndexes[archPos - 1] : -1,
+                                    nextArchIdx: archPos + 1 < manualArchIndexes.length ? manualArchIndexes[archPos + 1] : -1,
+                                });
+                            }
                         }
                         ctx.beginPath();
 
-                        const firstX = (renderPoints[0][0] * scaleX);
+                        const firstRawX = trackMeta && trackMeta.wrapped
+                            ? getTracePointRawX(renderPoints[0], trackMeta, name)
+                            : Number(renderPoints[0][0]);
+                        const firstDisplayX = trackMeta && trackMeta.wrapped
+                            ? wrapRawXToTrack(firstRawX, trackMeta)
+                            : Number(renderPoints[0][0]);
+                        const firstX = (firstDisplayX * scaleX);
                         const firstY = (renderPoints[0][1] * scaleY);
                         ctx.moveTo(firstX, firstY);
                         for (let i = 1; i < renderPoints.length; i++) {
                             const prevPoint = renderPoints[i - 1];
                             const currPoint = renderPoints[i];
-                            const pathPrevPoint = prevPoint[3] === 'manual_arch' && i >= 2
+                            const pathPrevPoint = prevPoint[3] === 'manual_arch' && !(trackMeta && trackMeta.wrapped) && i >= 2
                                 ? renderPoints[i - 2]
                                 : prevPoint;
-                            const xDom = (currPoint[0] * scaleX);
+                            const currRawX = trackMeta && trackMeta.wrapped
+                                ? getTracePointRawX(currPoint, trackMeta, name)
+                                : Number(currPoint[0]);
+                            const currDisplayX = trackMeta && trackMeta.wrapped
+                                ? wrapRawXToTrack(currRawX, trackMeta)
+                                : Number(currPoint[0]);
+                            const xDom = (currDisplayX * scaleX);
                             const yDom = (currPoint[1] * scaleY);
                             if (archRanges.some(range => i > range.upperIdx && i <= range.lowerIdx)) {
                                 ctx.moveTo(xDom, yDom);
@@ -12864,10 +13055,30 @@
                             const dx = Math.abs(currPoint[0] - pathPrevPoint[0]);
                             const tWidth = trackMeta ? Math.abs((trackMeta.rightX || 0) - (trackMeta.leftX || 0)) : 0;
                             const isHeuristicWrap = tWidth > 0 && dx > tWidth * 0.5;
+                            const hiddenByWrapEraser = isSegmentHiddenByWrapEraser(name, pathPrevPoint, currPoint, trackMeta);
 
-                            if (isSegmentHiddenByWrapEraser(name, pathPrevPoint, currPoint, trackMeta) ||
+                            if (hiddenByWrapEraser) {
+                                ctx.moveTo(xDom, yDom);
+                            } else if (trackMeta && trackMeta.wrapped) {
+                                const prevRawX = getTracePointRawX(pathPrevPoint, trackMeta, name);
+                                if (Number.isFinite(prevRawX) && Number.isFinite(currRawX)) {
+                                    drawWrappedTrackSegment(
+                                        ctx,
+                                        prevRawX,
+                                        Number(pathPrevPoint[1]),
+                                        currRawX,
+                                        Number(currPoint[1]),
+                                        trackMeta,
+                                        scaleX,
+                                        scaleY
+                                    );
+                                } else {
+                                    ctx.lineTo(xDom, yDom);
+                                }
+                            } else if (
                                 isScaleWrapBoundaryForPoints(name, pathPrevPoint, currPoint) ||
-                                isHeuristicWrap) {
+                                isHeuristicWrap
+                            ) {
                                 ctx.moveTo(xDom, yDom);
                             } else {
                                 ctx.lineTo(xDom, yDom);
@@ -12893,39 +13104,54 @@
                                 const t = Math.max(0, Math.min(1, (targetY - upperY) / dy));
                                 return upperX + (lowerX - upperX) * t;
                             };
-                            const upperAnchorY = Math.max(upperY, crestY - archHalfSpan);
-                            const lowerAnchorY = Math.min(lowerY, crestY + archHalfSpan);
+                            const previousCrest = range.previousArchIdx >= 0 ? renderPoints[range.previousArchIdx] : null;
+                            const nextCrest = range.nextArchIdx >= 0 ? renderPoints[range.nextArchIdx] : null;
+                            const previousBoundaryY = previousCrest
+                                ? ((previousCrest[1] * scaleY) + crestY) * 0.5
+                                : -Infinity;
+                            const nextBoundaryY = nextCrest
+                                ? (crestY + (nextCrest[1] * scaleY)) * 0.5
+                                : Infinity;
+                            const upperAnchorY = Math.max(upperY, crestY - archHalfSpan, previousBoundaryY);
+                            const lowerAnchorY = Math.min(lowerY, crestY + archHalfSpan, nextBoundaryY);
                             const upperAnchorX = interpolateBaseX(upperAnchorY);
                             const lowerAnchorX = interpolateBaseX(lowerAnchorY);
-                            const noseHalfHeight = Math.min(3, Math.max(1.5, (lowerAnchorY - upperAnchorY) * 0.3));
+                            const upperNoseHeight = Math.min(3, Math.max(0, (crestY - upperAnchorY) * 0.6));
+                            const lowerNoseHeight = Math.min(3, Math.max(0, (lowerAnchorY - crestY) * 0.6));
                             const noseDirection = crestX >= (upperAnchorX + lowerAnchorX) * 0.5 ? 1 : -1;
+                            const hasPreviousArchInRange = range.previousArchIdx > upperIdx;
+                            const hasNextArchInRange = range.nextArchIdx >= 0 && range.nextArchIdx < lowerIdx;
 
                             ctx.beginPath();
-                            ctx.moveTo(upperX, upperY);
-                            ctx.lineTo(upperAnchorX, upperAnchorY);
+                            if (hasPreviousArchInRange) {
+                                ctx.moveTo(upperAnchorX, upperAnchorY);
+                            } else {
+                                ctx.moveTo(upperX, upperY);
+                                ctx.lineTo(upperAnchorX, upperAnchorY);
+                            }
                             ctx.bezierCurveTo(
                                 upperAnchorX + (crestX - upperAnchorX) * 0.55,
                                 upperAnchorY,
                                 crestX,
-                                crestY - noseHalfHeight,
+                                crestY - upperNoseHeight,
                                 crestX,
-                                crestY - noseHalfHeight
+                                crestY - upperNoseHeight
                             );
                             ctx.quadraticCurveTo(
                                 crestX + noseDirection * 6,
                                 crestY,
                                 crestX,
-                                crestY + noseHalfHeight
+                                crestY + lowerNoseHeight
                             );
                             ctx.bezierCurveTo(
                                 crestX,
-                                crestY + noseHalfHeight,
+                                crestY + lowerNoseHeight,
                                 lowerAnchorX + (crestX - lowerAnchorX) * 0.55,
                                 lowerAnchorY,
                                 lowerAnchorX,
                                 lowerAnchorY
                             );
-                            ctx.lineTo(lowerX, lowerY);
+                            if (!hasNextArchInRange) ctx.lineTo(lowerX, lowerY);
                             ctx.stroke();
                         }
                         ctx.restore();
