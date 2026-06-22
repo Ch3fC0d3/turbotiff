@@ -4971,16 +4971,6 @@
             }));
         }
 
-        function activateTrackWrapForEdit(track) {
-            if (!track) return false;
-            track.wrapped = true;
-            if (Number.isInteger(track.index)) {
-                const wrappedEl = document.getElementById(`wrapped${track.index}`);
-                if (wrappedEl) wrappedEl.checked = true;
-            }
-            return true;
-        }
-
         function drawWrappedTrackSegment(ctx, rawX1, y1, rawX2, y2, track, scaleX, scaleY) {
             const left = Number(track && track.leftX);
             const right = Number(track && track.rightX);
@@ -6245,14 +6235,9 @@
 
             const entry = lastDigitizedCurves[curveKey];
             if (!entry || !Array.isArray(entry.values) || idx >= entry.values.length) return;
-            let wrapActive = isTrackWrapActive(targetTrack, curveKey);
+            const wrapActive = isTrackWrapActive(targetTrack, curveKey);
 
             const clickedX = Math.max(0, Math.min((imageWidth || xImg + 1) - 1, xImg));
-            const clickedOutsideTrack = clickedX < Math.min(targetTrack.leftX, targetTrack.rightX) - 1 ||
-                clickedX > Math.max(targetTrack.leftX, targetTrack.rightX) + 1;
-            if (!wrapActive && clickedOutsideTrack) {
-                wrapActive = activateTrackWrapForEdit(targetTrack);
-            }
             const referenceRawX = !isMissingDigitizedValue(entry.values[idx])
                 ? trackValueToPixelX(entry.values[idx], targetTrack, { rawValue: true })
                 : null;
@@ -6297,7 +6282,6 @@
             if (!Array.isArray(pts2)) {
                 pts2 = [];
             }
-            let editedPoint = null;
 
             if (pts2.length) {
                 ensureTracePointsHaveDepthIndex(editCurveId);
@@ -6310,23 +6294,17 @@
                     pts2[bestIdxPt][1] = yImg;
                     pts2[bestIdxPt][2] = idx;
                     pts2[bestIdxPt][5] = rawEditX;
-                    editedPoint = pts2[bestIdxPt];
                 } else {
                     const point = [editX, yImg, idx];
                     point[5] = rawEditX;
                     pts2.push(point);
-                    editedPoint = point;
                 }
             } else {
                 const point = [editX, yImg, idx];
                 point[5] = rawEditX;
                 pts2.push(point);
-                editedPoint = point;
             }
 
-            pts2.sort((a, b) => Number(a && a[1] || 0) - Number(b && b[1] || 0));
-            if (wrapActive) targetTrack.wrapped = true;
-            if (editedPoint) limitDragHorizontalConnectors(pts2, editedPoint, entry, targetTrack);
             lastCurveTraces[traceKey] = pts2;
             renderCurveTraceOverlays(lastCurveTraces);
         }
@@ -7458,54 +7436,26 @@
             const centerIndex = pts.indexOf(centerPoint);
             if (centerIndex < 0) return;
             const maxStep = Math.max(10, trackWidth * 0.10);
-            const wrapActive = !!targetTrack.wrapped;
-            const rawCycle = rawX => Math.floor((rawX - left) / trackWidth + 1e-9);
 
             const relaxSide = direction => {
-                let anchorX = wrapActive
-                    ? getTracePointRawX(centerPoint, targetTrack, editCurveId)
-                    : Number(centerPoint[0]);
-                if (!Number.isFinite(anchorX)) return;
+                let anchorX = Number(centerPoint[0]);
                 for (let i = centerIndex + direction; i >= 0 && i < pts.length; i += direction) {
                     const point = pts[i];
                     if (!Array.isArray(point) || !Number.isFinite(Number(point[0]))) break;
-                    if (point[3] === 'manual_arch') break;
                     const depthIndex = Number.isInteger(point[2]) ? point[2] : -1;
                     if (depthIndex >= 0 && isDepthIndexPinned(editCurveId, depthIndex)) break;
 
-                    const storedPointX = wrapActive
-                        ? getTracePointRawX(point, targetTrack, editCurveId)
-                        : Number(point[0]);
-                    if (wrapActive && Number.isFinite(storedPointX)) {
-                        const crossesRail = rawCycle(storedPointX) !== rawCycle(anchorX);
-                        const plausibleCrossing = Math.abs(storedPointX - anchorX) <= trackWidth * 0.5;
-                        if (crossesRail && plausibleCrossing) {
-                            // This is a real carryover segment, not a bad connector.
-                            // Leave both logical cycles intact so rendering can split it.
-                            break;
-                        }
-                    }
-                    let pointX = storedPointX;
-                    if (wrapActive) {
-                        pointX = unwrapDisplayXNearReference(Number(point[0]), anchorX, targetTrack);
-                    }
-                    const delta = pointX - anchorX;
+                    const delta = Number(point[0]) - anchorX;
                     if (Math.abs(delta) <= maxStep) break;
-                    const newRawX = anchorX + Math.sign(delta) * maxStep;
-                    const newX = wrapActive
-                        ? wrapRawXToTrack(newRawX, targetTrack)
-                        : Math.max(left, Math.min(right, newRawX));
+                    const newX = Math.max(left, Math.min(right, anchorX + Math.sign(delta) * maxStep));
                     point[0] = newX;
                     point[3] = 'manual';
                     point[4] = Date.now();
-                    if (wrapActive) point[5] = newRawX;
                     if (depthIndex >= 0 && depthIndex < entry.values.length) {
-                        const value = wrapActive
-                            ? pixelToTrackValue(newRawX, targetTrack, { rawX: true })
-                            : pixelToTrackValue(newX, targetTrack, { depthIndex, values: entry.values });
+                        const value = pixelToTrackValue(newX, targetTrack, { depthIndex, values: entry.values });
                         if (Number.isFinite(value)) entry.values[depthIndex] = value;
                     }
-                    anchorX = wrapActive ? newRawX : newX;
+                    anchorX = newX;
                 }
             };
 
@@ -7531,18 +7481,6 @@
             const centerIndex = state.centerIndex;
             if (!entry || !Array.isArray(entry.values)) return;
             if (!Array.isArray(pts) || !targetTrack || !neighbors) return;
-
-            const trackLeft = Math.min(Number(targetTrack.leftX), Number(targetTrack.rightX));
-            const trackRight = Math.max(Number(targetTrack.leftX), Number(targetTrack.rightX));
-            const crossedTrackRail = Number.isFinite(trackLeft) && Number.isFinite(trackRight) &&
-                (Number(xImg) < trackLeft - 1 || Number(xImg) > trackRight + 1);
-            if (!targetTrack.wrapped && crossedTrackRail) {
-                activateTrackWrapForEdit(targetTrack);
-                if (!state.wrapActivatedDuringDrag) {
-                    state.wrapActivatedDuringDrag = true;
-                    showStatus('Off-scale wrap enabled for this curve.', 'info');
-                }
-            }
 
             // Clamp to image bounds
             const img = document.getElementById('imagePreview');
@@ -7767,7 +7705,9 @@
 
             // Re-sort pts by Y coordinate to ensure line connects smoothly top-to-bottom without zig-zags
             pts.sort((a, b) => Number(a && a[1] || 0) - Number(b && b[1] || 0));
-            limitDragHorizontalConnectors(pts, centerN.ptRef, entry, targetTrack);
+            if (!targetTrack.wrapped) {
+                limitDragHorizontalConnectors(pts, centerN.ptRef, entry, targetTrack);
+            }
             state.centerIndex = pts.indexOf(centerN.ptRef);
         }
 
@@ -8848,10 +8788,8 @@
 
             const x = event.clientX - rect.left;
             const y = event.clientY - rect.top;
-            // Pointer drags must be allowed beyond the image/track rail so an
-            // initially in-scale curve can activate carryover on first crossing.
-            const curveDragActive = !!(editMode && editDragState && editDragState.targetTrack && activeTool === 'pointer');
-            const xNorm = curveDragActive ? (x / rect.width) : Math.max(0, Math.min(1, x / rect.width));
+            const wrappedDragActive = !!(editMode && editDragState && editDragState.targetTrack && editDragState.targetTrack.wrapped);
+            const xNorm = wrappedDragActive ? (x / rect.width) : Math.max(0, Math.min(1, x / rect.width));
             const yNorm = Math.max(0, Math.min(1, y / rect.height));
             const xImg = Math.round(xNorm * (imageWidth - 1));
             const yImg = Math.round(yNorm * (imageHeight - 1));
