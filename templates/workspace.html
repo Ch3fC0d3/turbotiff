@@ -6282,6 +6282,7 @@
             if (!Array.isArray(pts2)) {
                 pts2 = [];
             }
+            let editedPoint = null;
 
             if (pts2.length) {
                 ensureTracePointsHaveDepthIndex(editCurveId);
@@ -6294,17 +6295,23 @@
                     pts2[bestIdxPt][1] = yImg;
                     pts2[bestIdxPt][2] = idx;
                     pts2[bestIdxPt][5] = rawEditX;
+                    editedPoint = pts2[bestIdxPt];
                 } else {
                     const point = [editX, yImg, idx];
                     point[5] = rawEditX;
                     pts2.push(point);
+                    editedPoint = point;
                 }
             } else {
                 const point = [editX, yImg, idx];
                 point[5] = rawEditX;
                 pts2.push(point);
+                editedPoint = point;
             }
 
+            pts2.sort((a, b) => Number(a && a[1] || 0) - Number(b && b[1] || 0));
+            if (wrapActive) targetTrack.wrapped = true;
+            if (editedPoint) limitDragHorizontalConnectors(pts2, editedPoint, entry, targetTrack);
             lastCurveTraces[traceKey] = pts2;
             renderCurveTraceOverlays(lastCurveTraces);
         }
@@ -7436,26 +7443,42 @@
             const centerIndex = pts.indexOf(centerPoint);
             if (centerIndex < 0) return;
             const maxStep = Math.max(10, trackWidth * 0.10);
+            const wrapActive = !!targetTrack.wrapped;
 
             const relaxSide = direction => {
-                let anchorX = Number(centerPoint[0]);
+                let anchorX = wrapActive
+                    ? getTracePointRawX(centerPoint, targetTrack, editCurveId)
+                    : Number(centerPoint[0]);
                 for (let i = centerIndex + direction; i >= 0 && i < pts.length; i += direction) {
                     const point = pts[i];
                     if (!Array.isArray(point) || !Number.isFinite(Number(point[0]))) break;
+                    if (point[3] === 'manual_arch') break;
                     const depthIndex = Number.isInteger(point[2]) ? point[2] : -1;
                     if (depthIndex >= 0 && isDepthIndexPinned(editCurveId, depthIndex)) break;
 
-                    const delta = Number(point[0]) - anchorX;
+                    let pointX = wrapActive
+                        ? getTracePointRawX(point, targetTrack, editCurveId)
+                        : Number(point[0]);
+                    if (wrapActive) {
+                        pointX = unwrapDisplayXNearReference(Number(point[0]), anchorX, targetTrack);
+                    }
+                    const delta = pointX - anchorX;
                     if (Math.abs(delta) <= maxStep) break;
-                    const newX = Math.max(left, Math.min(right, anchorX + Math.sign(delta) * maxStep));
+                    const newRawX = anchorX + Math.sign(delta) * maxStep;
+                    const newX = wrapActive
+                        ? wrapRawXToTrack(newRawX, targetTrack)
+                        : Math.max(left, Math.min(right, newRawX));
                     point[0] = newX;
                     point[3] = 'manual';
                     point[4] = Date.now();
+                    if (wrapActive) point[5] = newRawX;
                     if (depthIndex >= 0 && depthIndex < entry.values.length) {
-                        const value = pixelToTrackValue(newX, targetTrack, { depthIndex, values: entry.values });
+                        const value = wrapActive
+                            ? pixelToTrackValue(newRawX, targetTrack, { rawX: true })
+                            : pixelToTrackValue(newX, targetTrack, { depthIndex, values: entry.values });
                         if (Number.isFinite(value)) entry.values[depthIndex] = value;
                     }
-                    anchorX = newX;
+                    anchorX = wrapActive ? newRawX : newX;
                 }
             };
 
@@ -7705,9 +7728,7 @@
 
             // Re-sort pts by Y coordinate to ensure line connects smoothly top-to-bottom without zig-zags
             pts.sort((a, b) => Number(a && a[1] || 0) - Number(b && b[1] || 0));
-            if (!targetTrack.wrapped) {
-                limitDragHorizontalConnectors(pts, centerN.ptRef, entry, targetTrack);
-            }
+            limitDragHorizontalConnectors(pts, centerN.ptRef, entry, targetTrack);
             state.centerIndex = pts.indexOf(centerN.ptRef);
         }
 
