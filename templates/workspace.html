@@ -12793,7 +12793,10 @@
                         ctx.lineWidth = connectorW;
                         ctx.globalAlpha = isBlackLikeMode ? 0.92 : 1.0;
                         ctx.strokeStyle = lineCoreColor;
-                        const baseSeparation = 12;
+                        // Keep add-point bends local even when the rendered trace samples
+                        // are far apart. Actual samples select a safe replacement range;
+                        // interpolated anchors below control the visible size of the bend.
+                        const archHalfSpan = 5;
                         const trackWidthImg = trackMeta ? Math.abs((trackMeta.rightX || 0) - (trackMeta.leftX || 0)) : 0;
                         const findArchAnchor = (centerIndex, direction) => {
                             const center = renderPoints[centerIndex];
@@ -12808,7 +12811,7 @@
                                         isScaleWrapBoundaryForPoints(name, prior, point)) break;
                                 }
                                 lastValid = j;
-                                if (Math.abs((point[1] - center[1]) * scaleY) >= baseSeparation) break;
+                                if (Math.abs((point[1] - center[1]) * scaleY) >= archHalfSpan) break;
                             }
                             return lastValid;
                         };
@@ -12884,14 +12887,25 @@
                             const lowerY = lower[1] * scaleY;
                             const crestX = crest[0] * scaleX;
                             const crestY = crest[1] * scaleY;
-                            const noseHalfHeight = 7;
-                            const noseDirection = crestX >= (upperX + lowerX) * 0.5 ? 1 : -1;
+                            const interpolateBaseX = (targetY) => {
+                                const dy = lowerY - upperY;
+                                if (Math.abs(dy) < 0.001) return (upperX + lowerX) * 0.5;
+                                const t = Math.max(0, Math.min(1, (targetY - upperY) / dy));
+                                return upperX + (lowerX - upperX) * t;
+                            };
+                            const upperAnchorY = Math.max(upperY, crestY - archHalfSpan);
+                            const lowerAnchorY = Math.min(lowerY, crestY + archHalfSpan);
+                            const upperAnchorX = interpolateBaseX(upperAnchorY);
+                            const lowerAnchorX = interpolateBaseX(lowerAnchorY);
+                            const noseHalfHeight = Math.min(3, Math.max(1.5, (lowerAnchorY - upperAnchorY) * 0.3));
+                            const noseDirection = crestX >= (upperAnchorX + lowerAnchorX) * 0.5 ? 1 : -1;
 
                             ctx.beginPath();
                             ctx.moveTo(upperX, upperY);
+                            ctx.lineTo(upperAnchorX, upperAnchorY);
                             ctx.bezierCurveTo(
-                                upperX + (crestX - upperX) * 0.55,
-                                upperY,
+                                upperAnchorX + (crestX - upperAnchorX) * 0.55,
+                                upperAnchorY,
                                 crestX,
                                 crestY - noseHalfHeight,
                                 crestX,
@@ -12906,11 +12920,12 @@
                             ctx.bezierCurveTo(
                                 crestX,
                                 crestY + noseHalfHeight,
-                                lowerX + (crestX - lowerX) * 0.55,
-                                lowerY,
-                                lowerX,
-                                lowerY
+                                lowerAnchorX + (crestX - lowerAnchorX) * 0.55,
+                                lowerAnchorY,
+                                lowerAnchorX,
+                                lowerAnchorY
                             );
+                            ctx.lineTo(lowerX, lowerY);
                             ctx.stroke();
                         }
                         ctx.restore();
