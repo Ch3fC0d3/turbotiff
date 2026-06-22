@@ -4971,6 +4971,16 @@
             }));
         }
 
+        function activateTrackWrapForEdit(track) {
+            if (!track) return false;
+            track.wrapped = true;
+            if (Number.isInteger(track.index)) {
+                const wrappedEl = document.getElementById(`wrapped${track.index}`);
+                if (wrappedEl) wrappedEl.checked = true;
+            }
+            return true;
+        }
+
         function drawWrappedTrackSegment(ctx, rawX1, y1, rawX2, y2, track, scaleX, scaleY) {
             const left = Number(track && track.leftX);
             const right = Number(track && track.rightX);
@@ -7482,6 +7492,18 @@
             if (!entry || !Array.isArray(entry.values)) return;
             if (!Array.isArray(pts) || !targetTrack || !neighbors) return;
 
+            const trackLeft = Math.min(Number(targetTrack.leftX), Number(targetTrack.rightX));
+            const trackRight = Math.max(Number(targetTrack.leftX), Number(targetTrack.rightX));
+            const crossedTrackRail = Number.isFinite(trackLeft) && Number.isFinite(trackRight) &&
+                (Number(xImg) < trackLeft - 1 || Number(xImg) > trackRight + 1);
+            if (!targetTrack.wrapped && crossedTrackRail) {
+                activateTrackWrapForEdit(targetTrack);
+                if (!state.wrapActivatedDuringDrag) {
+                    state.wrapActivatedDuringDrag = true;
+                    showStatus('Off-scale wrap enabled for this curve.', 'info');
+                }
+            }
+
             // Clamp to image bounds
             const img = document.getElementById('imagePreview');
             const imgW = imageWidth || (img && (img.naturalWidth || img.width)) || 1;
@@ -8788,8 +8810,10 @@
 
             const x = event.clientX - rect.left;
             const y = event.clientY - rect.top;
-            const wrappedDragActive = !!(editMode && editDragState && editDragState.targetTrack && editDragState.targetTrack.wrapped);
-            const xNorm = wrappedDragActive ? (x / rect.width) : Math.max(0, Math.min(1, x / rect.width));
+            // Let a Move drag cross the rail before wrap has been activated; the
+            // drag update enables wrap at that first crossing.
+            const curveDragActive = !!(editMode && editDragState && editDragState.targetTrack && activeTool === 'pointer');
+            const xNorm = curveDragActive ? (x / rect.width) : Math.max(0, Math.min(1, x / rect.width));
             const yNorm = Math.max(0, Math.min(1, y / rect.height));
             const xImg = Math.round(xNorm * (imageWidth - 1));
             const yImg = Math.round(yNorm * (imageHeight - 1));
