@@ -1834,9 +1834,14 @@
                                             </div>
                                         </div>
                                         <div class="field" style="grid-column:1/-1;">
-                                            <label>Wrap Repair</label>
+                                            <label>Scale Wrap Assist</label>
                                             <div class="scale-wrap-controls">
-                                                <span class="hint-text">Use the Wrap Eraser tool in the toolbar, then box the fake connector.</span>
+                                                <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5AddWrapMarkerDelta(1)">+ cycle</button>
+                                                <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5AddWrapMarkerDelta(-1)">- cycle</button>
+                                                <input type="number" id="s5wrapCycleManual" step="1" value="1" title="Absolute wrap cycle">
+                                                <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5RepairWrapBridge()">Repair bridge</button>
+                                                <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5AddWrapMarkerFromInput()">Set</button>
+                                                <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5ClearWrapMarkerNearMouse()">Clear marker</button>
                                             </div>
                                             <div id="s5WrapStatus" class="scale-wrap-status">No wrap markers.</div>
                                         </div>
@@ -1959,7 +1964,6 @@
         let curveIndexToTraceKey = null; // { [curveIndex:number]: string } mapping from UI curve index to curve_traces key
         let editUndoStack = [];          // stack of { curveKey, idx, oldValue, oldTraceX } for Ctrl+Z
         let curveWrapMarkers = {};       // { [curveKey]: [{ depthIndex, cycle, edge, xImg, createdAt }] }
-        let curveWrapEraseBoxes = {};    // { [curveKey]: [{ x1, y1, x2, y2 }] } visual-only hidden wrap bridge boxes
         let lastDigitizeRequestConfig = null;
         let lastDigitizePreviewFilters = null;
         let lastDigitizeHeaderMetadata = null;
@@ -2297,369 +2301,38 @@
             return [];
         }
 
-        function getWrapEraseBoxesForCurve(curveId) {
-            if (!curveId || !curveWrapEraseBoxes || typeof curveWrapEraseBoxes !== 'object') return [];
-            const normalized = normalizeCurveKey(curveId);
-            const keys = [getCurveKeyForWrap(curveId), normalized].filter(Boolean);
-            Object.keys(curveWrapEraseBoxes).forEach(key => {
-                if (normalizeCurveKey(key) === normalized) keys.push(key);
-            });
-            const seen = new Set();
-            const boxes = [];
-            keys.forEach(key => {
-                if (!key || seen.has(key)) return;
-                seen.add(key);
-                const list = Array.isArray(curveWrapEraseBoxes[key]) ? curveWrapEraseBoxes[key] : [];
-                list.forEach(b => boxes.push(b));
-            });
-            return boxes.filter(b => b &&
-                Number.isFinite(Number(b.x1)) && Number.isFinite(Number(b.y1)) &&
-                Number.isFinite(Number(b.x2)) && Number.isFinite(Number(b.y2))
-            ).map(b => ({
-                x1: Math.min(Number(b.x1), Number(b.x2)),
-                y1: Math.min(Number(b.y1), Number(b.y2)),
-                x2: Math.max(Number(b.x1), Number(b.x2)),
-                y2: Math.max(Number(b.y1), Number(b.y2)),
-            }));
-        }
+        function isScaleWrapDisplayJump(curveId, prevPoint, currPoint, track) {
+            if (isScaleWrapBoundaryForPoints(curveId, prevPoint, currPoint)) return true;
+            if (!track || !Array.isArray(prevPoint) || !Array.isArray(currPoint)) return false;
+            const markers = getWrapMarkersForRenderCurve(curveId, track);
+            if (!markers.length) return false;
 
-        function cloneTracePoints(points) {
-            return Array.isArray(points)
-                ? points.map(pt => Array.isArray(pt) ? pt.slice() : pt)
-                : [];
-        }
+            const left = Math.min(Number(track.leftX), Number(track.rightX));
+            const right = Math.max(Number(track.leftX), Number(track.rightX));
+            const width = right - left;
+            if (!Number.isFinite(width) || width <= 0) return false;
 
-        function cloneWrapEraseBoxesState() {
-            const copy = {};
-            if (!curveWrapEraseBoxes || typeof curveWrapEraseBoxes !== 'object') return copy;
-            Object.keys(curveWrapEraseBoxes).forEach(key => {
-                const list = Array.isArray(curveWrapEraseBoxes[key]) ? curveWrapEraseBoxes[key] : [];
-                copy[key] = list.map(box => ({ ...box }));
-            });
-            return copy;
-        }
-
-        function cloneWrapMarkersState() {
-            const copy = {};
-            if (!curveWrapMarkers || typeof curveWrapMarkers !== 'object') return copy;
-            Object.keys(curveWrapMarkers).forEach(key => {
-                const list = Array.isArray(curveWrapMarkers[key]) ? curveWrapMarkers[key] : [];
-                copy[key] = list.map(marker => ({ ...marker }));
-            });
-            return copy;
-        }
-
-        function cleanWrapEraseBox(box) {
-            if (!box) return null;
-            const clean = {
-                x1: Math.min(Number(box.x1), Number(box.x2)),
-                y1: Math.min(Number(box.y1), Number(box.y2)),
-                x2: Math.max(Number(box.x1), Number(box.x2)),
-                y2: Math.max(Number(box.y1), Number(box.y2)),
-            };
-            if (![clean.x1, clean.y1, clean.x2, clean.y2].every(Number.isFinite)) return null;
-            if (clean.x2 <= clean.x1 || clean.y2 <= clean.y1) return null;
-            return clean;
-        }
-
-        function getEffectiveWrapEraseBoxForTrack(box, track) {
-            const clean = cleanWrapEraseBox(box);
-            if (!clean) return null;
-            const left = track ? Math.min(Number(track.leftX), Number(track.rightX)) : NaN;
-            const right = track ? Math.max(Number(track.leftX), Number(track.rightX)) : NaN;
-            const trackWidth = right - left;
-
-            if (Number.isFinite(trackWidth) && trackWidth > 0) {
-                const edgePad = Math.min(32, Math.max(10, trackWidth * 0.08));
-                const boxWidth = clean.x2 - clean.x1;
-                const reachesLeft = clean.x1 <= left + edgePad;
-                const reachesRight = clean.x2 >= right - edgePad;
-                if (boxWidth >= trackWidth * 0.5 && reachesLeft && reachesRight && trackWidth > edgePad * 3) {
-                    clean.x1 = Math.max(clean.x1, left + edgePad);
-                    clean.x2 = Math.min(clean.x2, right - edgePad);
-                }
-            }
-            return clean.x2 > clean.x1 && clean.y2 > clean.y1 ? clean : null;
-        }
-
-        function addWrapEraseBoxForCurve(curveId, box) {
-            const key = getCurveKeyForWrap(curveId);
-            if (!key || !box) return false;
-            if (!curveWrapEraseBoxes || typeof curveWrapEraseBoxes !== 'object') curveWrapEraseBoxes = {};
-            const clean = cleanWrapEraseBox(box);
-            if (!clean) return false;
-            if (!Array.isArray(curveWrapEraseBoxes[key])) curveWrapEraseBoxes[key] = [];
-            curveWrapEraseBoxes[key].push(clean);
-            return true;
-        }
-
-        function getWrapEraseBoxesForRenderCurve(curveId, track) {
-            const candidates = [
-                curveId,
-                track && track.id,
-                track && track.name,
-                track && track.displayName,
-            ].filter(Boolean);
-            for (const candidate of candidates) {
-                const boxes = getWrapEraseBoxesForCurve(candidate);
-                if (boxes.length) return boxes;
-            }
-            return [];
-        }
-
-        function getEffectiveWrapEraseBoxesForRenderCurve(curveId, track) {
-            const boxes = getWrapEraseBoxesForRenderCurve(curveId, track);
-            if (!boxes.length) return [];
-            return boxes.map(box => getEffectiveWrapEraseBoxForTrack(box, track)).filter(Boolean);
-        }
-
-        function isSegmentHiddenByWrapEraser(curveId, prevPoint, currPoint, track) {
-            if (!Array.isArray(prevPoint) || !Array.isArray(currPoint)) return false;
             const x0 = Number(prevPoint[0]);
             const y0 = Number(prevPoint[1]);
             const x1 = Number(currPoint[0]);
             const y1 = Number(currPoint[1]);
             if (![x0, y0, x1, y1].every(Number.isFinite)) return false;
-            const boxes = getEffectiveWrapEraseBoxesForRenderCurve(curveId, track);
-            return boxes.some(box => segmentTouchesBox(x0, y0, x1, y1, box.x1, box.y1, box.x2, box.y2));
-        }
 
-        function segmentBoxOverlapInterval(ax, ay, bx, by, box) {
-            const dx = bx - ax;
-            const dy = by - ay;
-            let t0 = 0;
-            let t1 = 1;
-            const clip = (p, q) => {
-                if (Math.abs(p) < 1e-9) return q >= 0;
-                const r = q / p;
-                if (p < 0) {
-                    if (r > t1) return false;
-                    if (r > t0) t0 = r;
-                } else {
-                    if (r < t0) return false;
-                    if (r < t1) t1 = r;
-                }
-                return true;
-            };
+            const dx = Math.abs(x1 - x0);
+            const dy = Math.abs(y1 - y0);
+            const edgeMargin = Math.max(6, width * 0.07);
+            const nearLeft0 = x0 <= left + edgeMargin;
+            const nearRight0 = x0 >= right - edgeMargin;
+            const nearLeft1 = x1 <= left + edgeMargin;
+            const nearRight1 = x1 >= right - edgeMargin;
+            const oppositeEdges = (nearLeft0 && nearRight1) || (nearRight0 && nearLeft1);
+            const longFlatBridge = dx >= width * 0.36 && dy <= Math.max(24, width * 0.18);
 
-            if (!clip(-dx, ax - box.x1)) return null;
-            if (!clip(dx, box.x2 - ax)) return null;
-            if (!clip(-dy, ay - box.y1)) return null;
-            if (!clip(dy, box.y2 - ay)) return null;
-            if (t1 <= t0) return null;
-            return [Math.max(0, t0), Math.min(1, t1)];
-        }
+            if (longFlatBridge) return true;
 
-        function nearestTrackEdgeX(track, xImg) {
-            if (!track) return null;
-            const left = Math.min(Number(track.leftX), Number(track.rightX));
-            const right = Math.max(Number(track.leftX), Number(track.rightX));
-            const x = Number(xImg);
-            if (!Number.isFinite(left) || !Number.isFinite(right) || !Number.isFinite(x)) return null;
-            return Math.abs(x - left) <= Math.abs(x - right) ? left : right;
-        }
-
-        function getVisibleSegmentPiecesOutsideWrapErasers(curveId, prevPoint, currPoint, track) {
-            if (!Array.isArray(prevPoint) || !Array.isArray(currPoint)) return null;
-            const ax = Number(prevPoint[0]);
-            const ay = Number(prevPoint[1]);
-            const bx = Number(currPoint[0]);
-            const by = Number(currPoint[1]);
-            if (![ax, ay, bx, by].every(Number.isFinite)) return null;
-
-            const boxes = getEffectiveWrapEraseBoxesForRenderCurve(curveId, track);
-            if (!boxes.length) return null;
-
-            const hidden = [];
-            boxes.forEach(box => {
-                if (!segmentTouchesBox(ax, ay, bx, by, box.x1, box.y1, box.x2, box.y2)) return;
-                const interval = segmentBoxOverlapInterval(ax, ay, bx, by, box);
-                if (interval) hidden.push(interval);
-            });
-            if (!hidden.length) return null;
-
-            hidden.sort((a, b) => a[0] - b[0]);
-            const merged = [];
-            hidden.forEach(interval => {
-                const last = merged.length ? merged[merged.length - 1] : null;
-                if (!last || interval[0] > last[1]) {
-                    merged.push(interval.slice());
-                } else {
-                    last[1] = Math.max(last[1], interval[1]);
-                }
-            });
-
-            const pointAt = (t) => ({
-                x: ax + (bx - ax) * t,
-                y: ay + (by - ay) * t,
-            });
-            const pieces = [];
-            let cursor = 0;
-            merged.forEach(interval => {
-                const start = Math.max(0, interval[0]);
-                const end = Math.min(1, interval[1]);
-                if (start > cursor + 1e-4) {
-                    const a = pointAt(cursor);
-                    const b = pointAt(start);
-                    const edgeX = nearestTrackEdgeX(track, b.x);
-                    if (Number.isFinite(edgeX)) b.x = edgeX;
-                    if (Math.hypot(b.x - a.x, b.y - a.y) >= 1.0) pieces.push([a, b]);
-                }
-                cursor = Math.max(cursor, end);
-            });
-            if (cursor < 1 - 1e-4) {
-                const a = pointAt(cursor);
-                const b = pointAt(1);
-                const edgeX = nearestTrackEdgeX(track, a.x);
-                if (Number.isFinite(edgeX)) a.x = edgeX;
-                if (Math.hypot(b.x - a.x, b.y - a.y) >= 1.0) pieces.push([a, b]);
-            }
-            return pieces;
-        }
-
-        function addVisibleWrapEraserSegmentPieces(ctx, pieces, scaleX, scaleY) {
-            if (!ctx || !Array.isArray(pieces)) return;
-            pieces.forEach(piece => {
-                if (!Array.isArray(piece) || piece.length < 2) return;
-                const a = piece[0];
-                const b = piece[1];
-                if (!a || !b || ![a.x, a.y, b.x, b.y].every(Number.isFinite)) return;
-                ctx.moveTo(a.x * scaleX, a.y * scaleY);
-                ctx.lineTo(b.x * scaleX, b.y * scaleY);
-            });
-        }
-
-        function collectWrapEdgeRepairPoints(points, box, track) {
-            if (!Array.isArray(points) || points.length < 2 || !track) return [];
-            const effectiveBox = getEffectiveWrapEraseBoxForTrack(box, track);
-            if (!effectiveBox) return [];
-
-            const sorted = points
-                .filter(pt => Array.isArray(pt) && pt.length >= 2 &&
-                    Number.isFinite(Number(pt[0])) && Number.isFinite(Number(pt[1])))
-                .slice()
-                .sort((a, b) => Number(a[1]) - Number(b[1]));
-            const repairs = [];
-            const seen = new Set();
-
-            for (let i = 1; i < sorted.length; i++) {
-                const prev = sorted[i - 1];
-                const curr = sorted[i];
-                const ax = Number(prev[0]);
-                const ay = Number(prev[1]);
-                const bx = Number(curr[0]);
-                const by = Number(curr[1]);
-                if (![ax, ay, bx, by].every(Number.isFinite)) continue;
-                if (!segmentTouchesBox(ax, ay, bx, by, effectiveBox.x1, effectiveBox.y1, effectiveBox.x2, effectiveBox.y2)) continue;
-                const interval = segmentBoxOverlapInterval(ax, ay, bx, by, effectiveBox);
-                if (!interval) continue;
-
-                const pointAt = (t) => ({
-                    x: ax + (bx - ax) * t,
-                    y: ay + (by - ay) * t,
-                });
-                [pointAt(interval[0]), pointAt(interval[1])].forEach(pt => {
-                    const edgeX = nearestTrackEdgeX(track, pt.x);
-                    if (!Number.isFinite(edgeX) || !Number.isFinite(pt.y)) return;
-                    const key = `${Math.round(edgeX)}:${Math.round(pt.y)}`;
-                    if (seen.has(key)) return;
-                    seen.add(key);
-                    repairs.push({ x: edgeX, y: pt.y });
-                });
-            }
-            return repairs;
-        }
-
-        function collectWrapMarkersForEraserBox(ctx, points, box) {
-            if (!ctx || !ctx.track || !ctx.curveKey || !Array.isArray(points) || points.length < 2) return [];
-            const effectiveBox = getEffectiveWrapEraseBoxForTrack(box, ctx.track);
-            if (!effectiveBox) return [];
-
-            const sorted = points
-                .filter(pt => Array.isArray(pt) && pt.length >= 2 &&
-                    Number.isFinite(Number(pt[0])) && Number.isFinite(Number(pt[1])))
-                .slice()
-                .sort((a, b) => Number(a[1]) - Number(b[1]));
-            const markers = [];
-            const seenDepths = new Set();
-
-            for (let i = 1; i < sorted.length; i++) {
-                const prev = sorted[i - 1];
-                const curr = sorted[i];
-                const ax = Number(prev[0]);
-                const ay = Number(prev[1]);
-                const bx = Number(curr[0]);
-                const by = Number(curr[1]);
-                if (![ax, ay, bx, by].every(Number.isFinite)) continue;
-                if (!segmentTouchesBox(ax, ay, bx, by, effectiveBox.x1, effectiveBox.y1, effectiveBox.x2, effectiveBox.y2)) continue;
-                const interval = segmentBoxOverlapInterval(ax, ay, bx, by, effectiveBox);
-                if (!interval) continue;
-
-                const marker = applyWrapBridgeRepairForSegment(ctx, prev, curr, null);
-                if (!marker || !Number.isInteger(marker.depthIndex)) continue;
-                const depthBucket = Math.round(marker.depthIndex / 2);
-                if (seenDepths.has(depthBucket)) continue;
-                seenDepths.add(depthBucket);
-                markers.push(marker);
-            }
-            return markers;
-        }
-
-        function applyWrapMarkersForEraserBox(ctx, markers) {
-            if (!ctx || !ctx.curveKey || !Array.isArray(markers) || !markers.length) return 0;
-            const existing = getWrapMarkersForCurve(ctx.curveKey);
-            const next = existing.filter(oldMarker =>
-                !markers.some(newMarker => Math.abs(oldMarker.depthIndex - newMarker.depthIndex) <= 1)
-            );
-            markers.forEach(marker => next.push(marker));
-            setWrapMarkersForCurve(ctx.curveKey, next);
-            normalizeCurveValuesToWrapMarkers(ctx.curveKey);
-            updateScaleWrapStatus(ctx.curveKey);
-            return markers.length;
-        }
-
-        function applyWrapEdgeRepairPoints(ctx, traceKey, points, repairs) {
-            if (!ctx || !ctx.track || !ctx.curveKey || !Array.isArray(points) || !Array.isArray(repairs) || !repairs.length) {
-                return 0;
-            }
-            const found = findDigitizedCurveEntry(ctx.curveKey) || findDigitizedCurveEntry(traceKey) || findDigitizedCurveEntry(ctx.curveId);
-            const entry = found && found.entry && Array.isArray(found.entry.values) ? found.entry : null;
-            const depthCfg = lastDepthConfig || getDepthConfigFromInputs();
-            const stamp = Date.now();
-            let applied = 0;
-
-            repairs.forEach(repair => {
-                const dIdx = getDepthIndexAtImageY(repair.y);
-                if (!Number.isInteger(dIdx) || dIdx < 0) return;
-                if (isDepthIndexPinned(ctx.curveKey, dIdx) || isDepthIndexPinned(ctx.curveId, dIdx)) return;
-                const yUse = getPixelYForDepthIndex(dIdx, depthCfg) ?? repair.y;
-                const xUse = Number(repair.x);
-                if (!Number.isFinite(xUse) || !Number.isFinite(yUse)) return;
-
-                const duplicate = points.some(pt => Array.isArray(pt) &&
-                    Number.isInteger(pt[2]) && pt[2] === dIdx &&
-                    Math.abs(Number(pt[0]) - xUse) <= 1.5 &&
-                    Math.abs(Number(pt[1]) - yUse) <= 2.5);
-                if (!duplicate) {
-                    points.push([xUse, yUse, dIdx, 'wrap_edge', stamp]);
-                }
-
-                if (entry && dIdx < entry.values.length) {
-                    const val = pixelToTrackValue(xUse, ctx.track, { depthIndex: dIdx, values: entry.values });
-                    if (Number.isFinite(val)) entry.values[dIdx] = val;
-                }
-                applied++;
-            });
-
-            points.sort((a, b) => Number(a[1] || 0) - Number(b[1] || 0));
-            if (lastCurveTraces && traceKey) {
-                lastCurveTraces[traceKey] = points;
-            }
-            return applied;
-        }
-
-        function isScaleWrapDisplayJump(curveId, prevPoint, currPoint, track) {
-            return isSegmentHiddenByWrapEraser(curveId, prevPoint, currPoint, track);
+            return oppositeEdges &&
+                dx >= width * 0.45 &&
+                dy <= Math.max(24, width * 0.18);
         }
 
         function getSelectedWrapCurveContext() {
@@ -2898,107 +2571,6 @@
             showStatus(`Repaired wrap bridge for ${ctx.curveKey} at ${formatWrapNumber(depth)} with cycle ${formatWrapCycle(nextCycle)}.`, 'success');
         }
 
-        function segmentTouchesBox(ax, ay, bx, by, x1, y1, x2, y2) {
-            const minX = Math.min(ax, bx);
-            const maxX = Math.max(ax, bx);
-            const minY = Math.min(ay, by);
-            const maxY = Math.max(ay, by);
-            if (maxX < x1 || minX > x2 || maxY < y1 || minY > y2) return false;
-            if ((ax >= x1 && ax <= x2 && ay >= y1 && ay <= y2) ||
-                (bx >= x1 && bx <= x2 && by >= y1 && by <= y2)) {
-                return true;
-            }
-            const cx = (ax + bx) * 0.5;
-            const cy = (ay + by) * 0.5;
-            if (cx >= x1 && cx <= x2 && cy >= y1 && cy <= y2) return true;
-            const clampedX = Math.max(x1, Math.min(x2, cx));
-            const clampedY = Math.max(y1, Math.min(y2, cy));
-            return distancePointToSegment(clampedX, clampedY, ax, ay, bx, by) <= Math.max(10, Math.min(x2 - x1, y2 - y1) * 0.35);
-        }
-
-        function applyWrapBridgeRepairForSegment(ctx, prev, curr, cycleOverride = null) {
-            if (!ctx || !ctx.track || !ctx.curveKey || !Array.isArray(prev) || !Array.isArray(curr)) return null;
-            const prevIdx = Number.isInteger(prev[2]) ? prev[2] : getDepthIndexAtImageY(Number(prev[1]));
-            const currIdx = Number.isInteger(curr[2]) ? curr[2] : getDepthIndexAtImageY(Number(curr[1]));
-            const markerIdx = Math.max(0, Math.min(lastDigitizedDepth.length - 1,
-                Number.isInteger(currIdx) && currIdx >= 0 ? currIdx : Math.max(0, prevIdx + 1)
-            ));
-            const prevCycle = getWrapCycleForDepth(ctx.curveKey, Math.max(0, markerIdx - 1));
-            const nextCycle = Number.isFinite(cycleOverride)
-                ? Math.round(Number(cycleOverride))
-                : (Number(curr[0]) < Number(prev[0]) ? prevCycle + 1 : prevCycle - 1);
-            const edge = Number(curr[0]) < Number(prev[0]) ? 'left' : 'right';
-            return {
-                curveKey: ctx.curveKey,
-                depthIndex: markerIdx,
-                cycle: nextCycle,
-                edge,
-                xImg: edge === 'left' ? Number(ctx.track.leftX) : Number(ctx.track.rightX),
-                createdAt: Date.now(),
-            };
-        }
-
-        function handleWrapEraserBox(x1, y1, x2, y2) {
-            const ctx = getSelectedWrapCurveContext();
-            if (!ctx || !ctx.track || !ctx.curveKey) {
-                showStatus('Select a curve before using Wrap Eraser.', 'info');
-                return 0;
-            }
-            if (!Array.isArray(lastDigitizedDepth) || !lastDigitizedDepth.length || !lastDigitizedCurves) {
-                showStatus('Run Digitize before using Wrap Eraser.', 'info');
-                return 0;
-            }
-            const activeTrace = getActiveCurveTracePoints(ctx.curveKey);
-            let points = activeTrace.points;
-            if (!Array.isArray(points) || points.length < 2) {
-                const rebuilt = buildDisplayTracePointsFromDigitized(ctx.curveKey, { persist: false });
-                points = rebuilt && Array.isArray(rebuilt.points) ? rebuilt.points : null;
-            }
-            if (!Array.isArray(points) || points.length < 2) {
-                showStatus('No visible trace points found for Wrap Eraser.', 'info');
-                return 0;
-            }
-            ensureTracePointsHaveDepthIndex(ctx.curveKey);
-
-            const left = Math.min(Number(ctx.track.leftX), Number(ctx.track.rightX));
-            const right = Math.max(Number(ctx.track.leftX), Number(ctx.track.rightX));
-            const width = right - left;
-            if (!Number.isFinite(width) || width <= 0) return 0;
-
-            const traceKey = activeTrace.traceKey || getActiveCurveTraceKey(ctx.curveKey) || ctx.curveKey;
-            const found = findDigitizedCurveEntry(ctx.curveKey) || findDigitizedCurveEntry(traceKey) || findDigitizedCurveEntry(ctx.curveId);
-            const curveKeyForUndo = found && found.key ? found.key : ctx.curveKey;
-            const undoWrapEraseBoxes = cloneWrapEraseBoxesState();
-            const undoWrapMarkers = cloneWrapMarkersState();
-            const undoTracePoints = cloneTracePoints(points);
-            const undoValues = (found && found.entry && Array.isArray(found.entry.values))
-                ? found.entry.values.map((value, idx) => ({ idx, oldValue: value }))
-                : [];
-            const repairPoints = collectWrapEdgeRepairPoints(points, { x1, y1, x2, y2 }, ctx.track);
-            const wrapMarkers = collectWrapMarkersForEraserBox(ctx, points, { x1, y1, x2, y2 });
-
-            const boxAdded = addWrapEraseBoxForCurve(ctx.curveKey, { x1, y1, x2, y2 });
-            if (!boxAdded) {
-                showStatus('Wrap Eraser box was too small to apply.', 'info');
-                return 0;
-            }
-            const markerCount = applyWrapMarkersForEraserBox(ctx, wrapMarkers);
-            const edgePointCount = applyWrapEdgeRepairPoints(ctx, traceKey, points, repairPoints);
-            editUndoStack.push({
-                type: 'wrap_eraser',
-                curveKey: curveKeyForUndo,
-                curveId: ctx.curveId || ctx.curveKey,
-                traceKey,
-                undoWrapEraseBoxes,
-                undoWrapMarkers,
-                undoTracePoints,
-                undoValues,
-            });
-            if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
-            showStatus(`Wrap Eraser cut the middle, snapped ${edgePointCount} broken ends to edges, and added ${markerCount} LAS wrap offset${markerCount === 1 ? '' : 's'}. Ctrl+Z to undo.`, 'success');
-            return 1;
-        }
-
         function s5ClearWrapMarkerNearMouse() {
             const ctx = getSelectedWrapCurveContext();
             if (!ctx || !ctx.curveKey) {
@@ -3043,7 +2615,6 @@
         }
 
         function renderScaleWrapMarkersOnCanvas(ctx, scaleX, scaleY, tracks) {
-            return;
             if (!ctx || !curveWrapMarkers || typeof curveWrapMarkers !== 'object') return;
             const keys = Object.keys(curveWrapMarkers);
             if (!keys.length) return;
@@ -3183,7 +2754,7 @@
         }
 
         // Toolbar State
-        let activeTool = 'pointer'; // 'pointer', 'draw', 'addPoint', 'eraser', 'wrapEraser'
+        let activeTool = 'pointer'; // 'pointer', 'draw', 'addPoint', 'eraser'
         let crosshairEnabled = false;
         let eraserStart = null;
         let eraserBox = null;
@@ -3191,20 +2762,6 @@
         let drawStrokeActive = false;
         let drawStrokePoints = [];   // raw [xImg, yImg] samples collected this stroke
         let drawCursorRing = null;   // live visual ring element
-
-        function ensureWrapEraserToolbarButton() {
-            if (document.getElementById('toolWrapEraser')) return;
-            const eraserBtn = document.getElementById('toolEraser');
-            if (!eraserBtn || !eraserBtn.parentNode) return;
-            const btn = document.createElement('button');
-            btn.className = 'tool-btn';
-            btn.id = 'toolWrapEraser';
-            btn.type = 'button';
-            btn.title = 'Wrap Eraser - box the fake cross-track connector';
-            btn.textContent = 'W';
-            btn.onclick = () => setTool('wrapEraser');
-            eraserBtn.parentNode.insertBefore(btn, eraserBtn.nextSibling);
-        }
 
         function setEditModeUI() {
             const container = document.getElementById('workspace');
@@ -3216,7 +2773,6 @@
                 if (container) container.classList.add('edit-mode');
                 document.body.classList.add('edit-mode-active');
                 if (toolbar) toolbar.classList.remove('hidden');
-                ensureWrapEraserToolbarButton();
                 setTool('pointer'); // Reset to pointer on entry
                 if (btn) btn.textContent = 'Disable edit mode';
                 if (status) status.textContent = `Editing ${editCurveId}`;
@@ -3249,9 +2805,8 @@
                 draw:    'toolDraw',
                 addPoint: 'toolAddPoint',
                 eraser: 'toolEraser',
-                wrapEraser: 'toolWrapEraser',
             })[tool] || null;
-            ['toolPointer', 'toolDraw', 'toolAddPoint', 'toolEraser', 'toolWrapEraser'].forEach(id => {
+            ['toolPointer', 'toolDraw', 'toolAddPoint', 'toolEraser'].forEach(id => {
                 const btn = document.getElementById(id);
                 if (btn) {
                     if (id === activeButtonId) {
@@ -3266,7 +2821,7 @@
             const overlay = document.getElementById('overlay');
             if (overlay) {
                 overlay.classList.remove('draw-mode-cursor');
-                if (tool === 'eraser' || tool === 'wrapEraser' || tool === 'addPoint') overlay.style.cursor = 'crosshair';
+                if (tool === 'eraser' || tool === 'addPoint') overlay.style.cursor = 'crosshair';
                 else if (tool === 'draw') {
                     overlay.style.cursor = '';
                     overlay.classList.add('draw-mode-cursor');
@@ -4378,16 +3933,7 @@
             populateOverlayCurveSelectFromTracks();
             if (typeof syncToolbarCurveLockButton === 'function') syncToolbarCurveLockButton();
             const editSel = document.getElementById('editCurveSelect');
-            if (editSel) editSel.addEventListener('change', () => {
-                syncStep5Advanced();
-                if (editMode) {
-                    const nextId = normalizeCurveKey(editSel.value);
-                    if (nextId) {
-                        setActiveEditCurve(nextId);
-                        setEditModeUI();
-                    }
-                }
-            });
+            if (editSel) editSel.addEventListener('change', syncStep5Advanced);
             const tourBackdrop = document.getElementById('guidedTourBackdrop');
             if (tourBackdrop) {
                 tourBackdrop.addEventListener('click', skipWorkspaceTour);
@@ -5900,6 +5446,13 @@
             ensureTracePointsHaveDepthIndex(curveId);
 
             const targetDepthIdx = getDepthIndexAtImageY(yImg);
+            if (targetDepthIdx >= 0) {
+                const exactIdx = findBestPointIndexForDepth(points, targetDepthIdx, yImg, xImg);
+                if (exactIdx >= 0) {
+                    return { pointIndex: exactIdx, depthIndex: targetDepthIdx };
+                }
+            }
+
             const maxYDist = Number.isFinite(options.maxYDist) ? options.maxYDist : 14;
             const maxDist = Number.isFinite(options.maxDist) ? options.maxDist : 24;
             const maxDist2 = maxDist * maxDist;
@@ -5921,18 +5474,6 @@
             }
 
             if (bestIdx < 0) {
-                if (targetDepthIdx >= 0 && options.allowDepthFallback !== false) {
-                    const exactIdx = findBestPointIndexForDepth(points, targetDepthIdx, yImg, xImg);
-                    if (exactIdx >= 0 && Array.isArray(points[exactIdx])) {
-                        const pt = points[exactIdx];
-                        const dx = Number.isFinite(xImg) ? (Number(pt[0]) - xImg) : 0;
-                        const dy = Number.isFinite(yImg) ? (Number(pt[1]) - yImg) : 0;
-                        const dist = Math.hypot(dx, dy);
-                        if (dist <= maxDist * 1.5 && Math.abs(dy) <= maxYDist * 1.5) {
-                            return { pointIndex: exactIdx, depthIndex: targetDepthIdx };
-                        }
-                    }
-                }
                 return { pointIndex: -1, depthIndex: targetDepthIdx };
             }
 
@@ -6085,8 +5626,8 @@
             const entry = lastDigitizedCurves[curveKey];
             if (!entry || !Array.isArray(entry.values) || idx >= entry.values.length) return;
 
-            const editX = Math.max(0, Math.min((imageWidth || xImg + 1) - 1, xImg));
-            const newValue = pixelToTrackValue(editX, targetTrack, { depthIndex: idx, values: entry.values });
+            const clampedX = Math.max(targetTrack.leftX, Math.min(targetTrack.rightX, xImg));
+            const newValue = pixelToTrackValue(clampedX, targetTrack, { depthIndex: idx, values: entry.values });
             if (!Number.isFinite(newValue)) return;
 
             // Save old value for undo
@@ -6099,7 +5640,7 @@
             const pts = activeTrace.points;
             if (Array.isArray(pts) && pts.length) {
                 ensureTracePointsHaveDepthIndex(editCurveId);
-                const picked = findEditablePointIndex(pts, editX, yImgUse, editCurveId, { maxYDist: 14, maxDist: 24 });
+                const picked = findEditablePointIndex(pts, clampedX, yImgUse, editCurveId, { maxYDist: 14, maxDist: 24 });
                 const bestIdxPt = picked.pointIndex;
                 const bestDy = (bestIdxPt >= 0 && Array.isArray(pts[bestIdxPt])) ? Math.abs(pts[bestIdxPt][1] - yImgUse) : Infinity;
                 if (bestIdxPt >= 0 && bestDy <= 10) {
@@ -6122,22 +5663,23 @@
 
             if (pts2.length) {
                 ensureTracePointsHaveDepthIndex(editCurveId);
-                const picked = findEditablePointIndex(pts2, editX, yImg, editCurveId, { maxYDist: 14, maxDist: 24 });
+                const picked = findEditablePointIndex(pts2, clampedX, yImg, editCurveId, { maxYDist: 14, maxDist: 24 });
                 const bestIdxPt = picked.pointIndex;
                 const bestDy = (bestIdxPt >= 0 && Array.isArray(pts2[bestIdxPt])) ? Math.abs(pts2[bestIdxPt][1] - yImg) : Infinity;
 
                 if (bestIdxPt >= 0 && bestDy <= 10) {
-                    pts2[bestIdxPt][0] = editX;
+                    pts2[bestIdxPt][0] = clampedX;
                     pts2[bestIdxPt][1] = yImg;
                     pts2[bestIdxPt][2] = idx;
                 } else {
-                    pts2.push([editX, yImg, idx]);
+                    pts2.push([clampedX, yImg, idx]);
                 }
             } else {
-                pts2.push([editX, yImg, idx]);
+                pts2.push([clampedX, yImg, idx]);
             }
 
             lastCurveTraces[traceKey] = pts2;
+            rebuildCurveTraceFromDigitized(editCurveId);
             renderCurveTraceOverlays(lastCurveTraces);
         }
 
@@ -6267,8 +5809,8 @@
             const entry = lastDigitizedCurves[curveKey];
             if (!entry || !Array.isArray(entry.values) || idx >= entry.values.length) return;
 
-            const editX = Math.max(0, Math.min((imageWidth || xImg + 1) - 1, xImg));
-            const newValue = pixelToTrackValue(editX, targetTrack, { depthIndex: idx, values: entry.values });
+            const clampedX = Math.max(targetTrack.leftX, Math.min(targetTrack.rightX, xImg));
+            const newValue = pixelToTrackValue(clampedX, targetTrack, { depthIndex: idx, values: entry.values });
             if (!Number.isFinite(newValue)) return;
 
             const oldValue = entry.values[idx];
@@ -6310,14 +5852,14 @@
             for (let dIdx = Math.max(0, idx - crestRadius); dIdx <= Math.min(entry.values.length - 1, idx + crestRadius); dIdx++) {
                 if (isDepthIndexPinned(editCurveId, dIdx)) continue;
                 const pointY = (dIdx === idx) ? yTrace : (getPixelYForDepthIndex(dIdx, depthCfg) ?? yTrace);
-                const pointValue = pixelToTrackValue(editX, targetTrack, { depthIndex: dIdx, values: entry.values });
+                const pointValue = pixelToTrackValue(clampedX, targetTrack, { depthIndex: dIdx, values: entry.values });
                 if (!Number.isFinite(pointValue)) continue;
                 entry.values[dIdx] = pointValue;
                 touchedDepths.push(dIdx);
 
-                let existingIdx = findBestPointIndexForDepth(pts, dIdx, pointY, editX);
+                let existingIdx = findBestPointIndexForDepth(pts, dIdx, pointY, clampedX);
                 if (existingIdx < 0) {
-                    const picked = findEditablePointIndex(pts, editX, pointY, editCurveId, { maxYDist: 6, maxDist: 18 });
+                    const picked = findEditablePointIndex(pts, clampedX, pointY, editCurveId, { maxYDist: 6, maxDist: 18 });
                     existingIdx = picked.pointIndex;
                     if (existingIdx >= 0 && Array.isArray(pts[existingIdx]) && Number.isInteger(pts[existingIdx][2]) && pts[existingIdx][2] !== dIdx) {
                         existingIdx = -1;
@@ -6325,13 +5867,13 @@
                 }
 
                 if (existingIdx >= 0) {
-                    pts[existingIdx][0] = editX;
+                    pts[existingIdx][0] = clampedX;
                     pts[existingIdx][1] = pointY;
                     pts[existingIdx][2] = dIdx;
                     pts[existingIdx][3] = 'manual';
                     pts[existingIdx][4] = manualPointStamp;
                 } else {
-                    pts.push([editX, pointY, dIdx, 'manual', manualPointStamp]);
+                    pts.push([clampedX, pointY, dIdx, 'manual', manualPointStamp]);
                 }
             }
 
@@ -6622,37 +6164,6 @@
             }
             const last = editUndoStack.pop();
 
-            if (last.type === 'wrap_eraser') {
-                const { curveKey, curveId, traceKey, undoWrapEraseBoxes, undoWrapMarkers, undoTracePoints, undoValues } = last;
-
-                curveWrapEraseBoxes = undoWrapEraseBoxes && typeof undoWrapEraseBoxes === 'object'
-                    ? undoWrapEraseBoxes
-                    : {};
-                curveWrapMarkers = undoWrapMarkers && typeof undoWrapMarkers === 'object'
-                    ? undoWrapMarkers
-                    : {};
-
-                if (lastDigitizedCurves && lastDigitizedCurves[curveKey] && Array.isArray(lastDigitizedCurves[curveKey].values)) {
-                    const vals = lastDigitizedCurves[curveKey].values;
-                    if (Array.isArray(undoValues)) {
-                        undoValues.forEach(v => {
-                            if (v && Number.isInteger(v.idx) && v.idx >= 0 && v.idx < vals.length) {
-                                vals[v.idx] = v.oldValue;
-                            }
-                        });
-                    }
-                }
-
-                if (!lastCurveTraces || typeof lastCurveTraces !== 'object') lastCurveTraces = {};
-                if (traceKey) {
-                    lastCurveTraces[traceKey] = cloneTracePoints(undoTracePoints);
-                }
-                updateScaleWrapStatus(curveId || curveKey);
-                renderCurveTraceOverlays(lastCurveTraces);
-                showStatus(`Undo: reverted Wrap Eraser on "${curveId || curveKey}".`, 'info');
-                return;
-            }
-
             if (last.type === 'add_point_crest') {
                 const { curveKey, curveId, traceKey, undoTracePoints, undoValues } = last;
 
@@ -6700,7 +6211,7 @@
             }
 
             if (last.type === 'drag_group_v2') {
-                const { curveKey, curveId, points, values, undoTracePoints } = last;
+                const { curveKey, curveId, points, values } = last;
                 const traceKey = last.traceKey || curveId;
 
                 if (lastDigitizedCurves && lastDigitizedCurves[curveKey] && Array.isArray(lastDigitizedCurves[curveKey].values)) {
@@ -6712,13 +6223,6 @@
                             }
                         });
                     }
-                }
-
-                if (lastCurveTraces && traceKey && Array.isArray(undoTracePoints)) {
-                    lastCurveTraces[traceKey] = cloneTracePoints(undoTracePoints);
-                    renderCurveTraceOverlays(lastCurveTraces);
-                    showStatus('Undo: restored drag.', 'info');
-                    return;
                 }
 
                 if (lastCurveTraces && lastCurveTraces[traceKey] && Array.isArray(points)) {
@@ -6742,6 +6246,7 @@
                         }
                     });
                     pts.sort((a, b) => a[1] - b[1]);
+                    rebuildCurveTraceFromDigitized(curveId);
                     renderCurveTraceOverlays(lastCurveTraces);
                 }
 
@@ -6918,6 +6423,7 @@
                         pts.sort((a, b) => a[1] - b[1]);
                     }
                 }
+                rebuildCurveTraceFromDigitized(curveId);
                 renderCurveTraceOverlays(lastCurveTraces);
             }
             showStatus(`Undo: restored depth index ${idx} to ${oldValue !== null && oldValue !== undefined ? oldValue.toFixed(2) : 'null'}`, 'info');
@@ -6934,6 +6440,7 @@
                 showStatus(`Cannot edit: curve "${curveKey}" not found in digitized data. Available: ${Object.keys(lastDigitizedCurves).join(', ')}`, 'error');
                 return false;
             }
+            rebuildCurveTraceFromDigitized(editCurveId);
             const targetTrack = findTrackByCurveId(editCurveId);
             if (!targetTrack) {
                 const tracks = getTrackCalibrationsSnapshot();
@@ -6948,11 +6455,7 @@
             let pts = activeTrace.points;
             const entry = lastDigitizedCurves[curveKey];
             if (!Array.isArray(pts) || !Array.isArray(entry.values)) {
-                const rebuilt = rebuildCurveTraceFromDigitized(editCurveId);
-                pts = rebuilt && Array.isArray(rebuilt.points) ? rebuilt.points : null;
-                if (!Array.isArray(pts) || !Array.isArray(entry.values)) {
-                    return false;
-                }
+                return false;
             }
 
             ensureTracePointsHaveDepthIndex(editCurveId);
@@ -6979,7 +6482,6 @@
             }
             const dedupedPts = [];
             const depthRowToIndex = new Map();
-            const keepSameDepthDuplicate = (pt) => Array.isArray(pt) && pt[3] === 'wrap_edge';
             for (const curr of cleanPts) {
                 if (!Array.isArray(curr) || curr.length < 2) continue;
                 const dIdx = (curr.length >= 3 && Number.isInteger(curr[2])) ? curr[2] : null;
@@ -6994,10 +6496,6 @@
                 }
                 const prevIdx = depthRowToIndex.get(dIdx);
                 const prev = dedupedPts[prevIdx];
-                if (keepSameDepthDuplicate(prev) || keepSameDepthDuplicate(curr)) {
-                    dedupedPts.push(curr);
-                    continue;
-                }
                 const prevScore = Math.abs(prev[1] - yImg) * 4 + Math.abs(prev[0] - xImg);
                 const currScore = Math.abs(curr[1] - yImg) * 4 + Math.abs(curr[0] - xImg);
                 if (currScore < prevScore) {
@@ -7008,7 +6506,7 @@
             lastCurveTraces[traceKey] = pts;
 
             const picked = findEditablePointIndex(pts, xImg, yImg, editCurveId, { maxYDist: 16, maxDist: 24 });
-            let nearestIdx = picked.pointIndex;
+            const nearestIdx = picked.pointIndex;
 
             // If close to an existing point, start a drag with minimal rubber-band (±1 neighbor)
             if (nearestIdx >= 0) {
@@ -7020,58 +6518,32 @@
                 const neighbors = [];
                 let centerDepthIdx = -1;
                 const smoothMode = document.getElementById('smoothEditToggle')?.checked;
-                const windowRadius = smoothMode ? 8 : 4;
+                const windowRadius = smoothMode ? 8 : 3;
+                for (let offset = -windowRadius; offset <= windowRadius; offset++) {
+                    const idx = nearestIdx + offset;
+                    if (idx < 0 || idx >= pts.length) continue;
 
-                // Remove any accumulated shoulder points from previous drags before building neighbors
-                const centerPtRef = pts[nearestIdx];
-                const purgedPts = pts.filter(pt => !Array.isArray(pt) || pt[3] !== 'manual_shoulder');
-                if (purgedPts.length !== pts.length) {
-                    pts.splice(0, pts.length, ...purgedPts);
-                    lastCurveTraces[traceKey] = pts;
-                    nearestIdx = pts.indexOf(centerPtRef);
-                    if (nearestIdx < 0) nearestIdx = 0;
-                }
-                const centerPtY = pts[nearestIdx][1];
-                const influencePx = smoothMode ? 60 : 30; // Visible rubberband size in pixels
+                    const ptX = pts[idx][0];
+                    const ptY = pts[idx][1];
+                    const depth = pixelToDepthFromConfig(ptY, depthCfg);
+                    if (!Number.isFinite(depth)) continue;
 
-                // Scan outward in both directions to get ALL points within influencePx
-                for (let dir of [-1, 1]) {
-                    for (let i = (dir === -1 ? -1 : 0); ; i += dir) {
-                        const idx = nearestIdx + i;
-                        if (idx < 0 || idx >= pts.length) break;
+                    const dIdx = findNearestDepthIndex(depth, lastDigitizedDepth);
+                    if (dIdx < 0 || dIdx >= entry.values.length) continue;
 
-                        const ptX = pts[idx][0];
-                        const ptY = pts[idx][1];
-                        const distPx = Math.abs(ptY - centerPtY);
-                        
-                        if (distPx > influencePx) break; // Array is sorted by Y, so we can stop searching this direction
-                        
-                        const depth = pixelToDepthFromConfig(ptY, depthCfg);
-                        if (!Number.isFinite(depth)) continue;
+                    pts[idx][2] = dIdx;
 
-                        const dIdx = findNearestDepthIndex(depth, lastDigitizedDepth);
-                        if (dIdx < 0 || dIdx >= entry.values.length) continue;
-
-                        pts[idx][2] = dIdx;
-
-                        if (idx === nearestIdx) {
-                            centerDepthIdx = dIdx;
-                        }
-
-                        neighbors.push({
-                            pointIndex: idx,
-                            offsetFromCenter: Math.abs(idx - nearestIdx),
-                            distPx: distPx,
-                            influencePx: influencePx,
-                            depthIndex: dIdx,
-                            originalDepthIndex: dIdx,
-                            currentDepthIndex: dIdx,
-                            originalX: ptX,
-                            originalY: ptY,
-                            pointKind: String(pts[idx][3] || ''),
-                            originalValue: entry.values[dIdx],
-                        });
+                    if (idx === nearestIdx) {
+                        centerDepthIdx = dIdx;
                     }
+
+                    neighbors.push({
+                        pointIndex: idx,
+                        depthIndex: dIdx,
+                        originalX: ptX,
+                        originalY: ptY,
+                        originalValue: entry.values[dIdx],
+                    });
                 }
 
                 if (!neighbors.length) return false;
@@ -7093,8 +6565,6 @@
                     targetTrack: targetTrack,
                     entry: entry,
                     pts: pts,
-                    undoTracePoints: cloneTracePoints(pts),
-                    undoValues: entry.values.map((value, valueIdx) => ({ idx: valueIdx, oldValue: value })),
                     currentX: xImg,  // Initialize with click position
                     currentY: yImg,
                 };
@@ -7192,49 +6662,6 @@
             });
         }
 
-        function ensurePointerDragShoulders(pts, centerIndex, centerDepthIdx, entry, targetTrack, depthCfg) {
-            if (!Array.isArray(pts) || !Number.isInteger(centerIndex) || !Number.isInteger(centerDepthIdx)) return centerIndex;
-            if (!entry || !Array.isArray(entry.values) || !targetTrack) return centerIndex;
-
-            const centerPt = pts[centerIndex];
-            if (!Array.isArray(centerPt) || centerPt.length < 2) return centerIndex;
-            const centerX = Number(centerPt[0]);
-            if (!Number.isFinite(centerX)) return centerIndex;
-
-            const stamp = Date.now();
-            let changed = false;
-            const centerY = Number(centerPt[1]);
-            const shoulderGapPx = 18;
-            [-1, 1].forEach((offset) => {
-                const targetY = Number.isFinite(centerY) ? (centerY + offset * shoulderGapPx) : null;
-                const targetDepth = Number.isFinite(targetY) ? pixelToDepthFromConfig(targetY, depthCfg) : null;
-                let dIdx = Number.isFinite(targetDepth) ? findNearestDepthIndex(targetDepth, lastDigitizedDepth) : -1;
-                if (dIdx === centerDepthIdx) dIdx = centerDepthIdx + offset;
-                if (dIdx < 0 || dIdx >= entry.values.length) return;
-                if (isDepthIndexPinned(editCurveId, dIdx)) return;
-
-                const y = Number.isFinite(targetY) ? targetY : getPixelYForDepthIndex(dIdx, depthCfg);
-                if (!Number.isFinite(y)) return;
-
-                let existingIdx = findBestPointIndexForDepth(pts, dIdx, y, centerX);
-                if (existingIdx >= 0) return;
-
-                const sourceValue = entry.values[dIdx];
-                let x = trackValueToPixelX(sourceValue, targetTrack, { depthIndex: dIdx, values: entry.values });
-                if (!Number.isFinite(x)) x = centerX;
-
-                pts.push([x, y, dIdx, 'manual_shoulder', stamp]);
-                changed = true;
-            });
-
-            if (!changed) return centerIndex;
-            const centerStamp = centerPt[4] || stamp;
-            centerPt[4] = centerStamp;
-            pts.sort((a, b) => Number(a && a[1] || 0) - Number(b && b[1] || 0));
-            const newCenterIndex = pts.findIndex(pt => pt === centerPt || (Array.isArray(pt) && pt[4] === centerStamp && Number(pt[0]) === centerX));
-            return newCenterIndex >= 0 ? newCenterIndex : centerIndex;
-        }
-
         function _doDragUpdate() {
             if (!editMode || !editDragState) {
                 // console.log('_doDragUpdate: early return - editMode:', editMode, 'editDragState:', !!editDragState);
@@ -7283,108 +6710,52 @@
                 ? _computeLocalDepthSpacing(lastDigitizedDepth, neighbors.map(n => n.depthIndex))
                 : 1.0;
             // sigma in depth units (ft). Wider when smoothMode is on.
-            const sigmaDepth = Math.max(5.0, localSpacing * 6.0);
-            const yWeight = smoothMode ? 0.8 : 0.72;
+            const sigmaDepth = smoothMode ? Math.max(5.0, localSpacing * 6.0) : Math.max(1.0, localSpacing * 2.0);
+            // Reduce Y motion when smoothing is enabled to avoid stair-steps; keep X dominant.
+            const yWeight = smoothMode ? 0.8 : 1.0;
 
             const depthCfg = lastDepthConfig || getDepthConfigFromInputs();
 
             // Pass 1: Clear old indices to prevent values overwriting each other when shifting up/down
             neighbors.forEach(n => {
                 if (isDepthIndexPinned(state.curveId, n.depthIndex) && n.pointIndex !== centerIndex) return;
-                const oldIdx = Number.isInteger(n.currentDepthIndex) ? n.currentDepthIndex : n.depthIndex;
-                const originalIdx = Number.isInteger(n.originalDepthIndex) ? n.originalDepthIndex : n.depthIndex;
-                [oldIdx, originalIdx].forEach(idx => {
-                    if (idx >= 0 && idx < entry.values.length) {
-                        entry.values[idx] = null;
-                    }
-                });
-            });
-
-            if (Array.isArray(state.undoValues)) {
-                state.undoValues.forEach(v => {
-                    if (v && Number.isInteger(v.idx) && v.idx >= 0 && v.idx < entry.values.length) {
-                        const stillOwnedByMovingPoint = neighbors.some(n => {
-                            const oldIdx = Number.isInteger(n.currentDepthIndex) ? n.currentDepthIndex : n.depthIndex;
-                            const originalIdx = Number.isInteger(n.originalDepthIndex) ? n.originalDepthIndex : n.depthIndex;
-                            return oldIdx === v.idx || originalIdx === v.idx;
-                        });
-                        if (!stillOwnedByMovingPoint && isMissingDigitizedValue(entry.values[v.idx])) {
-                            entry.values[v.idx] = v.oldValue;
-                        }
-                    }
-                });
-            }
-
-            neighbors.forEach(n => {
-                if (isDepthIndexPinned(state.curveId, n.depthIndex) && n.pointIndex !== centerIndex) return;
-                const priorIdx = Number.isInteger(n.currentDepthIndex) ? n.currentDepthIndex : n.depthIndex;
-                if (priorIdx >= 0 && priorIdx < entry.values.length) {
-                    entry.values[priorIdx] = null;
+                if (n.depthIndex >= 0 && n.depthIndex < entry.values.length) {
+                    entry.values[n.depthIndex] = null;
                 }
             });
-
-            // Sort neighbors by point index just to be safe
-            neighbors.sort((a, b) => a.pointIndex - b.pointIndex);
-
-            // Pass 1.5: Pre-calculate weights and find maximum safe Y movement to prevent any depth inversions
-            const getWeight = (idx) => {
-                const n = neighbors.find(x => x.pointIndex === idx);
-                if (!n) return 0;
-                if (n.pointIndex === centerIndex) return 1.0;
-                const normDist = Math.min(1.0, (n.distPx || 0) / (n.influencePx || 30));
-                return smoothMode ? Math.exp(- (normDist * normDist) * 4.0) : Math.pow(1.0 - normDist, 1.5);
-            };
-
-            const yWeightMultiplier = smoothMode ? 0.8 : 0.72;
-            let maxDownY = Infinity;
-            let maxUpY = -Infinity;
-
-            if (neighbors.length > 0) {
-                const minIdx = Math.max(0, neighbors[0].pointIndex - 1);
-                const maxIdx = Math.min(pts.length - 1, neighbors[neighbors.length - 1].pointIndex + 1);
-
-                for (let i = minIdx; i < maxIdx; i++) {
-                    const wA = getWeight(i) * yWeightMultiplier;
-                    const wB = getWeight(i + 1) * yWeightMultiplier;
-                    const yA = pts[i][1];
-                    const yB = pts[i + 1][1];
-                    const gap = yB - yA;
-
-                    const weightDiff = wA - wB;
-                    if (Math.abs(weightDiff) > 0.0001) {
-                        const limit = gap / weightDiff;
-                        if (weightDiff > 0) {
-                            // A moves faster down than B. Limit positive deltaY
-                            maxDownY = Math.min(maxDownY, limit * 0.95);
-                        } else {
-                            // B moves faster up than A. Limit negative deltaY
-                            maxUpY = Math.max(maxUpY, limit * 0.95);
-                        }
-                    }
-                }
-            }
-
-            const safeDeltaY = Math.max(maxUpY, Math.min(maxDownY, deltaY));
 
             // Pass 2: Calculate new positions and write to new depth indices
             neighbors.forEach(n => {
                 if (isDepthIndexPinned(state.curveId, n.depthIndex) && n.pointIndex !== centerIndex) return;
 
-                const weight = getWeight(n.pointIndex);
+                const depth = (Array.isArray(lastDigitizedDepth) && n.depthIndex >= 0 && n.depthIndex < lastDigitizedDepth.length)
+                    ? lastDigitizedDepth[n.depthIndex]
+                    : null;
+                const depthDelta = (centerDepth != null && depth != null) ? Math.abs(depth - centerDepth) : Math.abs(n.pointIndex - centerIndex) * localSpacing;
+                
+                // Gaussian weight: exp(-depthDelta²/(2sigma²))
+                // For the exact center point, always use weight=1.0 so it follows the mouse exactly
+                let weight = 1.0;
+                if (n.pointIndex !== centerIndex) {
+                    weight = Math.exp(-(depthDelta * depthDelta) / (2 * sigmaDepth * sigmaDepth));
+                    if (weight < 0.01) return;
+                }
 
-                let newX, newY;
-                if (weight < 0.001) {
-                    // Safe restore: process normally to restore depth index, but don't move
-                    newX = n.originalX;
-                    newY = n.originalY;
-                } else if (n.pointIndex === centerIndex) {
-                    // Center point follows mouse exactly in X, and clamped mouse in Y
+                let newX;
+                if (n.pointIndex === centerIndex) {
+                    // Center point follows mouse exactly
                     newX = xImg;
-                    newY = n.originalY + safeDeltaY;
                 } else {
-                    // Neighbors get weighted horizontal and clamped vertical motion
+                    // Neighbors get weighted X motion
                     newX = n.originalX + deltaX * weight;
-                    newY = n.originalY + safeDeltaY * weight * yWeightMultiplier;
+                }
+                let newY;
+                if (n.pointIndex === centerIndex) {
+                    // Center point follows mouse exactly
+                    newY = yImg;
+                } else {
+                    // Neighbors get weighted Y motion
+                    newY = n.originalY + deltaY * weight * yWeight;
                 }
 
                 if (imgW > 1) newX = Math.max(0, Math.min(imgW - 1, newX));
@@ -7392,8 +6763,6 @@
 
                 pts[n.pointIndex][0] = newX;
                 pts[n.pointIndex][1] = newY;
-                pts[n.pointIndex][3] = 'manual';
-                pts[n.pointIndex][4] = Date.now();
 
                 // Map new Y position to depth index
                 const newDepth = pixelToDepthFromConfig(newY, depthCfg);
@@ -7406,10 +6775,7 @@
                 }
                 
                 pts[n.pointIndex][2] = newDepthIndex;
-                n.currentDepthIndex = newDepthIndex;
-                if (n.pointIndex === centerIndex) {
-                    state.depthIndex = newDepthIndex;
-                }
+                n.depthIndex = newDepthIndex; // Update neighbor state for future iterations in this drag
 
                 const newVal = pixelToTrackValue(newX, targetTrack, { depthIndex: newDepthIndex, values: entry.values });
                 if (Number.isFinite(newVal)) {
@@ -8365,31 +7731,8 @@
             // When edit mode is enabled, clicks/drag adjust the selected curve
             // instead of starting new selections.
             if (editMode && editCurveId) {
-                if (event.button === 2) {
-                    return;
-                }
-
-                // WRAP ERASER can start anywhere in the selected curve track and
-                // is intentionally isolated from pointer/add-point handling.
-                if (activeTool === 'wrapEraser' && event.button === 0) {
-                    eraserStart = { x: xImg, y: yImg, clientX: event.clientX, clientY: event.clientY };
-                    eraserBox = document.createElement('div');
-                    eraserBox.className = 'eraser-box';
-                    const leftPct = (xImg / imageWidth) * 100;
-                    const topPct = (yImg / imageHeight) * 100;
-                    eraserBox.style.left = `${leftPct}%`;
-                    eraserBox.style.top = `${topPct}%`;
-                    eraserBox.style.width = '0';
-                    eraserBox.style.height = '0';
-                    if (overlay) overlay.appendChild(eraserBox);
-                    event.preventDefault();
-                    return;
-                }
-
                 const clickedTrack = getTrackUnderImageX(xImg);
-                const allowSelectedCurveOffTrackEdit = !clickedTrack &&
-                    (activeTool === 'pointer' || activeTool === 'addPoint' || activeTool === 'draw');
-                if (!clickedTrack && !allowSelectedCurveOffTrackEdit) {
+                if (!clickedTrack) {
                     event.preventDefault();
                     return;
                 }
@@ -8400,11 +7743,14 @@
                 // "locked to GR" warning when the track's internal id differs
                 // from its display mnemonic (e.g. id="curve_0" name="GR").
                 const target = normalizeCurveKey(editCurveId);
-                const trackIds = clickedTrack ? [clickedTrack.id, clickedTrack.name, clickedTrack.displayName] : [];
-                const matchesSelected = !clickedTrack || trackIds.some(v => normalizeCurveKey(v) === target);
+                const trackIds = [clickedTrack.id, clickedTrack.name, clickedTrack.displayName];
+                const matchesSelected = trackIds.some(v => normalizeCurveKey(v) === target);
                 if (!matchesSelected) {
                     showStatus(`Edit mode is locked to ${editCurveId}. Change the curve in the dropdown first.`, 'info');
                     event.preventDefault();
+                    return;
+                }
+                if (event.button === 2) {
                     return;
                 }
                 // DRAW (PEN) TOOL
@@ -8703,13 +8049,6 @@
                     const x2 = Math.max(eraserStart.x, xImg);
                     const y1 = Math.min(eraserStart.y, yImg);
                     const y2 = Math.max(eraserStart.y, yImg);
-
-                    if (activeTool === 'wrapEraser') {
-                        handleWrapEraserBox(x1, y1, x2, y2);
-                        eraserStart = null;
-                        eraserBox = null;
-                        return;
-                    }
                     
                     // Delete points in box
                     const activeTrace = getActiveCurveTracePoints(editCurveId);
@@ -8833,14 +8172,34 @@
                     const pts = (traceKey && lastCurveTraces) ? lastCurveTraces[traceKey] : null;
                     const entry = (curveKey && lastDigitizedCurves) ? lastDigitizedCurves[curveKey] : null;
                     if (state && curveKey && curveId && Array.isArray(pts) && entry && Array.isArray(entry.values)) {
+                        const pointsUndo = [];
+                        const valuesUndoMap = new Map();
+
+                        const neighbors = Array.isArray(state.neighbors) ? state.neighbors : [];
+                        neighbors.forEach(n => {
+                            if (!n || !Number.isInteger(n.pointIndex)) return;
+                            pointsUndo.push({
+                                pointIndex: n.pointIndex,
+                                oldX: n.originalX,
+                                oldY: n.originalY,
+                                oldDepthIndex: n.depthIndex,
+                            });
+                            if (Number.isInteger(n.depthIndex)) {
+                                valuesUndoMap.set(n.depthIndex, n.originalValue);
+                            }
+                        });
+
+                        const valuesUndo = Array.from(valuesUndoMap.entries()).map(([idx, oldValue]) => ({ idx, oldValue }));
                         editUndoStack.push({
                             type: 'drag_group_v2',
                             curveKey,
                             curveId,
                             traceKey,
-                            undoTracePoints: cloneTracePoints(state.undoTracePoints),
-                            values: Array.isArray(state.undoValues) ? state.undoValues.map(v => ({ ...v })) : [],
+                            points: pointsUndo,
+                            values: valuesUndo,
                         });
+
+                        rebuildCurveTraceFromDigitized(curveId);
                     }
                 } catch (e) {
                     console.warn('Drag finalize failed', e);
@@ -8872,13 +8231,7 @@
 
                 // Optionally snap the center point back onto the colored curve (async)
                 const snapToggle = document.getElementById('snapToCurveToggle');
-                const dragTrackForSnap = editDragState && editDragState.curveId ? findTrackByCurveId(editDragState.curveId) : null;
-                const dragXForSnap = editDragState ? Number(editDragState.currentX) : NaN;
-                const snapInsideTrack = dragTrackForSnap &&
-                    Number.isFinite(dragXForSnap) &&
-                    dragXForSnap >= Math.min(Number(dragTrackForSnap.leftX), Number(dragTrackForSnap.rightX)) &&
-                    dragXForSnap <= Math.max(Number(dragTrackForSnap.leftX), Number(dragTrackForSnap.rightX));
-                if (snapToggle && snapToggle.checked && editDragState.curveId && snapInsideTrack) {
+                if (snapToggle && snapToggle.checked && editDragState.curveId) {
                     // Save state before nulling since applySnapToCurve is async
                     const savedState = { ...editDragState };
                     try {
@@ -8908,6 +8261,7 @@
                     editDragState = null;
                     try {
                         await applySnapToCurve(savedState);
+                        rebuildCurveTraceFromDigitized(savedState.curveId);
                         if (lastCurveTraces) {
                             renderCurveTraceOverlays(lastCurveTraces);
                         }
@@ -9143,7 +8497,6 @@
             lastDigitizedDepth = null;
             lastDigitizedCurves = null;
             curveWrapMarkers = {};
-            curveWrapEraseBoxes = {};
             if (pinnedDepthIndices) pinnedDepthIndices.clear();
 
             clearPrimaryRegionOverlay();
@@ -12248,9 +11601,7 @@
             const img = document.getElementById('imagePreview');
             const canvas = document.getElementById('curveCanvas');
 
-            const focusCurveId = opts && opts.focusCurveId
-                ? String(opts.focusCurveId)
-                : ((editMode && editCurveId) ? String(editCurveId) : null);
+            const focusCurveId = opts && opts.focusCurveId ? String(opts.focusCurveId) : null;
             const fastMode = !!(opts && opts.fastMode);
             const editTraceKey = (editMode && editCurveId) ? getActiveCurveTraceKey(editCurveId) : null;
             const editTraceNorm = editMode && editCurveId ? normalizeCurveKey(editCurveId) : '';
@@ -12715,11 +12066,7 @@
                             const xDom = (currPoint[0] * scaleX);
                             const yDom = (currPoint[1] * scaleY);
                             const jumpX = Math.abs(Number(currPoint[0]) - Number(prevPoint[0]));
-                            const wrapVisiblePieces = getVisibleSegmentPiecesOutsideWrapErasers(name, prevPoint, currPoint, trackMeta);
-                            if (wrapVisiblePieces !== null) {
-                                addVisibleWrapEraserSegmentPieces(ctx, wrapVisiblePieces, scaleX, scaleY);
-                                ctx.moveTo(xDom, yDom);
-                            } else if (isScaleWrapDisplayJump(name, prevPoint, currPoint, trackMeta) ||
+                            if (isScaleWrapDisplayJump(name, prevPoint, currPoint, trackMeta) ||
                                 (splitWrappedJumps && Number.isFinite(jumpX) && jumpX > wrapJumpThreshold)) {
                                 ctx.moveTo(xDom, yDom);
                             } else {
@@ -13305,7 +12652,6 @@
                     lastDigitizedDepth = Array.isArray(data.digitized_depth) ? data.digitized_depth : null;
                     lastDigitizedCurves = data.digitized_curves || null;
                     curveWrapMarkers = {};
-                    curveWrapEraseBoxes = {};
                     lastLasContent = data.las_content || null;
                     lastLasFilename = data.filename || 'digitized_log.las';
                     lastDepthConfig = depthCfg;
@@ -14853,7 +14199,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         uploadedImagePath = imgPath;
         lastLasContent = logData.las_content || null;
         curveWrapMarkers = {};
-        curveWrapEraseBoxes = {};
         lastLasFilename = (logData.name || 'digitized_log').replace(/ /g, '_') + '.las';
         
         const imgEl = document.getElementById('imagePreview');
