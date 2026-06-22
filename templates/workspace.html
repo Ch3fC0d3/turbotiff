@@ -7444,11 +7444,13 @@
             if (centerIndex < 0) return;
             const maxStep = Math.max(10, trackWidth * 0.10);
             const wrapActive = !!targetTrack.wrapped;
+            const rawCycle = rawX => Math.floor((rawX - left) / trackWidth + 1e-9);
 
             const relaxSide = direction => {
                 let anchorX = wrapActive
                     ? getTracePointRawX(centerPoint, targetTrack, editCurveId)
                     : Number(centerPoint[0]);
+                if (!Number.isFinite(anchorX)) return;
                 for (let i = centerIndex + direction; i >= 0 && i < pts.length; i += direction) {
                     const point = pts[i];
                     if (!Array.isArray(point) || !Number.isFinite(Number(point[0]))) break;
@@ -7456,9 +7458,19 @@
                     const depthIndex = Number.isInteger(point[2]) ? point[2] : -1;
                     if (depthIndex >= 0 && isDepthIndexPinned(editCurveId, depthIndex)) break;
 
-                    let pointX = wrapActive
+                    const storedPointX = wrapActive
                         ? getTracePointRawX(point, targetTrack, editCurveId)
                         : Number(point[0]);
+                    if (wrapActive && Number.isFinite(storedPointX)) {
+                        const crossesRail = rawCycle(storedPointX) !== rawCycle(anchorX);
+                        const plausibleCrossing = Math.abs(storedPointX - anchorX) <= trackWidth * 0.5;
+                        if (crossesRail && plausibleCrossing) {
+                            // This is a real carryover segment, not a bad connector.
+                            // Leave both logical cycles intact so rendering can split it.
+                            break;
+                        }
+                    }
+                    let pointX = storedPointX;
                     if (wrapActive) {
                         pointX = unwrapDisplayXNearReference(Number(point[0]), anchorX, targetTrack);
                     }
