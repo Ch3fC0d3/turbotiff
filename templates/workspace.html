@@ -6613,8 +6613,17 @@
 
             const deltaX = xImg - centerN.originalX;
             const deltaY = yImg - centerN.originalY;
-            const clampedX = Math.max(targetTrack.leftX, Math.min(targetTrack.rightX, xImg));
-            const targetValue = pixelToTrackValue(clampedX, targetTrack, { depthIndex: centerN.depthIndex, values: entry.values });
+            
+            // Calculate track value mathematically using delta to avoid cycle-inference positive feedback loops
+            const trackWidth = targetTrack.rightX - targetTrack.leftX;
+            const trackRange = targetTrack.scaleMax - targetTrack.scaleMin;
+            let targetValue = centerN.originalValue;
+            if (trackWidth > 0 && trackRange > 0 && Number.isFinite(centerN.originalValue)) {
+                const deltaValue = (deltaX / trackWidth) * trackRange;
+                targetValue = centerN.originalValue + deltaValue;
+            } else {
+                targetValue = pixelToTrackValue(xImg, targetTrack, { depthIndex: centerN.depthIndex, values: entry.values });
+            }
 
             // Check smoothing toggle
             const smoothMode = document.getElementById('smoothEditToggle')?.checked;
@@ -6669,8 +6678,13 @@
 
                 let newX;
                 if (n.pointIndex === centerIndex) {
-                    // Center point follows mouse exactly
-                    newX = xImg;
+                    // Center point computes its X strictly from the mathematical track value to ensure wrap/clamp limits are respected
+                    if (Number.isFinite(targetValue)) {
+                        newX = trackValueToPixelX(targetValue, targetTrack, { rawValue: false });
+                        if (!Number.isFinite(newX)) newX = xImg;
+                    } else {
+                        newX = xImg;
+                    }
                 } else {
                     // Neighbors get weighted interpolation in TRACK VALUE space to support wrap crossovers!
                     if (Number.isFinite(n.originalValue) && Number.isFinite(targetValue)) {
