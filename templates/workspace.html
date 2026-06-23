@@ -5664,6 +5664,7 @@
 
             const clampedX = Math.max(targetTrack.leftX, Math.min(targetTrack.rightX, xImg));
             const newValue = pixelToTrackValue(clampedX, targetTrack, { depthIndex: idx, values: entry.values });
+            const wrapActive = isTrackWrapActive(targetTrack, curveKey);
             if (!Number.isFinite(newValue)) return;
 
             // Save old value for undo
@@ -5709,21 +5710,20 @@
                     pts2[bestIdxPt][1] = yImg;
                     pts2[bestIdxPt][2] = idx;
                 } else {
-                    const point = [editX, yImg, idx];
-                    point[5] = storedRawEditX;
+                    const point = [clampedX, yImg, idx];
+                    point[5] = clampedX;
                     pts2.push(point);
                     editedPoint = point;
                 }
             } else {
-                const point = [editX, yImg, idx];
-                point[5] = storedRawEditX;
+                const point = [clampedX, yImg, idx];
+                point[5] = clampedX;
                 pts2.push(point);
                 editedPoint = point;
             }
 
             pts2.sort((a, b) => Number(a && a[1] || 0) - Number(b && b[1] || 0));
             if (wrapActive) targetTrack.wrapped = true;
-            if (editedPoint) limitDragHorizontalConnectors(pts2, editedPoint, entry, targetTrack);
             lastCurveTraces[traceKey] = pts2;
             rebuildCurveTraceFromDigitized(editCurveId);
             renderCurveTraceOverlays(lastCurveTraces);
