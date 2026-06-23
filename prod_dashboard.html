@@ -2933,17 +2933,11 @@
             const pts = lastCurveTraces && lastCurveTraces[editCurveId];
             if (Array.isArray(pts) && pts.length) {
                 ensureTracePointsHaveDepthIndex(editCurveId);
-                let bestIdxPt = findPointIndexByDepthIndex(pts, idx);
+                let bestIdxPt = -1;
                 let bestDy = Infinity;
-                if (bestIdxPt < 0) {
-                    bestIdxPt = 0;
-                    bestDy = Math.abs(pts[0][1] - yImg);
-                    for (let i = 1; i < pts.length; i++) {
-                        const dy = Math.abs(pts[i][1] - yImg);
-                        if (dy < bestDy) { bestDy = dy; bestIdxPt = i; }
-                    }
-                } else {
-                    bestDy = Math.abs(pts[bestIdxPt][1] - yImg);
+                for (let i = 0; i < pts.length; i++) {
+                    const dy = Math.abs(pts[i][1] - yImg);
+                    if (dy < bestDy) { bestDy = dy; bestIdxPt = i; }
                 }
                 if (bestIdxPt >= 0 && bestDy <= 10) oldTraceX = pts[bestIdxPt][0];
             }
@@ -2961,20 +2955,14 @@
 
             if (pts2.length) {
                 ensureTracePointsHaveDepthIndex(editCurveId);
-                let bestIdxPt = findPointIndexByDepthIndex(pts2, idx);
+                let bestIdxPt = -1;
                 let bestDy = Infinity;
-                if (bestIdxPt < 0) {
-                    bestIdxPt = 0;
-                    bestDy = Math.abs(pts2[0][1] - yImg);
-                    for (let i = 1; i < pts2.length; i++) {
-                        const dy = Math.abs(pts2[i][1] - yImg);
-                        if (dy < bestDy) {
-                            bestDy = dy;
-                            bestIdxPt = i;
-                        }
+                for (let i = 0; i < pts2.length; i++) {
+                    const dy = Math.abs(pts2[i][1] - yImg);
+                    if (dy < bestDy) {
+                        bestDy = dy;
+                        bestIdxPt = i;
                     }
-                } else {
-                    bestDy = Math.abs(pts2[bestIdxPt][1] - yImg);
                 }
 
                 if (bestIdxPt >= 0 && bestDy <= 10) {
@@ -3682,14 +3670,9 @@
                 pts[n.pointIndex][1] = newY;
 
                 // Preserve the depth index mapping for this point
+                // Data commitment to entry.values is deferred to mouseup to prevent vertical smearing
                 if (Number.isInteger(n.depthIndex)) {
                     pts[n.pointIndex][2] = n.depthIndex;
-                }
-
-                // Update LAS value (only X affects the curve value)
-                const newVal = pixelToTrackValue(newX, targetTrack);
-                if (Number.isFinite(newVal) && n.depthIndex >= 0 && n.depthIndex < entry.values.length) {
-                    entry.values[n.depthIndex] = newVal;
                 }
             });
         }
@@ -4861,7 +4844,9 @@
                             }
                         });
 
-                        const toDelete = [];
+                        const toDeleteSet = new Set();
+                        const oldDepthsToCheck = new Set();
+                        const newValuesToSet = new Map();
 
                         neighbors.forEach(n => {
                             if (!n || !Number.isInteger(n.pointIndex)) return;
@@ -4892,16 +4877,16 @@
                             }
 
                             const existingIdx = findPointIndexByDepthIndex(pts, newDepthIdx);
-                            if (existingIdx >= 0 && existingIdx !== pIdx) {
+                            if (existingIdx >= 0 && existingIdx !== pIdx && !toDeleteSet.has(existingIdx)) {
                                 // Collision: two points mapping to same depth index.
-                                // Always keep the center point; for non-center neighbors just
-                                // update the depth index without deleting anything so the trace
-                                // array never drains empty after repeated drags.
-                                if (Number.isInteger(centerIdx) && pIdx === centerIdx) {
-                                    pts[pIdx][2] = newDepthIdx;
-                                    toDelete.push(existingIdx);
+                                // We must delete one to prevent ghost lines. Priority goes to centerIdx.
+                                if (Number.isInteger(centerIdx) && existingIdx === centerIdx) {
+                                    // The existing point is the center. It wins. Delete the moving neighbor.
+                                    toDeleteSet.add(pIdx);
                                 } else {
+                                    // The dragged neighbor wins. Claim depth index and delete existing.
                                     pts[pIdx][2] = newDepthIdx;
+                                    toDeleteSet.add(existingIdx);
                                 }
                             } else {
                                 pts[pIdx][2] = newDepthIdx;
@@ -4909,23 +4894,37 @@
 
                             const newVal = pixelToTrackValue(xNow, targetTrack);
                             if (Number.isFinite(newVal)) {
-                                entry.values[newDepthIdx] = newVal;
+                                newValuesToSet.set(newDepthIdx, newVal);
                             }
 
                             if (Number.isInteger(oldDepthIdx) && oldDepthIdx !== newDepthIdx && oldDepthIdx >= 0 && oldDepthIdx < entry.values.length) {
                                 if (!valuesUndoMap.has(oldDepthIdx)) {
                                     valuesUndoMap.set(oldDepthIdx, entry.values[oldDepthIdx]);
                                 }
-                                entry.values[oldDepthIdx] = null;
+                                oldDepthsToCheck.add(oldDepthIdx);
                             }
                         });
 
+                        const toDelete = Array.from(toDeleteSet);
                         if (toDelete.length) {
                             toDelete.sort((a, b) => b - a);
                             toDelete.forEach(i => {
                                 if (i >= 0 && i < pts.length) pts.splice(i, 1);
                             });
                         }
+
+                        // Apply clearing
+                        oldDepthsToCheck.forEach(oldDepthIdx => {
+                            // Only clear if no newly set point claimed it, and no other point still maps to it
+                            if (!newValuesToSet.has(oldDepthIdx) && findPointIndexByDepthIndex(pts, oldDepthIdx) < 0) {
+                                entry.values[oldDepthIdx] = null;
+                            }
+                        });
+
+                        // Apply new values
+                        newValuesToSet.forEach((val, idx) => {
+                            entry.values[idx] = val;
+                        });
 
                         const valuesUndo = Array.from(valuesUndoMap.entries()).map(([idx, oldValue]) => ({ idx, oldValue }));
                         pushUndo({
