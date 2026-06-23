@@ -1925,6 +1925,7 @@
 
         let uploadedImage = null;
         let uploadedImagePath = null;
+        let originalUploadedImagePath = null;
         let imageWidth = 0;
         let imageHeight = 0;
         let detectedTracks = [];
@@ -8641,6 +8642,7 @@
                 if (data.success) {
                     uploadedImage = data.image;
                     uploadedImagePath = data.image_path || uploadedImage;
+                    originalUploadedImagePath = uploadedImagePath;
                     imageWidth = data.width;
                     imageHeight = data.height;
                     allTracks = sanitizeTrackPairs(data.all_tracks || data.tracks || []);
@@ -13132,10 +13134,7 @@
             // 2. Save log to account DB
             try {
                 // If uploadedImage is a data URL and original is not, it means we're working on a cropped/modified image
-                let croppedImagePath = uploadedImage;
-                if (uploadedImage === uploadedImagePath) {
-                    croppedImagePath = null; // No separate cropped image
-                }
+                let croppedImagePath = (uploadedImagePath !== originalUploadedImagePath) ? uploadedImagePath : null;
                 
                 const response = await fetch('/api/logs', {
                     method: 'POST',
@@ -13149,7 +13148,7 @@
                         depth_end: bottomDepth,
                         depth_unit: depthUnit,
                         las_content: finalLasContent,
-                        original_image_path: gcsKey || uploadedImagePath,
+                        original_image_path: gcsKey || originalUploadedImagePath || uploadedImagePath,
                         cropped_image_path: croppedImagePath
                     })
                 });
@@ -13241,10 +13240,7 @@
                 }
             }
             
-            let croppedImagePath = uploadedImage;
-            if (uploadedImage === uploadedImagePath) {
-                croppedImagePath = null;
-            }
+            let croppedImagePath = (uploadedImagePath !== originalUploadedImagePath) ? uploadedImagePath : null;
 
             fetch('/api/logs', {
                 method: 'POST',
@@ -13256,7 +13252,7 @@
                     depth_end: bottomDepth,
                     depth_unit: depthUnit,
                     las_content: finalLasContent,
-                    original_image_path: uploadedImagePath,
+                    original_image_path: originalUploadedImagePath || uploadedImagePath,
                     cropped_image_path: croppedImagePath
                 })
             })
@@ -14313,6 +14309,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         let imageLoadWarning = '';
         let dataUrl = null;
         try {
+            if (!logData.original_image_path && !logData.cropped_image_path) {
+                throw new Error("No image stored for this log");
+            }
             // Fetch image and convert to data URL for canvas compatibility
             const response = await fetch(imgPath);
             if (!response.ok) throw new Error(`Saved image returned HTTP ${response.status}`);
@@ -14336,7 +14335,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
         
         uploadedImage = dataUrl;
-        uploadedImagePath = imgPath;
+        uploadedImagePath = logData.cropped_image_path || logData.original_image_path;
+        originalUploadedImagePath = logData.original_image_path;
         lastLasContent = logData.las_content || null;
         curveWrapMarkers = {};
         lastLasFilename = (logData.name || 'digitized_log').replace(/ /g, '_') + '.las';
