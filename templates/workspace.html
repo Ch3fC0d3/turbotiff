@@ -6623,6 +6623,7 @@
                     return false;
                 }
 
+                _dragHasMoved = false;
                 editDragState = {
                     curveId: editCurveId,
                     curveKey: curveKey,
@@ -6634,7 +6635,9 @@
                     targetTrack: targetTrack,
                     entry: entry,
                     pts: pts,
-                    currentX: xImg,  // Initialize with click position
+                    startX: xImg,
+                    startY: yImg,
+                    currentX: xImg,
                     currentY: yImg,
                 };
                 return true;
@@ -6649,9 +6652,18 @@
         let _dragPendingX = null;
         let _dragPendingY = null;
         let _lastDragRenderMs = 0;
+        let _dragHasMoved = false; // true once mouse travels beyond click-distance threshold
 
         function handleCurveEditDragMove(xImg, yImg) {
             if (!editMode || !editDragState) return;
+
+            // Mark as a real drag once the mouse moves > 3 image-pixels from the initial click
+            if (!_dragHasMoved) {
+                const ds = editDragState;
+                const dx = xImg - (ds.startX ?? ds.currentX);
+                const dy = yImg - (ds.startY ?? ds.currentY);
+                if (dx * dx + dy * dy > 9) _dragHasMoved = true;
+            }
 
             // Always remember the latest mouse position
             _dragPendingX = xImg;
@@ -8276,6 +8288,28 @@
             }
 
             if (editDragState) {
+                // If mouse never moved beyond the click threshold, treat as a simple click nudge
+                // rather than committing a drag that displaces all neighbors.
+                if (!_dragHasMoved) {
+                    const clickX = editDragState.startX ?? editDragState.currentX;
+                    const clickY = editDragState.startY ?? editDragState.currentY;
+                    const savedPts = editDragState.pts;
+                    const savedNeighbors = editDragState.neighbors;
+                    // Restore all neighbor points to their original positions
+                    if (Array.isArray(savedPts) && Array.isArray(savedNeighbors)) {
+                        savedNeighbors.forEach(n => {
+                            if (Array.isArray(savedPts[n.pointIndex])) {
+                                savedPts[n.pointIndex][0] = n.originalX;
+                                savedPts[n.pointIndex][1] = n.originalY;
+                            }
+                        });
+                    }
+                    editDragState = null;
+                    _dragHasMoved = false;
+                    handleCurveEditClick(clickX, clickY);
+                    return;
+                }
+
                 // Apply the final drag delta once to update data
                 _doDragUpdate();
 
@@ -8386,6 +8420,7 @@
                 } else {
                     editDragState = null;
                 }
+                _dragHasMoved = false;
             }
 
             if (trackOverlayDrag) {
