@@ -4353,6 +4353,11 @@
             }));
         }
 
+        function positiveModulo(value, width) {
+            if (!Number.isFinite(value) || !Number.isFinite(width) || width <= 0) return value;
+            return ((value % width) + width) % width;
+        }
+
         function wrapRawXToTrack(rawX, track) {
             const x = Number(rawX);
             const left = Number(track && track.leftX);
