@@ -3747,7 +3747,7 @@
                     const absX = sx + x;
                     const absY = sy + y;
                     
-                    if (absX < trackLeftX || absX > trackRightX) continue;
+                    // Removed strict track boundary clamping to allow tracking of "off-scale" curves that cross track boundaries
 
                     const idx = (y * patchSize + x) * 4;
                     const r = pData[idx];
