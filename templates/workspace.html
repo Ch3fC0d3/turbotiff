@@ -5752,16 +5752,20 @@
                 
                 const originalValue = entry.values[dIdx];
                 if (!Number.isFinite(originalValue)) continue;
-                const oldX = trackValueToPixelX(originalValue, targetTrack);
-                if (!Number.isFinite(oldX)) continue;
+                
+                // Get the target track value for the clicked point, considering wrap cycles
+                const targetValue = pixelToTrackValue(clampedX, targetTrack, { depthIndex: dIdx, values: entry.values });
+                if (!Number.isFinite(targetValue)) continue;
                 
                 const dist = Math.abs(dIdx - idx);
                 const weight = 1.0 - (dist / (crestRadius + 1));
-                const newX = oldX * (1 - weight) + clampedX * weight;
+                
+                // Interpolate track values to properly support crossovers (wrapping)
+                const pointValue = originalValue * (1 - weight) + targetValue * weight;
                 
                 const pointY = (dIdx === idx) ? yTrace : (getPixelYForDepthIndex(dIdx, depthCfg) ?? yTrace);
-                const pointValue = pixelToTrackValue(newX, targetTrack, { depthIndex: dIdx, values: entry.values });
-                if (!Number.isFinite(pointValue)) continue;
+                const newX = trackValueToPixelX(pointValue, targetTrack, { rawValue: false });
+                if (!Number.isFinite(newX)) continue;
                 
                 entry.values[dIdx] = pointValue;
                 touchedDepths.push(dIdx);
@@ -6607,6 +6611,7 @@
 
             const deltaX = xImg - centerN.originalX;
             const deltaY = yImg - centerN.originalY;
+            const targetValue = pixelToTrackValue(xImg, targetTrack, { depthIndex: centerN.depthIndex, values: entry.values });
 
             // Check smoothing toggle
             const smoothMode = document.getElementById('smoothEditToggle')?.checked;
@@ -6664,8 +6669,16 @@
                     // Center point follows mouse exactly
                     newX = xImg;
                 } else {
-                    // Neighbors get weighted X motion
-                    newX = n.originalX + deltaX * weight;
+                    // Neighbors get weighted interpolation in TRACK VALUE space to support wrap crossovers!
+                    if (Number.isFinite(n.originalValue) && Number.isFinite(targetValue)) {
+                        const interpolatedValue = n.originalValue * (1 - weight) + targetValue * weight;
+                        newX = trackValueToPixelX(interpolatedValue, targetTrack, { rawValue: false });
+                        if (!Number.isFinite(newX)) {
+                            newX = n.originalX + deltaX * weight; // fallback
+                        }
+                    } else {
+                        newX = n.originalX + deltaX * weight; // fallback
+                    }
                 }
                 let newY;
                 if (n.pointIndex === centerIndex) {
