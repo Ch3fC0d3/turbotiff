@@ -1890,6 +1890,9 @@
                                     <button class="btn" type="button" onclick="openLasViewerWithData(event)" id="viewLasBtn" disabled style="background: #8b5cf6; border-color: #7c3aed;">
                                         📈 View LAS
                                     </button>
+                                    <button class="btn" type="button" onclick="saveLogToAccount()" id="saveLogBtn" style="background: #0ea5e9; border-color: #0284c7;">
+                                        💾 Save Project
+                                    </button>
                                 </div>
                             </div>
                         </div>
@@ -12982,22 +12985,11 @@
                         captureSource: 'auto_black_capture_digitize_post',
                     });
 
-                    const btnSaveLog = document.createElement('button');
-                    btnSaveLog.type = 'button';
-                    btnSaveLog.className = 'btn';
-                    btnSaveLog.innerHTML = '💾 Save Log to Account';
-                    btnSaveLog.onclick = saveLogToAccount;
-                    
                     const existingSave = document.getElementById('saveLogBtn');
-                    if (existingSave) existingSave.remove();
-                    
-                    btnSaveLog.id = 'saveLogBtn';
-                    btnSaveLog.style.marginLeft = '10px';
-                    btnSaveLog.style.background = '#0ea5e9';
-                    btnSaveLog.style.border = '1px solid #0284c7';
-                    
-                    document.getElementById('downloadLasBtn').parentNode.appendChild(btnSaveLog);
-
+                    if (existingSave) {
+                        existingSave.disabled = false;
+                        existingSave.innerHTML = '💾 Save Project';
+                    }
                     // Auto-save the log to the user's account
                     void autoSaveLogToAccount();
                 } else {
