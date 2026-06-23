@@ -7226,7 +7226,7 @@
             // Extract a small image slice (track width x 60px height) to send to backend
             // This avoids sending the full 20MB+ image for a single point edit.
             
-            const winSize = 160; // more vertical context improves path stability on noisy/thick ink
+            const winSize = 80; // vertical context window (smaller = faster backend)
             const halfWin = winSize / 2;
             
             // Bounds for the crop
@@ -7271,10 +7271,13 @@
             // Get current snap settings
             const snapThreshold = parseFloat(document.getElementById('snapThreshold')?.value || 1.20);
 
-            // Call backend for multi-scale refinement
+            // Call backend for multi-scale refinement (4s timeout to stay responsive)
+            const _snapAbort = new AbortController();
+            const _snapTimeout = setTimeout(() => _snapAbort.abort(), 4000);
             try {
                 const response = await fetch('/refine_edit', {
                     method: 'POST',
+                    signal: _snapAbort.signal,
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         image: cropDataUrl,
@@ -7305,6 +7308,7 @@
                     }),
                 });
                 
+                clearTimeout(_snapTimeout);
                 if (!response.ok) {
                     console.warn('Backend refine_edit HTTP error:', response.status);
                     return;
@@ -11815,7 +11819,7 @@
                 } else {
                     tracesToRender = {};
                 }
-                console.log('[overlay] editMode tracesToRender keys:', Object.keys(tracesToRender), 'points:', activeTrace && activeTrace.points ? activeTrace.points.length : 0);
+                // edit-mode trace resolved
             }
 
             // Use the full overlay size for the canvas so panning never causes a
