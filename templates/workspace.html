@@ -5840,30 +5840,32 @@
             const entry = lastDigitizedCurves[curveKey];
             if (!entry || !Array.isArray(entry.values) || idx >= entry.values.length) return;
 
-            const clampedX = Math.max(targetTrack.leftX, Math.min(targetTrack.rightX, xImg));
-            const newValue = pixelToTrackValue(clampedX, targetTrack, { depthIndex: idx, values: entry.values });
-            if (!Number.isFinite(newValue)) return;
+            const wrapActive = isTrackWrapActive(targetTrack, curveKey);
 
-            const oldValue = entry.values[idx];
+            // Calculate proper rawX for the click
+            const referenceRawX = !isMissingDigitizedValue(entry.values[idx])
+                ? trackValueToPixelX(entry.values[idx], targetTrack, { rawValue: true })
+                : null;
+            const clickInsideTrack = xImg >= Math.min(targetTrack.leftX, targetTrack.rightX) &&
+                xImg <= Math.max(targetTrack.leftX, targetTrack.rightX);
+            const rawEditX = wrapActive && clickInsideTrack && Number.isFinite(referenceRawX)
+                ? unwrapDisplayXNearReference(xImg, referenceRawX, targetTrack)
+                : xImg;
+                
+            const clickedTrackValue = wrapActive
+                ? pixelToTrackValue(rawEditX, targetTrack, { rawX: true })
+                : pixelToTrackValue(Math.max(targetTrack.leftX, Math.min(targetTrack.rightX, xImg)), targetTrack, { depthIndex: idx, values: entry.values });
 
-            if (!lastCurveTraces) {
-                lastCurveTraces = {};
-            }
+            if (!Number.isFinite(clickedTrackValue)) return;
 
-            // Robustly find existing points using shared helper (handles case-sensitivity/keys)
+            if (!lastCurveTraces) lastCurveTraces = {};
+
             const activeTrace = getActiveCurveTracePoints(editCurveId);
             let pts = activeTrace.points;
-            
-            // Determine where to save.
             let targetKey = activeTrace.traceKey || getActiveCurveTraceKey(editCurveId) || editCurveId;
 
-            if (Array.isArray(pts) && pts.length) {
-                ensureTracePointsHaveDepthIndex(editCurveId);
-            }
-
-            if (!Array.isArray(pts)) {
-                pts = [];
-            }
+            if (Array.isArray(pts) && pts.length) ensureTracePointsHaveDepthIndex(editCurveId);
+            if (!Array.isArray(pts)) pts = [];
 
             const undoTracePoints = pts.map(pt => Array.isArray(pt) ? pt.slice() : pt);
             const undoValues = entry.values.map((value, valueIdx) => ({ idx: valueIdx, oldValue: value }));
@@ -5884,28 +5886,34 @@
                 if (isDepthIndexPinned(editCurveId, dIdx)) continue;
                 
                 const originalValue = entry.values[dIdx];
-                if (!Number.isFinite(originalValue)) continue;
-                
-                // Get the target track value for the clicked point, considering wrap cycles
-                const targetValue = pixelToTrackValue(clampedX, targetTrack, { depthIndex: dIdx, values: entry.values });
-                if (!Number.isFinite(targetValue)) continue;
-                
                 const dist = Math.abs(dIdx - idx);
                 const weight = 1.0 - (dist / (crestRadius + 1));
                 
-                // Interpolate track values to properly support crossovers (wrapping)
-                const pointValue = originalValue * (1 - weight) + targetValue * weight;
+                let pointValue;
+                if (Number.isFinite(originalValue)) {
+                    // Interpolate track values to properly support crossovers (wrapping)
+                    pointValue = originalValue * (1 - weight) + clickedTrackValue * weight;
+                } else {
+                    // If no existing curve, just place the point directly (or skip surrounding points)
+                    if (dist === 0) {
+                        pointValue = clickedTrackValue;
+                    } else {
+                        continue; 
+                    }
+                }
                 
                 const pointY = (dIdx === idx) ? yTrace : (getPixelYForDepthIndex(dIdx, depthCfg) ?? yTrace);
-                const newX = trackValueToPixelX(pointValue, targetTrack, { rawValue: false });
-                if (!Number.isFinite(newX)) continue;
+                const newRawX = trackValueToPixelX(pointValue, targetTrack, { rawValue: true });
+                if (!Number.isFinite(newRawX)) continue;
+                
+                const newDisplayX = wrapActive ? wrapRawXToTrack(newRawX, targetTrack) : Math.max(targetTrack.leftX, Math.min(targetTrack.rightX, newRawX));
                 
                 entry.values[dIdx] = pointValue;
                 touchedDepths.push(dIdx);
 
-                let existingIdx = findBestPointIndexForDepth(pts, dIdx, pointY, newX);
+                let existingIdx = findBestPointIndexForDepth(pts, dIdx, pointY, newDisplayX);
                 if (existingIdx < 0) {
-                    const picked = findEditablePointIndex(pts, newX, pointY, editCurveId, { maxYDist: 6, maxDist: 18 });
+                    const picked = findEditablePointIndex(pts, newDisplayX, pointY, editCurveId, { maxYDist: 6, maxDist: 18 });
                     existingIdx = picked.pointIndex;
                     if (existingIdx >= 0 && Array.isArray(pts[existingIdx]) && Number.isInteger(pts[existingIdx][2]) && pts[existingIdx][2] !== dIdx) {
                         existingIdx = -1;
@@ -5913,13 +5921,14 @@
                 }
 
                 if (existingIdx >= 0) {
-                    pts[existingIdx][0] = newX;
+                    pts[existingIdx][0] = newDisplayX;
                     pts[existingIdx][1] = pointY;
                     pts[existingIdx][2] = dIdx;
                     pts[existingIdx][3] = 'manual';
                     pts[existingIdx][4] = manualPointStamp;
+                    pts[existingIdx][5] = newRawX; // Emulate rawX storage for rendering!
                 } else {
-                    pts.push([newX, pointY, dIdx, 'manual', manualPointStamp]);
+                    pts.push([newDisplayX, pointY, dIdx, 'manual', manualPointStamp, newRawX]);
                 }
             }
 
