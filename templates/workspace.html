@@ -4568,8 +4568,8 @@
                 if (!Number.isFinite(rawX) || !Number.isFinite(yImg)) continue;
                 // Output points: [displayX, displayY, depthIndex, type, timestamp, rawX]
                 // We must emulate the [5] index as rawX so rendering can use it for wrap lines
-                const displayX = wrapRawXToTrack(rawX, track);
-                points.push([clamp(displayX, leftBound, rightBound), yImg, depthIndex, 'manual', Date.now(), rawX]);
+                const displayX = track.wrapped ? wrapRawXToTrack(rawX, track) : clamp(rawX, leftBound, rightBound);
+                points.push([displayX, yImg, depthIndex, 'manual', Date.now(), rawX]);
             }
 
             if (options.persist !== false) {
@@ -5664,7 +5664,6 @@
 
             const clampedX = Math.max(targetTrack.leftX, Math.min(targetTrack.rightX, xImg));
             const newValue = pixelToTrackValue(clampedX, targetTrack, { depthIndex: idx, values: entry.values });
-            const wrapActive = isTrackWrapActive(targetTrack, curveKey);
             if (!Number.isFinite(newValue)) return;
 
             // Save old value for undo
@@ -5707,23 +5706,22 @@
 
                 if (bestIdxPt >= 0 && bestDy <= 10) {
                     pts2[bestIdxPt][0] = clampedX;
-                    pts2[bestIdxPt][1] = yImg;
+                    pts2[bestIdxPt][1] = yImgUse;
                     pts2[bestIdxPt][2] = idx;
                 } else {
-                    const point = [clampedX, yImg, idx];
+                    const point = [clampedX, yImgUse, idx];
                     point[5] = clampedX;
                     pts2.push(point);
                     editedPoint = point;
                 }
             } else {
-                const point = [clampedX, yImg, idx];
+                const point = [clampedX, yImgUse, idx];
                 point[5] = clampedX;
                 pts2.push(point);
                 editedPoint = point;
             }
 
             pts2.sort((a, b) => Number(a && a[1] || 0) - Number(b && b[1] || 0));
-            if (wrapActive) targetTrack.wrapped = true;
             lastCurveTraces[traceKey] = pts2;
             rebuildCurveTraceFromDigitized(editCurveId);
             renderCurveTraceOverlays(lastCurveTraces);
@@ -6758,6 +6756,8 @@
             const img = document.getElementById('imagePreview');
             const imgW = imageWidth || (img && (img.naturalWidth || img.width)) || 1;
             const imgH = imageHeight || (img && (img.naturalHeight || img.height)) || 1;
+            const leftBound = Math.min(targetTrack.leftX, targetTrack.rightX);
+            const rightBound = Math.max(targetTrack.leftX, targetTrack.rightX);
 
             // Find the center neighbor to compute deltas
             const centerN = neighbors.find(n => n.pointIndex === centerIndex);
@@ -6868,6 +6868,9 @@
                 const wrappedDisplayX = targetTrack.wrapped ? wrapRawXToTrack(newRawX, targetTrack) : newRawX;
                 let clampedDisplayX = wrappedDisplayX;
                 if (imgW > 1) clampedDisplayX = Math.max(0, Math.min(imgW - 1, clampedDisplayX));
+                if (Number.isFinite(leftBound) && Number.isFinite(rightBound)) {
+                    clampedDisplayX = Math.max(leftBound, Math.min(rightBound, clampedDisplayX));
+                }
 
                 pts[n.pointIndex][0] = clampedDisplayX;
                 pts[n.pointIndex][1] = newY;
