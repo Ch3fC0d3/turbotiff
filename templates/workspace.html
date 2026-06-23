@@ -5833,6 +5833,7 @@
             if (!Array.isArray(pts2)) {
                 pts2 = [];
             }
+            let editedPoint = null;
 
             if (pts2.length) {
                 ensureTracePointsHaveDepthIndex(editCurveId);
@@ -5849,13 +5850,18 @@
                     const point = [editX, yImg, idx];
                     point[5] = storedRawEditX;
                     pts2.push(point);
+                    editedPoint = point;
                 }
             } else {
                 const point = [editX, yImg, idx];
                 point[5] = storedRawEditX;
                 pts2.push(point);
+                editedPoint = point;
             }
 
+            pts2.sort((a, b) => Number(a && a[1] || 0) - Number(b && b[1] || 0));
+            if (wrapActive) targetTrack.wrapped = true;
+            if (editedPoint) limitDragHorizontalConnectors(pts2, editedPoint, entry, targetTrack);
             lastCurveTraces[traceKey] = pts2;
             rebuildCurveTraceFromDigitized(editCurveId);
             renderCurveTraceOverlays(lastCurveTraces);
@@ -8093,7 +8099,10 @@
 
             const x = event.clientX - rect.left;
             const y = event.clientY - rect.top;
-            const xNorm = Math.max(0, Math.min(1, x / rect.width));
+            // Pointer drags must be allowed beyond the image/track rail so an
+            // initially in-scale curve can activate carryover on first crossing.
+            const curveDragActive = !!(editMode && editDragState && editDragState.targetTrack && activeTool === 'pointer');
+            const xNorm = curveDragActive ? (x / rect.width) : Math.max(0, Math.min(1, x / rect.width));
             const yNorm = Math.max(0, Math.min(1, y / rect.height));
             const xImg = Math.round(xNorm * (imageWidth - 1));
             const yImg = Math.round(yNorm * (imageHeight - 1));
