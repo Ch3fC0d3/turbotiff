@@ -2934,11 +2934,14 @@
             if (Array.isArray(pts) && pts.length) {
                 ensureTracePointsHaveDepthIndex(editCurveId);
                 let bestIdxPt = -1;
-                let bestDy = Infinity;
+                let bestDist2 = Infinity;
                 for (let i = 0; i < pts.length; i++) {
-                    const dy = Math.abs(pts[i][1] - yImg);
-                    if (dy < bestDy) { bestDy = dy; bestIdxPt = i; }
+                    const dx = pts[i][0] - clampedX;
+                    const dy = pts[i][1] - yImg;
+                    const d2 = dx * dx + dy * dy;
+                    if (d2 < bestDist2) { bestDist2 = d2; bestIdxPt = i; }
                 }
+                const bestDy = bestIdxPt >= 0 ? Math.abs(pts[bestIdxPt][1] - yImg) : Infinity;
                 if (bestIdxPt >= 0 && bestDy <= 10) oldTraceX = pts[bestIdxPt][0];
             }
             pushUndo({ curveKey, curveId: editCurveId, idx, oldValue, oldTraceX, yImg, depthIndex: idx });
@@ -2956,15 +2959,18 @@
             if (pts2.length) {
                 ensureTracePointsHaveDepthIndex(editCurveId);
                 let bestIdxPt = -1;
-                let bestDy = Infinity;
+                let bestDist2 = Infinity;
                 for (let i = 0; i < pts2.length; i++) {
-                    const dy = Math.abs(pts2[i][1] - yImg);
-                    if (dy < bestDy) {
-                        bestDy = dy;
+                    const dx = pts2[i][0] - clampedX;
+                    const dy = pts2[i][1] - yImg;
+                    const d2 = dx * dx + dy * dy;
+                    if (d2 < bestDist2) {
+                        bestDist2 = d2;
                         bestIdxPt = i;
                     }
                 }
 
+                const bestDy = bestIdxPt >= 0 ? Math.abs(pts2[bestIdxPt][1] - yImg) : Infinity;
                 if (bestIdxPt >= 0 && bestDy <= 10) {
                     pts2[bestIdxPt][0] = clampedX;
                     pts2[bestIdxPt][2] = idx;
@@ -3414,23 +3420,23 @@
             pts = cleanPts;
             lastCurveTraces[editCurveId] = pts;
 
-            // Find the closest point to where user clicked
+            // Find the closest point to where user clicked using 2D distance
             let nearestIdx = -1;
-            let nearestDy = Infinity;
-            let nearestDx = Infinity;
+            let nearestDist2 = Infinity;
 
             for (let i = 0; i < pts.length; i++) {
                 const pt = pts[i];
-                const dx = Math.abs(pt[0] - xImg);
-                const dy = Math.abs(pt[1] - yImg);
-                if (dy < nearestDy || (dy === nearestDy && dx < nearestDx)) {
-                    nearestDy = dy;
-                    nearestDx = dx;
+                const dx = pt[0] - xImg;
+                const dy = pt[1] - yImg;
+                const d2 = dx * dx + dy * dy;
+                if (d2 < nearestDist2) {
+                    nearestDist2 = d2;
                     nearestIdx = i;
                 }
             }
 
             // Grab the curve if vertically close, allowing horizontal pulling of dense curves with smoothing
+            const nearestDy = nearestIdx >= 0 ? Math.abs(pts[nearestIdx][1] - yImg) : Infinity;
             if (nearestIdx >= 0 && nearestDy <= 15) {
                 const depthCfg = lastDepthConfig || getDepthConfigFromInputs();
 
