@@ -5901,7 +5901,8 @@
                 
                 const originalValue = entry.values[dIdx];
                 const dist = Math.abs(dIdx - idx);
-                const weight = 1.0 - (dist / (crestRadius + 1));
+                const normalizedDist = dist / (crestRadius + 1);
+                const weight = (Math.cos(normalizedDist * Math.PI) + 1) / 2;
                 
                 let pointValue;
                 if (Number.isFinite(originalValue)) {
