@@ -3441,11 +3441,11 @@
                 if (!targetTrack) return false;
 
                 // Build neighbor set with wider window for smooth Gaussian falloff
-                // Wider window (±8) prevents kinks at the boundary of the edit region
+                // Generous window ensures the Gaussian curve completes its decay instead of cutting off sharply
                 const neighbors = [];
                 let centerDepthIdx = -1;
                 const smoothMode = document.getElementById('smoothEditToggle')?.checked;
-                const windowRadius = smoothMode ? 8 : 3;
+                const windowRadius = smoothMode ? 200 : 3;
                 for (let offset = -windowRadius; offset <= windowRadius; offset++) {
                     const idx = nearestIdx + offset;
                     if (idx < 0 || idx >= pts.length) continue;
