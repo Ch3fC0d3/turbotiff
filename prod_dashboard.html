@@ -2920,7 +2920,8 @@
             const targetTrack = getTrackCalibrationsSnapshot()?.find(t => t.id === editCurveId);
             if (!targetTrack) return;
 
-            const clampedX = Math.max(targetTrack.leftX, Math.min(targetTrack.rightX, xImg));
+            // Do not clamp to track bounds to allow users to trace "off-scale" curves that cross boundaries
+            const clampedX = xImg;
             const newValue = pixelToTrackValue(clampedX, targetTrack);
             if (!Number.isFinite(newValue)) return;
 
@@ -3016,8 +3017,8 @@
             const targetTrack = tracks.find(t => t.id === editCurveId);
             if (!targetTrack) return;
 
-            // Clamp to track bounds so values stay within scale
-            const clampedX = Math.max(targetTrack.leftX, Math.min(targetTrack.rightX, xImg));
+            // Do not clamp to track bounds to allow users to trace "off-scale" curves that cross boundaries
+            const clampedX = xImg;
             const newValue = pixelToTrackValue(clampedX, targetTrack);
             if (!Number.isFinite(newValue)) return;
 
