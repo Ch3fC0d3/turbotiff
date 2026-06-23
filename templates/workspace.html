@@ -12209,7 +12209,7 @@
                         ctx.strokeStyle = lineCoreColor;
                         ctx.beginPath();
 
-                        const wrapActive = isTrackWrapActive(trackMeta, name, renderPoints);
+                        const wrapActive = !!(trackMeta && trackMeta.wrapped);
                         
                         const firstRawX = wrapActive
                             ? getTracePointRawX(renderPoints[0], trackMeta, name)
