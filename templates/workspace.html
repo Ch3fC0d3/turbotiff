@@ -14388,6 +14388,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                 );
             }
 
+            renderDepthOverlays();
+            updateDisplayBaseScale();
+            applyZoom();
+
             const downloadBtn = document.getElementById('downloadLasBtn');
             const viewBtn = document.getElementById('viewLasBtn');
             if (downloadBtn && lastLasContent) downloadBtn.disabled = false;
