@@ -2970,9 +2970,11 @@
                     pts2[bestIdxPt][2] = idx;
                 } else {
                     pts2.push([clampedX, yImg, idx]);
+                    pts2.sort((a, b) => a[1] - b[1]);
                 }
             } else {
                 pts2.push([clampedX, yImg, idx]);
+                pts2.sort((a, b) => a[1] - b[1]);
             }
 
             lastCurveTraces[editCurveId] = pts2;
@@ -3414,23 +3416,22 @@
 
             // Find the closest point to where user clicked
             let nearestIdx = -1;
-            let nearestDist2 = Infinity;
-            const maxDist = 20;
-            const maxDist2 = maxDist * maxDist;
+            let nearestDy = Infinity;
+            let nearestDx = Infinity;
 
             for (let i = 0; i < pts.length; i++) {
                 const pt = pts[i];
-                const dx = pt[0] - xImg;
-                const dy = pt[1] - yImg;
-                const d2 = dx * dx + dy * dy;
-                if (d2 < nearestDist2) {
-                    nearestDist2 = d2;
+                const dx = Math.abs(pt[0] - xImg);
+                const dy = Math.abs(pt[1] - yImg);
+                if (dy < nearestDy || (dy === nearestDy && dx < nearestDx)) {
+                    nearestDy = dy;
+                    nearestDx = dx;
                     nearestIdx = i;
                 }
             }
 
-            // If close to an existing point, start a drag with minimal rubber-band (±1 neighbor)
-            if (nearestIdx >= 0 && nearestDist2 <= maxDist2) {
+            // Grab the curve if vertically close, allowing horizontal pulling of dense curves with smoothing
+            if (nearestIdx >= 0 && nearestDy <= 15) {
                 const depthCfg = lastDepthConfig || getDepthConfigFromInputs();
 
                 // Cache the target track
