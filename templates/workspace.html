@@ -4374,6 +4374,20 @@
             return left + wrappedOffset;
         }
 
+        function unwrapDisplayXNearReference(displayX, referenceRawX, track) {
+            const visibleX = Number(displayX);
+            const referenceX = Number(referenceRawX);
+            const left = Number(track && track.leftX);
+            const right = Number(track && track.rightX);
+            const width = right - left;
+            if (![visibleX, referenceX, left, right, width].every(Number.isFinite) || width <= 0) {
+                return visibleX;
+            }
+            const baseX = wrapRawXToTrack(visibleX, track);
+            const nearestCycle = Math.round((referenceX - baseX) / width);
+            return baseX + nearestCycle * width;
+        }
+
         function drawWrappedTrackSegment(ctx, rawX1, y1, rawX2, y2, track, scaleX, scaleY) {
             const left = Number(track && track.leftX);
             const right = Number(track && track.rightX);
