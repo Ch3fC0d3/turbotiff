@@ -4425,6 +4425,20 @@
             return left + wrappedOffset;
         }
 
+        function unwrapDisplayXNearReference(displayX, referenceRawX, track) {
+            const visibleX = Number(displayX);
+            const referenceX = Number(referenceRawX);
+            const left = Number(track && track.leftX);
+            const right = Number(track && track.rightX);
+            const width = right - left;
+            if (![visibleX, referenceX, left, right, width].every(Number.isFinite) || width <= 0) {
+                return visibleX;
+            }
+            const baseX = wrapRawXToTrack(visibleX, track);
+            const nearestCycle = Math.round((referenceX - baseX) / width);
+            return baseX + nearestCycle * width;
+        }
+
         function trackValueToPixelX(value, track, options = {}) {
             if (!track) return null;
             const leftX = track.leftX;
@@ -5765,8 +5779,23 @@
             const entry = lastDigitizedCurves[curveKey];
             if (!entry || !Array.isArray(entry.values) || idx >= entry.values.length) return;
 
-            const clampedX = Math.max(targetTrack.leftX, Math.min(targetTrack.rightX, xImg));
-            const newValue = pixelToTrackValue(clampedX, targetTrack, { depthIndex: idx, values: entry.values });
+            const wrapActive = isTrackWrapActive(targetTrack, curveKey);
+            const clickedX = Math.max(0, Math.min((imageWidth || xImg + 1) - 1, xImg));
+            const referenceRawX = !isMissingDigitizedValue(entry.values[idx])
+                ? trackValueToPixelX(entry.values[idx], targetTrack, { rawValue: true })
+                : null;
+            const clickInsideTrack = clickedX >= Math.min(targetTrack.leftX, targetTrack.rightX) &&
+                clickedX <= Math.max(targetTrack.leftX, targetTrack.rightX);
+            const rawEditX = wrapActive && clickInsideTrack && Number.isFinite(referenceRawX)
+                ? unwrapDisplayXNearReference(clickedX, referenceRawX, targetTrack)
+                : clickedX;
+            const editX = wrapActive
+                ? wrapRawXToTrack(rawEditX, targetTrack)
+                : Math.max(targetTrack.leftX, Math.min(targetTrack.rightX, clickedX));
+            const storedRawEditX = wrapActive ? rawEditX : editX;
+            const newValue = wrapActive
+                ? pixelToTrackValue(rawEditX, targetTrack, { rawX: true })
+                : pixelToTrackValue(editX, targetTrack, { depthIndex: idx, values: entry.values });
             if (!Number.isFinite(newValue)) return;
 
             // Save old value for undo
@@ -5779,7 +5808,7 @@
             const pts = activeTrace.points;
             if (Array.isArray(pts) && pts.length) {
                 ensureTracePointsHaveDepthIndex(editCurveId);
-                const picked = findEditablePointIndex(pts, clampedX, yImgUse, editCurveId, { maxYDist: 14, maxDist: 24 });
+                const picked = findEditablePointIndex(pts, editX, yImgUse, editCurveId, { maxYDist: 14, maxDist: 24 });
                 const bestIdxPt = picked.pointIndex;
                 const bestDy = (bestIdxPt >= 0 && Array.isArray(pts[bestIdxPt])) ? Math.abs(pts[bestIdxPt][1] - yImgUse) : Infinity;
                 if (bestIdxPt >= 0 && bestDy <= 10) {
@@ -5802,19 +5831,24 @@
 
             if (pts2.length) {
                 ensureTracePointsHaveDepthIndex(editCurveId);
-                const picked = findEditablePointIndex(pts2, clampedX, yImg, editCurveId, { maxYDist: 14, maxDist: 24 });
+                const picked = findEditablePointIndex(pts2, editX, yImg, editCurveId, { maxYDist: 14, maxDist: 24 });
                 const bestIdxPt = picked.pointIndex;
                 const bestDy = (bestIdxPt >= 0 && Array.isArray(pts2[bestIdxPt])) ? Math.abs(pts2[bestIdxPt][1] - yImg) : Infinity;
 
                 if (bestIdxPt >= 0 && bestDy <= 10) {
-                    pts2[bestIdxPt][0] = clampedX;
+                    pts2[bestIdxPt][0] = editX;
                     pts2[bestIdxPt][1] = yImg;
                     pts2[bestIdxPt][2] = idx;
+                    pts2[bestIdxPt][5] = storedRawEditX;
                 } else {
-                    pts2.push([clampedX, yImg, idx]);
+                    const point = [editX, yImg, idx];
+                    point[5] = storedRawEditX;
+                    pts2.push(point);
                 }
             } else {
-                pts2.push([clampedX, yImg, idx]);
+                const point = [editX, yImg, idx];
+                point[5] = storedRawEditX;
+                pts2.push(point);
             }
 
             lastCurveTraces[traceKey] = pts2;
@@ -5948,8 +5982,23 @@
             const entry = lastDigitizedCurves[curveKey];
             if (!entry || !Array.isArray(entry.values) || idx >= entry.values.length) return;
 
-            const clampedX = Math.max(targetTrack.leftX, Math.min(targetTrack.rightX, xImg));
-            const newValue = pixelToTrackValue(clampedX, targetTrack, { depthIndex: idx, values: entry.values });
+            const wrapActive = isTrackWrapActive(targetTrack, curveKey);
+            const clickedX = Math.max(0, Math.min((imageWidth || xImg + 1) - 1, xImg));
+            const centerReferenceRawX = !isMissingDigitizedValue(entry.values[idx])
+                ? trackValueToPixelX(entry.values[idx], targetTrack, { rawValue: true })
+                : null;
+            const clickInsideTrack = clickedX >= Math.min(targetTrack.leftX, targetTrack.rightX) &&
+                clickedX <= Math.max(targetTrack.leftX, targetTrack.rightX);
+            const centerRawEditX = wrapActive && clickInsideTrack && Number.isFinite(centerReferenceRawX)
+                ? unwrapDisplayXNearReference(clickedX, centerReferenceRawX, targetTrack)
+                : clickedX;
+            const centerEditX = wrapActive
+                ? wrapRawXToTrack(centerRawEditX, targetTrack)
+                : Math.max(targetTrack.leftX, Math.min(targetTrack.rightX, clickedX));
+            const centerStoredRawX = wrapActive ? centerRawEditX : centerEditX;
+            const newValue = wrapActive
+                ? pixelToTrackValue(centerRawEditX, targetTrack, { rawX: true })
+                : pixelToTrackValue(centerEditX, targetTrack, { depthIndex: idx, values: entry.values });
             if (!Number.isFinite(newValue)) return;
 
             const oldValue = entry.values[idx];
@@ -5991,14 +6040,24 @@
             for (let dIdx = Math.max(0, idx - crestRadius); dIdx <= Math.min(entry.values.length - 1, idx + crestRadius); dIdx++) {
                 if (isDepthIndexPinned(editCurveId, dIdx)) continue;
                 const pointY = (dIdx === idx) ? yTrace : (getPixelYForDepthIndex(dIdx, depthCfg) ?? yTrace);
-                const pointValue = pixelToTrackValue(clampedX, targetTrack, { depthIndex: dIdx, values: entry.values });
+                const referenceRawX = !isMissingDigitizedValue(entry.values[dIdx])
+                    ? trackValueToPixelX(entry.values[dIdx], targetTrack, { rawValue: true })
+                    : centerReferenceRawX;
+                const rawPointX = wrapActive && clickInsideTrack && Number.isFinite(referenceRawX)
+                    ? unwrapDisplayXNearReference(clickedX, referenceRawX, targetTrack)
+                    : centerStoredRawX;
+                const pointX = wrapActive ? wrapRawXToTrack(rawPointX, targetTrack) : centerEditX;
+                const storedRawPointX = wrapActive ? rawPointX : pointX;
+                const pointValue = wrapActive
+                    ? pixelToTrackValue(rawPointX, targetTrack, { rawX: true })
+                    : pixelToTrackValue(pointX, targetTrack, { depthIndex: dIdx, values: entry.values });
                 if (!Number.isFinite(pointValue)) continue;
                 entry.values[dIdx] = pointValue;
                 touchedDepths.push(dIdx);
 
-                let existingIdx = findBestPointIndexForDepth(pts, dIdx, pointY, clampedX);
+                let existingIdx = findBestPointIndexForDepth(pts, dIdx, pointY, pointX);
                 if (existingIdx < 0) {
-                    const picked = findEditablePointIndex(pts, clampedX, pointY, editCurveId, { maxYDist: 6, maxDist: 18 });
+                    const picked = findEditablePointIndex(pts, pointX, pointY, editCurveId, { maxYDist: 6, maxDist: 18 });
                     existingIdx = picked.pointIndex;
                     if (existingIdx >= 0 && Array.isArray(pts[existingIdx]) && Number.isInteger(pts[existingIdx][2]) && pts[existingIdx][2] !== dIdx) {
                         existingIdx = -1;
@@ -6006,13 +6065,16 @@
                 }
 
                 if (existingIdx >= 0) {
-                    pts[existingIdx][0] = clampedX;
+                    pts[existingIdx][0] = pointX;
                     pts[existingIdx][1] = pointY;
                     pts[existingIdx][2] = dIdx;
                     pts[existingIdx][3] = 'manual';
                     pts[existingIdx][4] = manualPointStamp;
+                    pts[existingIdx][5] = storedRawPointX;
                 } else {
-                    pts.push([clampedX, pointY, dIdx, 'manual', manualPointStamp]);
+                    const point = [pointX, pointY, dIdx, 'manual', manualPointStamp];
+                    point[5] = storedRawPointX;
+                    pts.push(point);
                 }
             }
 
