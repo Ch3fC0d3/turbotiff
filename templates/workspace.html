@@ -6422,12 +6422,12 @@
                 const depthCfg = lastDepthConfig || getDepthConfigFromInputs();
 
                 // Cache the target track
-                // Build neighbor set with wider window for smooth Gaussian falloff
-                // Wider window (±8) prevents kinks at the boundary of the edit region
+                // Build neighbor set with wider window for rubberband falloff
+                // We need enough points to match the maxRadius in _doDragUpdate (~15-20 ft)
                 const neighbors = [];
                 let centerDepthIdx = -1;
                 const smoothMode = document.getElementById('smoothEditToggle')?.checked;
-                const windowRadius = smoothMode ? 8 : 3;
+                const windowRadius = smoothMode ? 60 : 40; // Greatly increased for wide angle / rubberband effect
                 for (let offset = -windowRadius; offset <= windowRadius; offset++) {
                     const idx = nearestIdx + offset;
                     if (idx < 0 || idx >= pts.length) continue;
@@ -6647,7 +6647,16 @@
                 let weight = 1.0;
                 if (n.pointIndex !== centerIndex) {
                     weight = 1.0 - (depthDelta / maxRadius);
-                    if (weight < 0.01) return;
+                    if (weight <= 0) {
+                        // Perfectly restore unmodified points
+                        if (n.depthIndex >= 0 && n.depthIndex < entry.values.length) {
+                            entry.values[n.depthIndex] = n.originalValue;
+                        }
+                        pts[n.pointIndex][0] = n.originalX;
+                        pts[n.pointIndex][1] = n.originalY;
+                        pts[n.pointIndex][2] = n.depthIndex;
+                        return;
+                    }
                 }
 
                 let newX;
