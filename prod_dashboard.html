@@ -2959,22 +2959,11 @@
 
             if (pts2.length) {
                 ensureTracePointsHaveDepthIndex(editCurveId);
-                let bestIdxPt = -1;
-                let bestDist2 = Infinity;
-                for (let i = 0; i < pts2.length; i++) {
-                    const dx = pts2[i][0] - clampedX;
-                    const dy = pts2[i][1] - yImg;
-                    const d2 = dx * dx + dy * dy;
-                    if (d2 < bestDist2) {
-                        bestDist2 = d2;
-                        bestIdxPt = i;
-                    }
-                }
-
-                const bestDy = bestIdxPt >= 0 ? Math.abs(pts2[bestIdxPt][1] - yImg) : Infinity;
-                if (bestIdxPt >= 0 && bestDy <= 10) {
-                    pts2[bestIdxPt][0] = clampedX;
-                    pts2[bestIdxPt][2] = idx;
+                const existingIdx = findPointIndexByDepthIndex(pts2, idx);
+                if (existingIdx >= 0) {
+                    pts2[existingIdx][0] = clampedX;
+                    pts2[existingIdx][1] = yImg;
+                    pts2[existingIdx][2] = idx;
                 } else {
                     pts2.push([clampedX, yImg, idx]);
                     pts2.sort((a, b) => a[1] - b[1]);
@@ -3055,16 +3044,10 @@
                 pts = [];
             }
 
-            // Use Y-based lookup instead of depthIndex to avoid collapsing dense points
-            let existingIdx = -1;
-            const yEpsilon = 1.0; 
-            for (let i = 0; i < pts.length; i++) {
-                const pt = pts[i];
-                if (Array.isArray(pt) && pt.length >= 2 && Math.abs(pt[1] - yImgUse) < yEpsilon) {
-                    existingIdx = i;
-                    break;
-                }
-            }
+            // Enforce strict 1-to-1 relationship with depth index to prevent duplicate points
+            // at the same depth, which causes horizontal lines shooting from old positions.
+            ensureTracePointsHaveDepthIndex(targetKey);
+            let existingIdx = findPointIndexByDepthIndex(pts, idx);
 
             if (existingIdx >= 0) {
                 pts[existingIdx][0] = clampedX;
@@ -3841,7 +3824,7 @@
                 if (sumScore > 0) {
                     const avgX = accumX / sumScore;
                     const avgY = accumY / sumScore;
-                    bestX = Math.max(trackLeftX, Math.min(trackRightX, avgX));
+                    bestX = avgX; // Do not clamp to track boundaries to allow off-scale tracing
                     bestY = avgY;
                 }
             }
@@ -3992,9 +3975,11 @@
             const winSize = 160; // more vertical context improves path stability on noisy/thick ink
             const halfWin = winSize / 2;
             
-            // Bounds for the crop
-            const cropLeft = Math.max(0, Math.floor(targetTrack.leftX));
-            const cropRight = Math.min(imageWidth || img.naturalWidth, Math.ceil(targetTrack.rightX));
+            // Allow tracking outside the track boundaries for off-scale curves
+            // Use currentX to define the horizontal bounds, just like we use currentY for vertical
+            const horizontalWinSize = 120;
+            const cropLeft = Math.max(0, Math.floor(currentX - horizontalWinSize));
+            const cropRight = Math.min(imageWidth || img.naturalWidth, Math.ceil(currentX + horizontalWinSize));
             const cropTop = Math.max(0, Math.floor(currentY - halfWin));
             const cropBottom = Math.min(imageHeight || img.naturalHeight, Math.ceil(currentY + halfWin));
             
