@@ -13274,11 +13274,9 @@
 
             // 2. Save log to account DB
             try {
-                // If uploadedImage is a data URL and original is not, it means we're working on a cropped/modified image
-                let croppedImagePath = uploadedImage;
-                if (uploadedImage === uploadedImagePath) {
-                    croppedImagePath = null; // No separate cropped image
-                }
+                // croppedImagePath is only meaningful if it differs from the server-side original path.
+                // uploadedImage is always a base64 data URL (not a path), so never send it as a stored reference.
+                let croppedImagePath = null;
                 
                 const response = await fetch('/api/logs', {
                     method: 'POST',
@@ -13384,10 +13382,7 @@
                 }
             }
             
-            let croppedImagePath = uploadedImage;
-            if (uploadedImage === uploadedImagePath) {
-                croppedImagePath = null;
-            }
+            let croppedImagePath = null;
 
             fetch('/api/logs', {
                 method: 'POST',
@@ -14479,7 +14474,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
         
         uploadedImage = dataUrl;
-        uploadedImagePath = imgPath;
+        // Use the actual stored image path for future re-saves, not the wrapper API endpoint,
+        // so that original_image_path in the DB always points to a resolvable /api/images/ path.
+        uploadedImagePath = logData.original_image_path || logData.cropped_image_path || imgPath;
         lastLasContent = logData.las_content || null;
         curveWrapMarkers = {};
         lastLasFilename = (logData.name || 'digitized_log').replace(/ /g, '_') + '.las';

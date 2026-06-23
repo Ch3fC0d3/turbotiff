@@ -233,14 +233,14 @@ def delete_remember_tokens_for_user(db_path: str, user_id: int) -> None:
         conn.execute("DELETE FROM remember_tokens WHERE user_id = ?", (user_id,))
 
 
-def save_user_log(db_path: str, log_id: str, user_id: int, name: str, curve_count: int, depth_start: float, depth_end: float, depth_unit: str, las_content: str) -> None:
+def save_user_log(db_path: str, log_id: str, user_id: int, name: str, curve_count: int, depth_start: float, depth_end: float, depth_unit: str, las_content: str, original_image_path: Optional[str] = None, cropped_image_path: Optional[str] = None) -> None:
     now = _utc_now_iso()
     with get_db(db_path) as conn:
         conn.execute(
             """
             INSERT INTO user_logs (
-                id, user_id, name, curve_count, depth_start, depth_end, depth_unit, las_content, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                id, user_id, name, curve_count, depth_start, depth_end, depth_unit, las_content, original_image_path, cropped_image_path, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 name=excluded.name,
                 curve_count=excluded.curve_count,
@@ -248,9 +248,11 @@ def save_user_log(db_path: str, log_id: str, user_id: int, name: str, curve_coun
                 depth_end=excluded.depth_end,
                 depth_unit=excluded.depth_unit,
                 las_content=excluded.las_content,
+                original_image_path=COALESCE(excluded.original_image_path, user_logs.original_image_path),
+                cropped_image_path=COALESCE(excluded.cropped_image_path, user_logs.cropped_image_path),
                 updated_at=excluded.updated_at
             """,
-            (log_id, user_id, name, curve_count, depth_start, depth_end, depth_unit, las_content, now, now)
+            (log_id, user_id, name, curve_count, depth_start, depth_end, depth_unit, las_content, original_image_path, cropped_image_path, now, now)
         )
 
 
