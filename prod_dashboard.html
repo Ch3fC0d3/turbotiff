@@ -4076,9 +4076,7 @@
                     const closeDist = 3;    // always accept very-close refinements
 
                     const neighborMaxDist = (function (mode) {
-                        if (mode === 'red') return 5;
-                        if (mode === 'blue' || mode === 'green') return 6;
-                        return 7;
+                        return 80; // Significantly increased to allow smart-follow to pull off-scale clamped points
                     })(trackModeForSnap);
 
                     if ((conf >= minConf || dist <= closeDist) && dist <= maxSnapDist) {
@@ -4134,14 +4132,14 @@
 
                                 const neighborIdx = findPointIndexByDepthIndex(pts, neighborDepthIdx);
                                 if (neighborIdx >= 0 && neighborIdx !== pIdx) {
-                                    if (Math.abs(pts[neighborIdx][0] - pt.x) <= neighborMaxDist) {
-                                        pts[neighborIdx][0] = pt.x;
-                                        pts[neighborIdx][2] = neighborDepthIdx;
+                                    // Remove neighborMaxDist restriction completely: if the user drags near here,
+                                    // and the backend finds a path, we want ALL points within maxNeighborDY to snap to it!
+                                    pts[neighborIdx][0] = pt.x;
+                                    pts[neighborIdx][2] = neighborDepthIdx;
 
-                                        const nVal = pixelToTrackValue(pt.x, targetTrack);
-                                        if (Number.isFinite(nVal) && neighborDepthIdx < entry.values.length) {
-                                            entry.values[neighborDepthIdx] = nVal;
-                                        }
+                                    const nVal = pixelToTrackValue(pt.x, targetTrack);
+                                    if (Number.isFinite(nVal) && neighborDepthIdx < entry.values.length) {
+                                        entry.values[neighborDepthIdx] = nVal;
                                     }
                                 }
                             });
