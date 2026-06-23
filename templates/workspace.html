@@ -6611,7 +6611,8 @@
 
             const deltaX = xImg - centerN.originalX;
             const deltaY = yImg - centerN.originalY;
-            const targetValue = pixelToTrackValue(xImg, targetTrack, { depthIndex: centerN.depthIndex, values: entry.values });
+            const clampedX = Math.max(targetTrack.leftX, Math.min(targetTrack.rightX, xImg));
+            const targetValue = pixelToTrackValue(clampedX, targetTrack, { depthIndex: centerN.depthIndex, values: entry.values });
 
             // Check smoothing toggle
             const smoothMode = document.getElementById('smoothEditToggle')?.checked;
