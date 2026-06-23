@@ -5779,8 +5779,13 @@
             const entry = lastDigitizedCurves[curveKey];
             if (!entry || !Array.isArray(entry.values) || idx >= entry.values.length) return;
 
-            const wrapActive = isTrackWrapActive(targetTrack, curveKey);
+            let wrapActive = isTrackWrapActive(targetTrack, curveKey);
             const clickedX = Math.max(0, Math.min((imageWidth || xImg + 1) - 1, xImg));
+            const clickedOutsideTrack = clickedX < Math.min(targetTrack.leftX, targetTrack.rightX) - 1 ||
+                clickedX > Math.max(targetTrack.leftX, targetTrack.rightX) + 1;
+            if (!wrapActive && clickedOutsideTrack) {
+                wrapActive = activateTrackWrapForEdit(targetTrack);
+            }
             const referenceRawX = !isMissingDigitizedValue(entry.values[idx])
                 ? trackValueToPixelX(entry.values[idx], targetTrack, { rawValue: true })
                 : null;
@@ -5982,8 +5987,13 @@
             const entry = lastDigitizedCurves[curveKey];
             if (!entry || !Array.isArray(entry.values) || idx >= entry.values.length) return;
 
-            const wrapActive = isTrackWrapActive(targetTrack, curveKey);
+            let wrapActive = isTrackWrapActive(targetTrack, curveKey);
             const clickedX = Math.max(0, Math.min((imageWidth || xImg + 1) - 1, xImg));
+            const clickedOutsideTrack = clickedX < Math.min(targetTrack.leftX, targetTrack.rightX) - 1 ||
+                clickedX > Math.max(targetTrack.leftX, targetTrack.rightX) + 1;
+            if (!wrapActive && clickedOutsideTrack) {
+                wrapActive = activateTrackWrapForEdit(targetTrack);
+            }
             const centerReferenceRawX = !isMissingDigitizedValue(entry.values[idx])
                 ? trackValueToPixelX(entry.values[idx], targetTrack, { rawValue: true })
                 : null;
