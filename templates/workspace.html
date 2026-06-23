@@ -2275,7 +2275,12 @@
 
         function syncWrapMarkersToDigitizedCurves() {
             if (!curveWrapMarkers || typeof curveWrapMarkers !== 'object') return;
-            Object.keys(curveWrapMarkers).forEach(key => normalizeCurveValuesToWrapMarkers(key));
+            Object.keys(curveWrapMarkers).forEach(key => {
+                const track = findTrackByCurveId(key);
+                // Wrapped edits already store their logical off-scale values.
+                if (track && track.wrapped) return;
+                normalizeCurveValuesToWrapMarkers(key);
+            });
         }
 
         function isScaleWrapBoundaryForPoints(curveId, prevPoint, currPoint) {
@@ -4394,9 +4399,30 @@
             }
             const frac = (xImg - leftX) / denom;
             const visibleValue = scaleMin + frac * (scaleMax - scaleMin);
+            if (options && options.rawX === true) return visibleValue;
             const cycle = getWrapCycleForPixelEdit(track, options);
             const range = getTrackScaleRange(track);
             return Number.isFinite(range) ? (visibleValue + cycle * range) : visibleValue;
+        }
+
+        function positiveModulo(value, width) {
+            if (!Number.isFinite(value) || !Number.isFinite(width) || width <= 0) return value;
+            return ((value % width) + width) % width;
+        }
+
+        function wrapRawXToTrack(rawX, track) {
+            const x = Number(rawX);
+            const left = Number(track && track.leftX);
+            const right = Number(track && track.rightX);
+            const width = right - left;
+            if (![x, left, right, width].every(Number.isFinite) || width <= 0) return x;
+            const offset = x - left;
+            const wrappedOffset = positiveModulo(offset, width);
+            if (Math.abs(wrappedOffset) < 1e-7 && offset > 0 &&
+                Math.abs(offset / width - Math.round(offset / width)) < 1e-7) {
+                return right;
+            }
+            return left + wrappedOffset;
         }
 
         function trackValueToPixelX(value, track, options = {}) {
@@ -4414,6 +4440,112 @@
             const valueForDisplay = options && options.rawValue === true ? value : getVisibleTrackValue(value, track);
             const frac = (valueForDisplay - scaleMin) / denom;
             return leftX + frac * (rightX - leftX);
+        }
+
+        function getTracePointRawX(point, track, curveId = null) {
+            if (!Array.isArray(point)) return null;
+            const storedRawX = point[5] === null || point[5] === undefined || point[5] === ''
+                ? null
+                : Number(point[5]);
+            if (Number.isFinite(storedRawX)) return storedRawX;
+
+            const depthIndex = Number.isInteger(point[2]) ? point[2] : -1;
+            if (depthIndex >= 0) {
+                const found = findDigitizedCurveEntry(curveId || (track && track.id));
+                const values = found && found.entry && Array.isArray(found.entry.values) ? found.entry.values : null;
+                if (values && depthIndex < values.length && !isMissingDigitizedValue(values[depthIndex])) {
+                    const rawX = trackValueToPixelX(values[depthIndex], track, { rawValue: true });
+                    if (Number.isFinite(rawX)) return rawX;
+                }
+            }
+            return Number(point[0]);
+        }
+
+        function isTrackWrapActive(track, curveId = null, points = null) {
+            if (!track) return false;
+            if (track.wrapped) return true;
+            if (getWrapMarkersForCurve(curveId || track.id).length) return true;
+
+            const left = Math.min(Number(track.leftX), Number(track.rightX));
+            const right = Math.max(Number(track.leftX), Number(track.rightX));
+            if (!Number.isFinite(left) || !Number.isFinite(right) || right <= left) return false;
+            const tolerance = Math.max(1, (right - left) * 0.002);
+
+            if (Array.isArray(points) && points.some(point => {
+                const rawX = getTracePointRawX(point, track, curveId);
+                return Number.isFinite(rawX) && (rawX < left - tolerance || rawX > right + tolerance);
+            })) return true;
+
+            const found = findDigitizedCurveEntry(curveId || track.id);
+            const values = found && found.entry && Array.isArray(found.entry.values) ? found.entry.values : null;
+            return !!(values && values.some(value => {
+                if (isMissingDigitizedValue(value)) return false;
+                const rawX = trackValueToPixelX(value, track, { rawValue: true });
+                return Number.isFinite(rawX) && (rawX < left - tolerance || rawX > right + tolerance);
+            }));
+        }
+
+        function activateTrackWrapForEdit(track) {
+            if (!track) return false;
+            track.wrapped = true;
+            if (Number.isInteger(track.index)) {
+                const wrappedEl = document.getElementById(`wrapped${track.index}`);
+                if (wrappedEl) wrappedEl.checked = true;
+            }
+            return true;
+        }
+
+        function drawWrappedTrackSegment(ctx, rawX1, y1, rawX2, y2, track, scaleX, scaleY) {
+            const left = Number(track && track.leftX);
+            const right = Number(track && track.rightX);
+            const width = right - left;
+            const x1 = Number(rawX1);
+            const x2 = Number(rawX2);
+            const startY = Number(y1);
+            const endY = Number(y2);
+            if (![left, right, width, x1, x2, startY, endY].every(Number.isFinite) || width <= 0) {
+                ctx.lineTo(x2 * scaleX, endY * scaleY);
+                return;
+            }
+
+            const dx = x2 - x1;
+            if (Math.abs(dx) < 1e-9) {
+                ctx.lineTo(wrapRawXToTrack(x2, track) * scaleX, endY * scaleY);
+                return;
+            }
+
+            const isOnBoundary = rawX => {
+                const cycles = (rawX - left) / width;
+                return Math.abs(cycles - Math.round(cycles)) < 1e-7;
+            };
+            if (isOnBoundary(x1)) {
+                ctx.moveTo((dx > 0 ? left : right) * scaleX, startY * scaleY);
+            }
+
+            const boundaries = [];
+            const eps = 1e-7;
+            if (dx > 0) {
+                for (let boundary = left + (Math.floor((x1 - left) / width) + 1) * width;
+                    boundary < x2 - eps; boundary += width) {
+                    boundaries.push(boundary);
+                }
+            } else {
+                for (let boundary = left + (Math.ceil((x1 - left) / width) - 1) * width;
+                    boundary > x2 + eps; boundary -= width) {
+                    boundaries.push(boundary);
+                }
+            }
+
+            for (const boundary of boundaries) {
+                const t = (boundary - x1) / dx;
+                const crossY = startY + t * (endY - startY);
+                ctx.lineTo((dx > 0 ? right : left) * scaleX, crossY * scaleY);
+                ctx.moveTo((dx > 0 ? left : right) * scaleX, crossY * scaleY);
+            }
+            const endDisplayX = isOnBoundary(x2)
+                ? (dx > 0 ? right : left)
+                : wrapRawXToTrack(x2, track);
+            ctx.lineTo(endDisplayX * scaleX, endY * scaleY);
         }
 
         function getPixelYForDepthIndex(depthIndex, depthCfg = null) {
@@ -4487,54 +4619,60 @@
 
             const leftBound = Math.min(track.leftX, track.rightX);
             const rightBound = Math.max(track.leftX, track.rightX);
+            const wrapActive = isTrackWrapActive(track, normalizedId);
             const points = [];
             const values = found.entry.values;
             const count = Math.min(values.length, lastDigitizedDepth.length);
-            const displayXs = new Array(count).fill(null);
+            const rawXs = new Array(count).fill(null);
 
             for (let depthIndex = 0; depthIndex < count; depthIndex++) {
                 const value = values[depthIndex];
                 if (isMissingDigitizedValue(value)) continue;
 
-                const xImg = trackValueToPixelX(value, track);
-                if (!Number.isFinite(xImg)) continue;
-                displayXs[depthIndex] = clamp(xImg, leftBound, rightBound);
+                const rawX = trackValueToPixelX(value, track, { rawValue: true });
+                if (!Number.isFinite(rawX)) continue;
+                rawXs[depthIndex] = rawX;
             }
 
             let firstValid = -1;
             let prevValid = -1;
             for (let depthIndex = 0; depthIndex < count; depthIndex++) {
-                const xImg = displayXs[depthIndex];
-                if (!Number.isFinite(xImg)) continue;
+                const rawX = rawXs[depthIndex];
+                if (!Number.isFinite(rawX)) continue;
                 if (firstValid < 0) {
                     firstValid = depthIndex;
                     for (let fillIdx = 0; fillIdx < depthIndex; fillIdx++) {
-                        displayXs[fillIdx] = xImg;
+                        rawXs[fillIdx] = rawX;
                     }
                 } else if (prevValid >= 0 && depthIndex - prevValid > 1) {
-                    const startX = Number(displayXs[prevValid]);
-                    const endX = xImg;
+                    const startX = Number(rawXs[prevValid]);
+                    const endX = rawX;
                     const span = depthIndex - prevValid;
                     for (let fillIdx = prevValid + 1; fillIdx < depthIndex; fillIdx++) {
                         const t = (fillIdx - prevValid) / Math.max(1, span);
-                        displayXs[fillIdx] = startX + (endX - startX) * t;
+                        rawXs[fillIdx] = startX + (endX - startX) * t;
                     }
                 }
                 prevValid = depthIndex;
             }
 
             if (firstValid >= 0 && prevValid >= 0) {
-                const tailX = Number(displayXs[prevValid]);
+                const tailX = Number(rawXs[prevValid]);
                 for (let fillIdx = prevValid + 1; fillIdx < count; fillIdx++) {
-                    displayXs[fillIdx] = tailX;
+                    rawXs[fillIdx] = tailX;
                 }
             }
 
             for (let depthIndex = 0; depthIndex < count; depthIndex++) {
-                const xImg = displayXs[depthIndex];
+                const rawX = rawXs[depthIndex];
                 const yImg = getPixelYForDepthIndex(depthIndex, depthCfg);
-                if (!Number.isFinite(xImg) || !Number.isFinite(yImg)) continue;
-                points.push([clamp(xImg, leftBound, rightBound), yImg, depthIndex]);
+                if (!Number.isFinite(rawX) || !Number.isFinite(yImg)) continue;
+                const displayX = wrapActive
+                    ? wrapRawXToTrack(rawX, track)
+                    : clamp(rawX, leftBound, rightBound);
+                const point = [displayX, yImg, depthIndex];
+                point[5] = rawX;
+                points.push(point);
             }
 
             if (options.persist !== false) {
@@ -6459,6 +6597,10 @@
                 return false;
             }
 
+            if (isTrackWrapActive(targetTrack, curveKey, pts)) {
+                activateTrackWrapForEdit(targetTrack);
+            }
+
             ensureTracePointsHaveDepthIndex(editCurveId);
 
             // Sort by Y for sequential access (important for line drawing)
@@ -6542,6 +6684,7 @@
                         pointIndex: idx,
                         depthIndex: dIdx,
                         originalX: ptX,
+                        originalRawX: getTracePointRawX(pts[idx], targetTrack, curveKey),
                         originalY: ptY,
                         originalValue: entry.values[dIdx],
                     });
@@ -6634,6 +6777,9 @@
         // Light local smoothing after a drag to remove kinks while preserving spikes
         function _applyPostDragSmooth(centerIndex, pts, entry, targetTrack) {
             if (!Array.isArray(pts) || !entry || !Array.isArray(entry.values)) return;
+            // Visible points on opposite rails are adjacent in logical X. Averaging
+            // their display positions would create a false line through the track.
+            if (targetTrack && isTrackWrapActive(targetTrack, editCurveId, pts)) return;
             const windowRadius = 3; // total window size = 7
             const curveId = editCurveId;
             const smoothed = new Map();
@@ -6683,6 +6829,18 @@
             const centerIndex = state.centerIndex;
             if (!entry || !Array.isArray(entry.values)) return;
             if (!Array.isArray(pts) || !targetTrack || !neighbors) return;
+
+            const trackLeft = Math.min(Number(targetTrack.leftX), Number(targetTrack.rightX));
+            const trackRight = Math.max(Number(targetTrack.leftX), Number(targetTrack.rightX));
+            const crossedTrackRail = Number.isFinite(trackLeft) && Number.isFinite(trackRight) &&
+                (Number(xImg) < trackLeft - 1 || Number(xImg) > trackRight + 1);
+            if (!targetTrack.wrapped && crossedTrackRail) {
+                activateTrackWrapForEdit(targetTrack);
+                if (!state.wrapActivatedDuringDrag) {
+                    state.wrapActivatedDuringDrag = true;
+                    showStatus('Off-scale wrap enabled for this curve.', 'info');
+                }
+            }
 
             // Clamp to image bounds
             const img = document.getElementById('imagePreview');
@@ -6742,13 +6900,15 @@
                     if (weight < 0.01) return;
                 }
 
-                let newX;
+                let newRawX;
                 if (n.pointIndex === centerIndex) {
                     // Center point follows mouse exactly
-                    newX = xImg;
+                    const originalRawX = Number.isFinite(n.originalRawX) ? n.originalRawX : n.originalX;
+                    newRawX = originalRawX + deltaX;
                 } else {
                     // Neighbors get weighted X motion
-                    newX = n.originalX + deltaX * weight;
+                    const originalRawX = Number.isFinite(n.originalRawX) ? n.originalRawX : n.originalX;
+                    newRawX = originalRawX + deltaX * weight;
                 }
                 let newY;
                 if (n.pointIndex === centerIndex) {
@@ -6759,11 +6919,19 @@
                     newY = n.originalY + deltaY * weight * yWeight;
                 }
 
-                if (imgW > 1) newX = Math.max(0, Math.min(imgW - 1, newX));
+                let newX;
+                if (targetTrack.wrapped) {
+                    newX = wrapRawXToTrack(newRawX, targetTrack);
+                } else {
+                    newX = newRawX;
+                    if (imgW > 1) newX = Math.max(0, Math.min(imgW - 1, newX));
+                    newRawX = newX;
+                }
                 if (imgH > 1) newY = Math.max(0, Math.min(imgH - 1, newY));
 
                 pts[n.pointIndex][0] = newX;
                 pts[n.pointIndex][1] = newY;
+                pts[n.pointIndex][5] = newRawX;
 
                 // Map new Y position to depth index
                 const newDepth = pixelToDepthFromConfig(newY, depthCfg);
@@ -6778,7 +6946,9 @@
                 pts[n.pointIndex][2] = newDepthIndex;
                 n.depthIndex = newDepthIndex; // Update neighbor state for future iterations in this drag
 
-                const newVal = pixelToTrackValue(newX, targetTrack, { depthIndex: newDepthIndex, values: entry.values });
+                const newVal = targetTrack.wrapped
+                    ? pixelToTrackValue(newRawX, targetTrack, { rawX: true })
+                    : pixelToTrackValue(newX, targetTrack, { depthIndex: newDepthIndex, values: entry.values });
                 if (Number.isFinite(newVal)) {
                     entry.values[newDepthIndex] = newVal;
                 }
@@ -7704,7 +7874,9 @@
 
             const x = event.clientX - rect.left;
             const y = event.clientY - rect.top;
-            const xNorm = Math.max(0, Math.min(1, x / rect.width));
+            // A Move drag must report the first rail crossing before wrap is active.
+            const curveDragActive = !!(editMode && editDragState && editDragState.targetTrack && activeTool === 'pointer');
+            const xNorm = curveDragActive ? (x / rect.width) : Math.max(0, Math.min(1, x / rect.width));
             const yNorm = Math.max(0, Math.min(1, y / rect.height));
             const xImg = Math.round(xNorm * (imageWidth - 1));
             const yImg = Math.round(yNorm * (imageHeight - 1));
@@ -12055,7 +12227,14 @@
                         ctx.strokeStyle = lineCoreColor;
                         ctx.beginPath();
 
-                        const firstX = (renderPoints[0][0] * scaleX);
+                        const wrapActive = isTrackWrapActive(trackMeta, name, renderPoints);
+                        const firstRawX = wrapActive
+                            ? getTracePointRawX(renderPoints[0], trackMeta, name)
+                            : Number(renderPoints[0][0]);
+                        const firstDisplayX = wrapActive
+                            ? wrapRawXToTrack(firstRawX, trackMeta)
+                            : Number(renderPoints[0][0]);
+                        const firstX = (firstDisplayX * scaleX);
                         const firstY = (renderPoints[0][1] * scaleY);
                         ctx.moveTo(firstX, firstY);
                         const splitWrappedJumps = false;
@@ -12064,10 +12243,32 @@
                         for (let i = 1; i < renderPoints.length; i++) {
                             const prevPoint = renderPoints[i - 1];
                             const currPoint = renderPoints[i];
-                            const xDom = (currPoint[0] * scaleX);
+                            const currRawX = wrapActive
+                                ? getTracePointRawX(currPoint, trackMeta, name)
+                                : Number(currPoint[0]);
+                            const currDisplayX = wrapActive
+                                ? wrapRawXToTrack(currRawX, trackMeta)
+                                : Number(currPoint[0]);
+                            const xDom = (currDisplayX * scaleX);
                             const yDom = (currPoint[1] * scaleY);
                             const jumpX = Math.abs(Number(currPoint[0]) - Number(prevPoint[0]));
-                            if (isScaleWrapDisplayJump(name, prevPoint, currPoint, trackMeta) ||
+                            if (wrapActive) {
+                                const prevRawX = getTracePointRawX(prevPoint, trackMeta, name);
+                                if (Number.isFinite(prevRawX) && Number.isFinite(currRawX)) {
+                                    drawWrappedTrackSegment(
+                                        ctx,
+                                        prevRawX,
+                                        Number(prevPoint[1]),
+                                        currRawX,
+                                        Number(currPoint[1]),
+                                        trackMeta,
+                                        scaleX,
+                                        scaleY
+                                    );
+                                } else {
+                                    ctx.lineTo(xDom, yDom);
+                                }
+                            } else if (isScaleWrapDisplayJump(name, prevPoint, currPoint, trackMeta) ||
                                 (splitWrappedJumps && Number.isFinite(jumpX) && jumpX > wrapJumpThreshold)) {
                                 ctx.moveTo(xDom, yDom);
                             } else {
