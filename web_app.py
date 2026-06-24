@@ -11045,10 +11045,6 @@ def digitize():
             # To avoid staircases when DP tracks a jagged pixelated diagonal,
             # apply a light moving average. This turns blocky steps into smooth diagonals.
             try:
-                import pandas as pd
-                # Only apply if it's not a GR curve, or if GR curves also suffer from staircases.
-                # Actually, the user wants smooth curves overall. A 5-point moving average
-                # perfectly blends 3-5px staircases.
                 if xs.size > 0:
                     s = pd.Series(xs)
                     xs = s.rolling(window=5, center=True, min_periods=1).mean().to_numpy(dtype=np.float32)
