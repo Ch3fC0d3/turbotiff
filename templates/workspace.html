@@ -1821,16 +1821,16 @@
                                         Advanced — <span id="step5CurveName" style="color:#94a3b8;">none selected</span>
                                     </div>
                                     <div class="trace-layer-controls mb-2" id="traceLayerControls" style="display:none; background:#1e293b; padding:8px; border-radius:6px; border:1px solid #334155;">
-                                        <label style="font-weight:600; font-size:0.85em; color:#e2e8f0; margin-bottom:4px; display:block;">Trace Layers</label>
-                                        <div class="flex-wrap-center gap-2">
-                                            <label class="cursor-pointer text-sm flex-center gap-1"><input type="radio" name="activeLayer" value="main" checked onchange="s5SwitchLayer('main')"> Main Trace</label>
-                                            <label class="cursor-pointer text-sm flex-center gap-1" id="wrapTraceRadioContainer" style="display:none;"><input type="radio" name="activeLayer" value="wrap" onchange="s5SwitchLayer('wrap')"> Wrap Trace</label>
-                                            
-                                            <button type="button" class="btn btn-xs ml-auto" id="addWrapTraceBtn" onclick="s5AddWrapTrace()">+ Add Wrap Trace</button>
-                                            <button type="button" class="btn btn-xs" id="clearWrapTraceBtn" style="display:none;" onclick="s5ClearWrapTrace()">Clear Wrap</button>
-                                            <button type="button" class="btn btn-xs" id="deleteWrapTraceBtn" style="display:none; color:#f87171; border-color:#ef4444;" onclick="s5DeleteWrapTrace()">Delete Wrap</button>
+                                        <div class="flex-wrap-center gap-2" style="justify-content: space-between; margin-bottom: 8px;">
+                                            <label class="cursor-pointer text-sm flex-center gap-1" title="Prevent edits to the main line">
+                                                <input type="checkbox" id="lockMainLine" onchange="s5UpdateLineLocks()"> Lock Main Line
+                                            </label>
+                                            <label class="cursor-pointer text-sm flex-center gap-1" title="Prevent edits to the wrap line">
+                                                <input type="checkbox" id="lockWrapLine" onchange="s5UpdateLineLocks()"> Lock Wrapped Line
+                                            </label>
+                                            <button type="button" class="btn btn-xs" id="clearWrapTraceBtn" style="color:#f87171; border-color:#ef4444;" onclick="s5ClearWrapTrace()">Clear Wrap Line</button>
                                         </div>
-                                        <div id="wrapTraceSettings" style="display:none; margin-top:8px; padding-top:8px; border-top:1px dashed #334155; font-size:0.85em;">
+                                        <div id="wrapTraceSettings" style="padding-top:8px; border-top:1px dashed #334155; font-size:0.85em;">
                                             <div class="grid" style="grid-template-columns:1fr 1fr; gap:8px;">
                                                 <div class="field">
                                                     <label>Wrap Left Value</label>
@@ -1842,7 +1842,7 @@
                                                 </div>
                                                 <div class="field" style="grid-column:1/-1;">
                                                     <label style="display:flex; justify-content:space-between; align-items:center;">
-                                                        Wrap Trace Color
+                                                        Wrap Line Color
                                                         <input type="color" id="wrapColor" value="#00ffff" style="width:24px; height:24px; padding:0; cursor:pointer;" onchange="s5UpdateWrapConfig()">
                                                     </label>
                                                 </div>
@@ -2112,7 +2112,7 @@
             }
             
             // Redirect to wrap layer if active
-            if (editCurveLayer === 'wrap') {
+            if (window.currentDragLayer === 'wrap') {
                 traceKey = traceKey + '_wrap';
             }
             
@@ -2683,7 +2683,7 @@
 
         // Toolbar State
         let activeTool = 'pointer'; // 'pointer', 'draw', 'addPoint', 'eraser'
-        let editCurveLayer = 'main'; // 'main' or 'wrap'
+        window.currentDragLayer = 'main'; // 'main' or 'wrap'
         let crosshairEnabled = false;
         let eraserStart = null;
         let eraserBox = null;
@@ -3990,49 +3990,113 @@
                 return;
             }
             
+            const i = findCurveCardIndex(mnemonic);
+            const wrappedCheckbox = document.getElementById(`wrapped${i}`);
+            const isWrapped = wrappedCheckbox ? wrappedCheckbox.checked : false;
+            
             const normKey = normalizeCurveKey(mnemonic);
             const entryKey = Object.keys(lastDigitizedCurves).find(k => normalizeCurveKey(k) === normKey);
             const entry = entryKey ? lastDigitizedCurves[entryKey] : null;
             
-            if (!entry) {
+            if (!entry || !isWrapped) {
                 controls.style.display = 'none';
                 return;
             }
             
             controls.style.display = 'block';
             
-            const hasWrapLayer = !!entry.wrapLayer;
-            document.getElementById('wrapTraceRadioContainer').style.display = hasWrapLayer ? '' : 'none';
-            document.getElementById('wrapTraceSettings').style.display = hasWrapLayer ? '' : 'none';
-            document.getElementById('addWrapTraceBtn').style.display = hasWrapLayer ? 'none' : '';
-            document.getElementById('clearWrapTraceBtn').style.display = hasWrapLayer ? '' : 'none';
-            document.getElementById('deleteWrapTraceBtn').style.display = hasWrapLayer ? '' : 'none';
+            // Ensure wrapLayer exists if the box is checked
+            if (!entry.wrapLayer && lastDigitizedDepth) {
+                entry.wrapLayer = {
+                    values: new Array(lastDigitizedDepth.length).fill(null),
+                    left_value: null,
+                    right_value: null,
+                    color: '#00ffff'
+                };
+            }
             
-            if (hasWrapLayer) {
+            if (entry.wrapLayer) {
                 document.getElementById('wrapLeftValue').value = entry.wrapLayer.left_value ?? '';
                 document.getElementById('wrapRightValue').value = entry.wrapLayer.right_value ?? '';
                 document.getElementById('wrapColor').value = entry.wrapLayer.color ?? '#00ffff';
-                
-                // Keep the current layer selection if possible, otherwise revert to main
-                if (editCurveLayer === 'wrap') {
-                    document.querySelector('input[name="activeLayer"][value="wrap"]').checked = true;
-                } else {
-                    document.querySelector('input[name="activeLayer"][value="main"]').checked = true;
-                    editCurveLayer = 'main';
+            }
+        }
+        
+        function onCurveWrappedChange(idx) {
+            const nameEl = document.getElementById(`lasMnemonic${idx}`) || document.getElementById(`name${idx}`);
+            if (!nameEl) return;
+            const mnemonic = nameEl.value;
+            const wrappedCheckbox = document.getElementById(`wrapped${idx}`);
+            const isWrapped = wrappedCheckbox ? wrappedCheckbox.checked : false;
+            
+            if (lastDigitizedCurves) {
+                const normKey = normalizeCurveKey(mnemonic);
+                const entryKey = Object.keys(lastDigitizedCurves).find(k => normalizeCurveKey(k) === normKey);
+                if (entryKey) {
+                    const entry = lastDigitizedCurves[entryKey];
+                    if (isWrapped) {
+                        if (!entry.wrapLayer && lastDigitizedDepth) {
+                            entry.wrapLayer = {
+                                values: new Array(lastDigitizedDepth.length).fill(null),
+                                left_value: null,
+                                right_value: null,
+                                color: '#00ffff'
+                            };
+                        }
+                    } else {
+                        // User unchecked wrapped, we might want to ask before deleting?
+                        // Or just hide it from UI to save data. But let's delete it to be clean.
+                        if (entry.wrapLayer) {
+                            if (confirm(`Remove the wrapped line for ${mnemonic}? This will delete any traced wrap data.`)) {
+                                delete entry.wrapLayer;
+                            } else {
+                                wrappedCheckbox.checked = true; // Revert
+                                return;
+                            }
+                        }
+                    }
+                    
+                    rebuildCurveTraceFromDigitized(mnemonic);
+                    if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
                 }
-            } else {
-                document.querySelector('input[name="activeLayer"][value="main"]').checked = true;
-                editCurveLayer = 'main';
+            }
+            
+            // Re-sync Step 5 UI if this is the currently active edit curve
+            const sel = document.getElementById('editCurveSelect');
+            if (sel && sel.value === mnemonic) {
+                s5SyncTraceLayers(mnemonic);
             }
         }
 
-        function s5SwitchLayer(layer) {
-            editCurveLayer = layer;
+        function s5UpdateLineLocks() {
+            // Read checkboxes
+            const lockMain = document.getElementById('lockMainLine').checked;
+            const lockWrap = document.getElementById('lockWrapLine').checked;
+            
+            // We just store these state variables for the tools to check
+            window.lineLockMain = lockMain;
+            window.lineLockWrap = lockWrap;
+            
+            // Provide a visual cue
+            const sel = document.getElementById('editCurveSelect');
+            if (sel && sel.value) {
+                const states = [];
+                if (lockMain) states.push('Main Line Locked');
+                if (lockWrap) states.push('Wrap Line Locked');
+                if (states.length > 0) {
+                    showStatus(`Locks updated: ${states.join(', ')}`, 'info');
+                } else {
+                    showStatus(`All lines unlocked for editing.`, 'info');
+                }
+            }
         }
 
+
         function s5AddWrapTrace() {
-            if (!editCurveId || !lastDigitizedCurves || !lastDigitizedDepth) return;
-            const normKey = normalizeCurveKey(editCurveId);
+            const sel = document.getElementById('editCurveSelect');
+            const targetCurve = sel ? sel.value : null;
+            if (!targetCurve || !lastDigitizedCurves || !lastDigitizedDepth) return;
+            const normKey = normalizeCurveKey(targetCurve);
             const entryKey = Object.keys(lastDigitizedCurves).find(k => normalizeCurveKey(k) === normKey);
             if (!entryKey) return;
             
@@ -4048,49 +4112,55 @@
             
             // Auto-switch to the new layer
             s5SwitchLayer('wrap');
-            s5SyncTraceLayers(editCurveId);
+            s5SyncTraceLayers(targetCurve);
             
             // Rebuild canvas overlays to show the new wrap trace
-            rebuildCurveTraceFromDigitized(editCurveId);
+            rebuildCurveTraceFromDigitized(targetCurve);
             if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
             
-            showStatus(`Added Wrap Trace to ${editCurveId}. You are now editing the Wrap Trace.`, 'success');
+            showStatus(`Added Wrap Trace to ${targetCurve}. You are now editing the Wrap Trace.`, 'success');
         }
 
         function s5DeleteWrapTrace() {
-            if (!editCurveId || !lastDigitizedCurves) return;
-            const normKey = normalizeCurveKey(editCurveId);
+            const sel = document.getElementById('editCurveSelect');
+            const targetCurve = sel ? sel.value : null;
+            if (!targetCurve || !lastDigitizedCurves) return;
+            const normKey = normalizeCurveKey(targetCurve);
             const entryKey = Object.keys(lastDigitizedCurves).find(k => normalizeCurveKey(k) === normKey);
             if (!entryKey) return;
             
-            if (confirm(`Delete the Wrap Trace for ${editCurveId}? This cannot be undone.`)) {
+            if (confirm(`Delete the Wrap Trace for ${targetCurve}? This cannot be undone.`)) {
                 delete lastDigitizedCurves[entryKey].wrapLayer;
                 s5SwitchLayer('main');
-                s5SyncTraceLayers(editCurveId);
-                rebuildCurveTraceFromDigitized(editCurveId);
+                s5SyncTraceLayers(targetCurve);
+                rebuildCurveTraceFromDigitized(targetCurve);
                 if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
             }
         }
         
         function s5ClearWrapTrace() {
-            if (!editCurveId || !lastDigitizedCurves || !lastDigitizedDepth) return;
-            const normKey = normalizeCurveKey(editCurveId);
+            const sel = document.getElementById('editCurveSelect');
+            const targetCurve = sel ? sel.value : null;
+            if (!targetCurve || !lastDigitizedCurves || !lastDigitizedDepth) return;
+            const normKey = normalizeCurveKey(targetCurve);
             const entryKey = Object.keys(lastDigitizedCurves).find(k => normalizeCurveKey(k) === normKey);
             if (!entryKey) return;
             
             const entry = lastDigitizedCurves[entryKey];
             if (entry && entry.wrapLayer) {
-                if (confirm(`Clear all points on the Wrap Trace for ${editCurveId}?`)) {
+                if (confirm(`Clear all points on the Wrap Trace for ${targetCurve}?`)) {
                     entry.wrapLayer.values = new Array(lastDigitizedDepth.length).fill(null);
-                    rebuildCurveTraceFromDigitized(editCurveId);
+                    rebuildCurveTraceFromDigitized(targetCurve);
                     if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
                 }
             }
         }
 
         function s5UpdateWrapConfig() {
-            if (!editCurveId || !lastDigitizedCurves) return;
-            const normKey = normalizeCurveKey(editCurveId);
+            const sel = document.getElementById('editCurveSelect');
+            const targetCurve = sel ? sel.value : null;
+            if (!targetCurve || !lastDigitizedCurves) return;
+            const normKey = normalizeCurveKey(targetCurve);
             const entryKey = Object.keys(lastDigitizedCurves).find(k => normalizeCurveKey(k) === normKey);
             if (!entryKey) return;
             
@@ -4103,7 +4173,7 @@
                 entry.wrapLayer.color = document.getElementById('wrapColor').value;
                 
                 // Color update might require a re-render of overlays
-                rebuildCurveTraceFromDigitized(editCurveId);
+                rebuildCurveTraceFromDigitized(targetCurve);
                 if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
             }
         }
@@ -4439,9 +4509,49 @@
             return topPx + frac * (bottomPx - topPx);
         }
 
+        function valueToPixel(val, track) {
+            if (!track || val == null) return null;
+            const denom = track.scaleMax - track.scaleMin;
+            if (Math.abs(denom) < 1e-6) return null;
+            return track.leftX + (val - track.scaleMin) / denom * (track.rightX - track.leftX);
+        }
+
+        function resolveActiveLayer(xImg, yImg, entry, track) {
+            if (!entry || !entry.wrapLayer || !Array.isArray(entry.wrapLayer.values)) return 'main';
+            if (window.lineLockMain && !window.lineLockWrap) return 'wrap';
+            if (window.lineLockWrap && !window.lineLockMain) return 'main';
+            if (window.lineLockMain && window.lineLockWrap) return 'main'; // Default if both locked
+            
+            const depthCfg = lastDepthConfig || (typeof getDepthConfigFromInputs === 'function' ? getDepthConfigFromInputs() : null);
+            if (!depthCfg) return 'main';
+            const depth = typeof pixelToDepthFromConfig === 'function' ? pixelToDepthFromConfig(yImg, depthCfg) : null;
+            if (!Number.isFinite(depth)) return 'main';
+            const dIdx = typeof findNearestDepthIndex === 'function' ? findNearestDepthIndex(depth, lastDigitizedDepth) : -1;
+            
+            if (dIdx >= 0 && dIdx < lastDigitizedDepth.length) {
+                const mainVal = entry.values[dIdx];
+                const wrapVal = entry.wrapLayer.values[dIdx];
+                if (mainVal == null && wrapVal != null) return 'wrap';
+                if (wrapVal == null && mainVal != null) return 'main';
+                if (mainVal == null && wrapVal == null) return 'main';
+                
+                const wrapTrack = { ...track };
+                if (Number.isFinite(entry.wrapLayer.left_value)) wrapTrack.scaleMin = entry.wrapLayer.left_value;
+                if (Number.isFinite(entry.wrapLayer.right_value)) wrapTrack.scaleMax = entry.wrapLayer.right_value;
+                
+                const mainX = valueToPixel(mainVal, track);
+                const wrapX = valueToPixel(wrapVal, wrapTrack);
+                
+                if (mainX != null && wrapX != null) {
+                    if (Math.abs(wrapX - xImg) < Math.abs(mainX - xImg)) return 'wrap';
+                }
+            }
+            return 'main';
+        }
+
         function getActiveLayerValues(entry) {
             if (!entry) return null;
-            if (editCurveLayer === 'wrap' && entry.wrapLayer && Array.isArray(entry.wrapLayer.values)) {
+            if (window.currentDragLayer === 'wrap' && entry.wrapLayer && Array.isArray(entry.wrapLayer.values)) {
                 return entry.wrapLayer.values;
             }
             return entry.values;
@@ -4449,7 +4559,7 @@
 
         function getActiveLayerTrackConfig(entry, track) {
             if (!track) return null;
-            if (editCurveLayer === 'wrap' && entry && entry.wrapLayer) {
+            if (window.currentDragLayer === 'wrap' && entry && entry.wrapLayer) {
                 const wrapTrack = { ...track };
                 if (Number.isFinite(entry.wrapLayer.left_value)) wrapTrack.scaleMin = entry.wrapLayer.left_value;
                 if (Number.isFinite(entry.wrapLayer.right_value)) wrapTrack.scaleMax = entry.wrapLayer.right_value;
@@ -5881,6 +5991,8 @@
 
             const entry = lastDigitizedCurves[curveKey];
             if (!entry || !Array.isArray(entry.values) || idx >= entry.values.length) return;
+            
+            window.currentDragLayer = resolveActiveLayer(xImg, yImg, entry, targetTrack);
 
             const clampedX = Math.max(targetTrack.leftX, Math.min(targetTrack.rightX, xImg));
             const newValue = pixelToTrackValue(clampedX, getActiveLayerTrackConfig(entry, targetTrack), { depthIndex: idx, values: getActiveLayerValues(entry) });
@@ -6268,6 +6380,10 @@
 
             const found = findDigitizedCurveEntry(editCurveId) || findDigitizedCurveEntry(traceKey);
             const track = findTrackByCurveId(editCurveId);
+            
+            if (found && found.entry && track && Number.isFinite(lastMouseImgX) && Number.isFinite(lastMouseImgY)) {
+                window.currentDragLayer = resolveActiveLayer(lastMouseImgX, lastMouseImgY, found.entry, track);
+            }
 
             // Radius: how many neighbours on each side to include
             const radiusEl = document.getElementById('toolSmoothRadius');
@@ -6374,6 +6490,10 @@
             if (!track) { showStatus('Could not find track calibration for this curve.', 'info'); return; }
 
             const found = findDigitizedCurveEntry(editCurveId) || findDigitizedCurveEntry(traceKey);
+            
+            if (found && found.entry && track && Number.isFinite(lastMouseImgX) && Number.isFinite(lastMouseImgY)) {
+                window.currentDragLayer = resolveActiveLayer(lastMouseImgX, lastMouseImgY, found.entry, track);
+            }
 
             const applyRadiusY = 250; // pixels
             const falloffZone = 100;
@@ -8102,6 +8222,11 @@
                 }
                 // DRAW (PEN) TOOL
                 if (activeTool === 'draw' && (event.button === 0 || (event.pointerType && event.pointerType !== 'mouse'))) {
+                    // Resolve which layer we are drawing on based on distance/locks
+                    const curveKey = editCurveDataKey || editCurveId;
+                    const entry = lastDigitizedCurves && curveKey ? lastDigitizedCurves[curveKey] : null;
+                    window.currentDragLayer = resolveActiveLayer(xImg, yImg, entry, clickedTrack);
+                    
                     drawStrokeActive = true;
                     drawStrokePoints = [[xImg, yImg]];
                     // Create a visual cursor ring that follows the pen
@@ -8115,6 +8240,10 @@
                 }
                 // ERASER TOOL
                 if (activeTool === 'eraser' && event.button === 0) {
+                    const curveKey = editCurveDataKey || editCurveId;
+                    const entry = lastDigitizedCurves && curveKey ? lastDigitizedCurves[curveKey] : null;
+                    window.currentDragLayer = resolveActiveLayer(xImg, yImg, entry, clickedTrack);
+                    
                     eraserStart = { x: xImg, y: yImg, clientX: event.clientX, clientY: event.clientY };
                     eraserBox = document.createElement('div');
                     eraserBox.className = 'eraser-box';
@@ -8138,6 +8267,9 @@
                         beginCurveEditInteraction(xImg, yImg);
                     } else if (activeTool === 'addPoint') {
                         // Explicitly add a control point at this bend
+                        const curveKey = editCurveDataKey || editCurveId;
+                        const entry = lastDigitizedCurves && curveKey ? lastDigitizedCurves[curveKey] : null;
+                        window.currentDragLayer = resolveActiveLayer(xImg, yImg, entry, clickedTrack);
                         handleCurveAddPoint(xImg, yImg);
                     }
                 }
@@ -9989,7 +10121,11 @@
                     showStatus(`✅ ML prediction complete! Got ${pixelTrace.length} points`, 'success');
 
                     if (editMode && editCurveId) {
-                        const targetName = editCurveLayer === 'wrap' ? 'Wrap Trace' : 'Main Trace';
+                        let targetLayer = 'main';
+                        if (window.lineLockMain && !window.lineLockWrap) targetLayer = 'wrap';
+                        window.currentDragLayer = targetLayer;
+                        
+                        const targetName = targetLayer === 'wrap' ? 'Wrap Line' : 'Main Line';
                         if (confirm(`Overwrite the ${targetName} for ${editCurveId} with ML prediction?`)) {
                             const track = findTrackByCurveId(editCurveId);
                             const found = findDigitizedCurveEntry(editCurveId);
@@ -10006,7 +10142,7 @@
                                     label: 'ml_predict',
                                     curveKey: found.key,
                                     curveId: editCurveId,
-                                    traceKey: getActiveCurveTraceKey(editCurveId) + (editCurveLayer === 'wrap' ? '_wrap' : ''),
+                                    traceKey: getActiveCurveTraceKey(editCurveId) + (targetLayer === 'wrap' ? '_wrap' : ''),
                                     undoValues: undoValues,
                                     undoPoints: []
                                 });
@@ -11006,7 +11142,7 @@
                             </div>
                             <div class="field">
                                 <label for="wrapped${i}" style="font-size:0.8em;">Wrapped</label>
-                                <input type="checkbox" id="wrapped${i}" title="Curve re-enters opposite side (common on old resistivity)">
+                                <input type="checkbox" id="wrapped${i}" onchange="onCurveWrappedChange(${i})" title="Curve re-enters opposite side (common on old resistivity)">
                             </div>
                             <!-- Trace Pipeline controls -->
                             <div class="field" style="grid-column: span 2;">
@@ -12128,14 +12264,17 @@
 
             let tracesToRender = curveTraces;
             if (editMode && editCurveId) {
-                const activeTrace = getActiveCurveTracePoints(editCurveId);
-                const activeTraceKey = activeTrace.traceKey || getActiveCurveTraceKey(editCurveId) || normalizeCurveKey(editCurveId);
-                if (activeTraceKey && Array.isArray(activeTrace.points)) {
-                    tracesToRender = { [activeTraceKey]: activeTrace.points };
-                } else {
-                    tracesToRender = {};
+                tracesToRender = {};
+                const baseKey = getActiveCurveTraceKey(editCurveId) || normalizeCurveKey(editCurveId);
+                if (baseKey) {
+                    if (Array.isArray(curveTraces[baseKey])) {
+                        tracesToRender[baseKey] = curveTraces[baseKey];
+                    }
+                    const wrapKey = baseKey + '_wrap';
+                    if (Array.isArray(curveTraces[wrapKey])) {
+                        tracesToRender[wrapKey] = curveTraces[wrapKey];
+                    }
                 }
-                console.log('[overlay] editMode tracesToRender keys:', Object.keys(tracesToRender), 'points:', activeTrace && activeTrace.points ? activeTrace.points.length : 0);
             }
 
             // Use the full overlay size for the canvas so panning never causes a
@@ -12370,6 +12509,17 @@
                         const ptEl = document.getElementById(`pointColor${idx}`);
                         if (lineEl && lineEl.value) lineCoreColor = String(lineEl.value);
                         if (ptEl && ptEl.value) pointFillColor = String(ptEl.value);
+                    }
+                }
+                
+                // Override color if this is a wrap trace and it has a custom color
+                if (name.endsWith('_wrap')) {
+                    const baseId = name.replace(/_wrap$/, '');
+                    const found = findDigitizedCurveEntry(baseId);
+                    if (found && found.entry && found.entry.wrapLayer && found.entry.wrapLayer.color) {
+                        lineCoreColor = found.entry.wrapLayer.color;
+                    } else {
+                        lineCoreColor = '#00ffff'; // Default wrap color
                     }
                 }
 
