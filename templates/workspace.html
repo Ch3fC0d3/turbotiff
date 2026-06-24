@@ -1571,6 +1571,7 @@
                                     <span class="control-title">Edit</span>
                                     <div class="toolbar-icon-grid toolbar-icon-grid-compact">
                                         <button class="tool-btn active" id="toolPointer" title="Pointer (Edit/Move)" onclick="setTool('pointer')">🖱️</button>
+                                        <button class="tool-btn" id="toolPaint" title="Paint Trace — Live curve painting/override" onclick="setTool('paint')">🖌️</button>
                                         <button class="tool-btn" id="toolDraw" title="Pen/Tablet Draw — Trace over curve freehand (pen or mouse)" onclick="setTool('draw')">✏️</button>
                                         <button class="tool-btn" id="toolAddPoint" title="Add Point" onclick="setTool('addPoint')">➕</button>
                                         <button class="tool-btn" id="toolEraser" title="Eraser (Box Delete)" onclick="setTool('eraser')">🧽</button>
@@ -1585,9 +1586,20 @@
                                         <button class="tool-btn" id="btnFilterInvert" title="Invert Colors" onclick="toggleFilter('invert')">🌗</button>
                                         <button class="tool-btn" id="btnFilterContrast" title="High Contrast" onclick="toggleFilter('contrast')">◐</button>
                                     </div>
-                                    <label class="toolbar-inline-checkbox toolbar-inline-checkbox-compact" title="Move neighbors with drag">
-                                        <input type="checkbox" id="smoothEditToggle"> Smooth
-                                    </label>
+                                    <div style="display: flex; flex-direction: column; gap: 4px;">
+                                        <label class="toolbar-inline-checkbox toolbar-inline-checkbox-compact" title="Move neighbors with drag">
+                                            <input type="checkbox" id="smoothEditToggle"> Smooth
+                                        </label>
+                                        <div style="display: flex; align-items: center; gap: 4px; font-size: 0.8em; color: #a1a1aa;" title="Paint brush thickness">
+                                            <span>Brush:</span>
+                                            <select id="paintBrushSize" style="background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); color: #fff; border-radius: 4px; padding: 2px 4px; outline: none; cursor: pointer;">
+                                                <option value="1">1</option>
+                                                <option value="3">3</option>
+                                                <option value="5">5</option>
+                                                <option value="7">7</option>
+                                            </select>
+                                        </div>
+                                    </div>
                                 </div>
 
                             </div>
@@ -2727,15 +2739,21 @@
                 drawStrokePoints = [];
                 if (drawCursorRing) { drawCursorRing.remove(); drawCursorRing = null; }
             }
+            if (activeTool === 'paint' && tool !== 'paint') {
+                if (typeof paintStrokeActive !== 'undefined') paintStrokeActive = false;
+                if (typeof paintLastProcessedPoint !== 'undefined') paintLastProcessedPoint = null;
+                if (typeof paintCursorRing !== 'undefined' && paintCursorRing) { paintCursorRing.remove(); paintCursorRing = null; }
+            }
             activeTool = tool;
             // Update buttons
             const activeButtonId = ({
                 pointer: 'toolPointer',
+                paint:   'toolPaint',
                 draw:    'toolDraw',
                 addPoint: 'toolAddPoint',
                 eraser: 'toolEraser',
             })[tool] || null;
-            ['toolPointer', 'toolDraw', 'toolAddPoint', 'toolEraser'].forEach(id => {
+            ['toolPointer', 'toolPaint', 'toolDraw', 'toolAddPoint', 'toolEraser'].forEach(id => {
                 const btn = document.getElementById(id);
                 if (btn) {
                     if (id === activeButtonId) {
@@ -2756,9 +2774,8 @@
                 if (tool === 'eraser' || tool === 'addPoint' || tool === 'pointer') {
                     overlay.style.cursor = 'none';
                     overlay.classList.add('tool-gap-crosshair');
-                } else if (tool === 'draw') {
+                } else if (tool === 'draw' || tool === 'paint') {
                     overlay.style.cursor = 'none';
-                    overlay.classList.add('draw-mode-cursor');
                 } else {
                     overlay.style.cursor = 'default';
                 }
@@ -6164,6 +6181,115 @@
         }
         // ─── END PEN DRAW TOOL ───────────────────────────────────────────────
 
+        // ─── PAINT TRACE TOOL ────────────────────────────────────────────────
+        let paintStrokeActive = false;
+        let paintLastProcessedIdx = null;
+        let paintLastProcessedX = null;
+        let paintStrokePts = [];
+        let paintUndoValuesBefore = [];
+        let paintUndoPtsBefore = [];
+
+        function handlePaintSample(xImg, yImg, isFirstPoint = false) {
+            if (!paintStrokeActive || !editMode || !editCurveId) return;
+            const curveKey = editCurveDataKey || editCurveId;
+            if (!lastDigitizedCurves || !lastDigitizedCurves[curveKey]) return;
+            const entry = lastDigitizedCurves[curveKey];
+            if (!Array.isArray(entry.values)) return;
+            const targetTrack = findTrackByCurveId(editCurveId);
+            if (!targetTrack) return;
+            const depthCfg = lastDepthConfig || getDepthConfigFromInputs();
+            const depth = pixelToDepthFromConfig(yImg, depthCfg);
+            if (!Number.isFinite(depth)) return;
+            const idx = findNearestDepthIndex(depth, lastDigitizedDepth);
+            if (idx < 0) return;
+
+            const wrapActive = isTrackWrapActive(targetTrack, curveKey);
+            const activeValues = getActiveLayerValues(entry);
+
+            let currentRawX = xImg;
+            if (wrapActive && paintLastProcessedX !== null) {
+                currentRawX = unwrapDisplayXNearReference(xImg, paintLastProcessedX, targetTrack);
+            }
+            const val = pixelToTrackValue(currentRawX, targetTrack, { rawX: wrapActive });
+            if (!Number.isFinite(val)) return;
+
+            const brushSizeStr = document.getElementById('paintBrushSize')?.value || "1";
+            const brushRadius = Math.max(0, parseInt(brushSizeStr, 10) - 1); // 1 = radius 0, 3 = radius 1, 5 = radius 2
+
+            // Record changes
+            const applyVal = (targetIdx, targetVal) => {
+                if (targetIdx < 0 || targetIdx >= activeValues.length) return;
+                if (isDepthIndexPinned(editCurveId, targetIdx)) return;
+                
+                // Track undo state if not already tracked
+                if (!paintUndoValuesBefore.some(v => v.idx === targetIdx)) {
+                    paintUndoValuesBefore.push({ idx: targetIdx, oldValue: activeValues[targetIdx] });
+                }
+                activeValues[targetIdx] = targetVal;
+            };
+
+            // Interpolate if we skipped indices
+            if (!isFirstPoint && paintLastProcessedIdx !== null && Math.abs(idx - paintLastProcessedIdx) > 1) {
+                const startIdx = paintLastProcessedIdx;
+                const endIdx = idx;
+                const startVal = activeValues[paintLastProcessedIdx];
+                const endVal = val;
+                const step = startIdx < endIdx ? 1 : -1;
+                
+                for (let i = startIdx + step; i !== endIdx; i += step) {
+                    const ratio = Math.abs(i - startIdx) / Math.abs(endIdx - startIdx);
+                    const interpVal = startVal + ratio * (endVal - startVal);
+                    applyVal(i, interpVal);
+                    for (let b = 1; b <= brushRadius; b++) {
+                        applyVal(i - b, interpVal);
+                        applyVal(i + b, interpVal);
+                    }
+                }
+            }
+
+            applyVal(idx, val);
+            for (let b = 1; b <= brushRadius; b++) {
+                applyVal(idx - b, val);
+                applyVal(idx + b, val);
+            }
+
+            paintLastProcessedIdx = idx;
+            paintLastProcessedX = currentRawX;
+
+            // Update live traces via fast partial rebuild (or full rebuild since it's fast enough)
+            rebuildCurveTraceFromDigitized(editCurveId);
+            renderCurveTraceOverlays(lastCurveTraces);
+        }
+
+        function commitPaintStroke() {
+            paintStrokeActive = false;
+            paintLastProcessedIdx = null;
+            paintLastProcessedX = null;
+            if (!editMode || !editCurveId) return;
+            const curveKey = editCurveDataKey || editCurveId;
+            const traceKey = getActiveCurveTraceKey(editCurveId) || editCurveId;
+            
+            // Register undo
+            if (paintUndoValuesBefore.length > 0) {
+                editUndoStack.push({
+                    type: 'bulk_transform',
+                    label: 'paint_trace',
+                    curveKey,
+                    curveId: editCurveId,
+                    traceKey,
+                    undoPoints: paintUndoPtsBefore,
+                    undoValues: paintUndoValuesBefore,
+                });
+            }
+            paintUndoValuesBefore = [];
+            paintUndoPtsBefore = [];
+            
+            rebuildCurveTraceFromDigitized(editCurveId);
+            if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
+            showStatus(`Paint stroke applied.`, 'info');
+        }
+        // ─── END PAINT TRACE TOOL ───────────────────────────────────────────
+
         function handleCurveAddPoint(xImg, yImg) {
             if (!editMode || !editCurveId) return;
             if (!lastDigitizedDepth || !lastDigitizedCurves) {
@@ -8255,6 +8381,17 @@
                     event.preventDefault();
                     return;
                 }
+                // PAINT TRACE TOOL
+                if (activeTool === 'paint' && event.button === 0) {
+                    const curveKey = editCurveDataKey || editCurveId;
+                    const entry = lastDigitizedCurves && curveKey ? lastDigitizedCurves[curveKey] : null;
+                    paintTargetLayer = resolveActiveLayer(xImg, yImg, entry, clickedTrack);
+                    
+                    paintStrokeActive = true;
+                    handlePaintSample(xImg, yImg, true);
+                    event.preventDefault();
+                    return;
+                }
                 // ERASER TOOL
                 if (activeTool === 'eraser' && event.button === 0) {
                     const curveKey = editCurveDataKey || editCurveId;
@@ -8934,7 +9071,7 @@
 
         if (imageHitTarget) {
             imageHitTarget.addEventListener('pointerdown', (pe) => {
-                if (activeTool !== 'draw') return;
+                if (activeTool !== 'draw' && activeTool !== 'paint') return;
                 if (!editMode || !editCurveId) return;
                 // Only handle primary button (pen tip = 0, left mouse = 0)
                 if (pe.button !== 0 && pe.button !== -1) return;
@@ -8942,37 +9079,58 @@
                 if (!coords) return;
                 // Capture the pointer so pointermove fires even if pen leaves element
                 try { pe.target.setPointerCapture(pe.pointerId); } catch(_) {}
-                drawStrokeActive = true;
-                drawStrokePoints = [[coords.xImg, coords.yImg]];
-                if (!drawCursorRing) {
-                    const ov = document.getElementById('overlay');
-                    if (ov) {
-                        drawCursorRing = document.createElement('div');
-                        drawCursorRing.className = 'draw-cursor-ring';
-                        ov.appendChild(drawCursorRing);
+                
+                const curveKey = editCurveDataKey || editCurveId;
+                const entry = lastDigitizedCurves && curveKey ? lastDigitizedCurves[curveKey] : null;
+                const clickedTrack = getTrackUnderImageX(coords.xImg);
+
+                if (activeTool === 'draw') {
+                    window.currentDragLayer = resolveActiveLayer(coords.xImg, coords.yImg, entry, clickedTrack);
+                    drawStrokeActive = true;
+                    drawStrokePoints = [[coords.xImg, coords.yImg]];
+                    if (!drawCursorRing) {
+                        const ov = document.getElementById('overlay');
+                        if (ov) {
+                            drawCursorRing = document.createElement('div');
+                            drawCursorRing.className = 'draw-cursor-ring';
+                            ov.appendChild(drawCursorRing);
+                        }
                     }
+                } else if (activeTool === 'paint') {
+                    paintTargetLayer = resolveActiveLayer(coords.xImg, coords.yImg, entry, clickedTrack);
+                    paintStrokeActive = true;
+                    handlePaintSample(coords.xImg, coords.yImg, true);
                 }
                 pe.preventDefault();
                 pe.stopPropagation();
             }, { passive: false });
 
             imageHitTarget.addEventListener('pointermove', (pe) => {
-                if (!drawStrokeActive || activeTool !== 'draw') return;
+                if ((!drawStrokeActive && !paintStrokeActive) || (activeTool !== 'draw' && activeTool !== 'paint')) return;
                 const coords = _getImgCoordsFromPointer(pe);
                 if (!coords) return;
-                handleDrawSample(coords.xImg, coords.yImg);
-                if (drawCursorRing && imageWidth && imageHeight) {
-                    drawCursorRing.style.left = `${(coords.xImg / (imageWidth  - 1)) * 100}%`;
-                    drawCursorRing.style.top  = `${(coords.yImg / (imageHeight - 1)) * 100}%`;
+                
+                if (activeTool === 'draw' && drawStrokeActive) {
+                    handleDrawSample(coords.xImg, coords.yImg);
+                    if (drawCursorRing && imageWidth && imageHeight) {
+                        drawCursorRing.style.left = `${(coords.xImg / (imageWidth  - 1)) * 100}%`;
+                        drawCursorRing.style.top  = `${(coords.yImg / (imageHeight - 1)) * 100}%`;
+                    }
+                } else if (activeTool === 'paint' && paintStrokeActive) {
+                    handlePaintSample(coords.xImg, coords.yImg, false);
                 }
                 pe.preventDefault();
                 pe.stopPropagation();
             }, { passive: false });
 
             imageHitTarget.addEventListener('pointerup', (pe) => {
-                if (!drawStrokeActive || activeTool !== 'draw') return;
+                if ((!drawStrokeActive && !paintStrokeActive) || (activeTool !== 'draw' && activeTool !== 'paint')) return;
                 try { pe.target.releasePointerCapture(pe.pointerId); } catch(_) {}
-                commitDrawStroke();
+                if (activeTool === 'draw' && drawStrokeActive) {
+                    commitDrawStroke();
+                } else if (activeTool === 'paint' && paintStrokeActive) {
+                    commitPaintStroke();
+                }
                 pe.preventDefault();
                 pe.stopPropagation();
             }, { passive: false });
@@ -8982,6 +9140,13 @@
                     drawStrokeActive = false;
                     drawStrokePoints = [];
                     if (drawCursorRing) { drawCursorRing.remove(); drawCursorRing = null; }
+                }
+                if (paintStrokeActive) {
+                    paintStrokeActive = false;
+                    paintLastProcessedIdx = null;
+                    paintLastProcessedX = null;
+                    paintUndoValuesBefore = [];
+                    paintUndoPtsBefore = [];
                 }
             });
         }
