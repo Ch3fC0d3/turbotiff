@@ -1842,12 +1842,12 @@
                                             </label>
                                             <button type="button" class="btn btn-xs" id="clearWrapTraceBtn" style="color:#f87171; border-color:#ef4444;" onclick="s5ClearWrapTrace()">Clear Wrap Line</button>
                                         </div>
-                                        <div id="wrapTraceSettings" style="padding-top:8px; border-top:1px dashed #334155; font-size:0.85em;">
-                                            <div style="margin-bottom: 8px;">
-                                                <label class="cursor-pointer text-sm flex-center gap-1 font-semibold" title="Enable wrap detection for this track">
-                                                    <input type="checkbox" id="s5TrackWrapped" onchange="s5UpdateTrackWrapped()"> Track is Wrapped
-                                                </label>
-                                            </div>
+                                        <div style="padding-top:8px; border-top:1px dashed #334155; font-size:0.85em; margin-bottom: 8px;">
+                                            <label class="cursor-pointer text-sm flex-center gap-1 font-semibold" title="Enable wrap detection for this track">
+                                                <input type="checkbox" id="s5TrackWrapped" onchange="s5UpdateTrackWrapped()"> Track is Wrapped
+                                            </label>
+                                        </div>
+                                        <div id="wrapTraceSettings" style="font-size:0.85em;">
                                             <div class="grid" style="grid-template-columns:1fr 1fr; gap:8px;">
                                                 <div class="field">
                                                     <label>Wrap Left Value</label>
@@ -4020,15 +4020,18 @@
             const entryKey = Object.keys(lastDigitizedCurves).find(k => normalizeCurveKey(k) === normKey);
             const entry = entryKey ? lastDigitizedCurves[entryKey] : null;
             
-            if (!entry || !isWrapped) {
+            if (!entry) {
                 controls.style.display = 'none';
                 return;
             }
             
             controls.style.display = 'block';
             
+            const cb = document.getElementById('s5TrackWrapped');
+            if (cb) cb.checked = isWrapped;
+            
             // Ensure wrapLayer exists if the box is checked
-            if (!entry.wrapLayer && lastDigitizedDepth) {
+            if (isWrapped && !entry.wrapLayer && lastDigitizedDepth) {
                 entry.wrapLayer = {
                     values: new Array(lastDigitizedDepth.length).fill(null),
                     left_value: null,
@@ -4042,6 +4045,9 @@
                 document.getElementById('wrapRightValue').value = entry.wrapLayer.right_value ?? '';
                 document.getElementById('wrapColor').value = entry.wrapLayer.color ?? '#00ffff';
             }
+            
+            const wts = document.getElementById('wrapTraceSettings');
+            if (wts) wts.style.display = isWrapped ? 'block' : 'none';
         }
         
         function onCurveWrappedChange(idx) {
@@ -4181,6 +4187,16 @@
         function s5UpdateWrapConfig() {
             const sel = document.getElementById('editCurveSelect');
             const targetCurve = sel ? sel.value : null;
+            if (!targetCurve) return;
+            
+            // Also keep track.wrapped in sync
+            const track = findTrackByCurveId(targetCurve);
+            if (track) {
+                const cb = document.getElementById('s5TrackWrapped');
+                if (cb) {
+                    track.wrapped = cb.checked;
+                }
+            }
             if (!targetCurve || !lastDigitizedCurves) return;
             const normKey = normalizeCurveKey(targetCurve);
             const entryKey = Object.keys(lastDigitizedCurves).find(k => normalizeCurveKey(k) === normKey);
@@ -4198,6 +4214,34 @@
                 rebuildCurveTraceFromDigitized(targetCurve);
                 if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
             }
+        }
+
+        function s5UpdateTrackWrapped() {
+            const cb = document.getElementById('s5TrackWrapped');
+            if (!cb) return;
+            
+            const sel = document.getElementById('editCurveSelect');
+            const targetCurve = sel ? sel.value : null;
+            if (!targetCurve) return;
+            
+            // Sync with the track model
+            const track = findTrackByCurveId(targetCurve);
+            if (track) {
+                track.wrapped = cb.checked;
+            }
+            
+            // Sync with Step 2 checkbox
+            const idx = findCurveCardIndex(targetCurve);
+            if (idx >= 0) {
+                const step2Cb = document.getElementById(`wrapped${idx}`);
+                if (step2Cb && step2Cb.checked !== cb.checked) {
+                    step2Cb.checked = cb.checked;
+                    step2Cb.dispatchEvent(new Event('change'));
+                }
+            }
+            
+            s5SyncTraceLayers(targetCurve);
+            if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
         }
 
         function s5SyncToCurve(fieldId) {
