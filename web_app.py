@@ -10599,44 +10599,44 @@ def digitize():
             # smoothness penalty) and rely mostly on the DP + local maxima
             # refinement rather than heavy 1D smoothing so the traced path can
             # hug the colored curve as tightly as possible.
-        curve_smooth_window = smooth_window
-        refine_kwargs = {}
-        outlier_threshold = 3.0
-        if mode in colored_modes:
-            # NO smoothing: window = 1 means no median filter applied
-            curve_smooth_window = 1
-            # MAXIMUM local window and absolute minimum threshold to snap to any ink
-            refine_kwargs = {"dominance_ratio": snap_threshold, "max_shift": 25, "min_prob": 0.005}
-            # Disable outlier removal - keep every point for maximum accuracy
-            outlier_threshold = 100.0  # Effectively disabled
-        else:
-            # Use user threshold for non-colored modes too (default was 1.1)
-            refine_kwargs = {"dominance_ratio": snap_threshold}
-            # Non-GR black curves are supposed to follow visible crest tips.
-            # Any median smoothing here flattens short visible crest tips, so
-            # leave the trace unsmoothed and let the black-specific edge snap
-            # shape it instead.
-            if curve_type.upper() != "GR":
+            curve_smooth_window = smooth_window
+            refine_kwargs = {}
+            outlier_threshold = 3.0
+            if mode in colored_modes:
+                # NO smoothing: window = 1 means no median filter applied
                 curve_smooth_window = 1
-                outlier_threshold = 12.0
-        # Effectively zero smoothness penalty for colored modes to prefer jagged ink over smooth artifacts.
-        # Black mode needs looser DP than the old max_step=3 / smooth_lambda=0.5 settings;
-        # otherwise the path lags real excursions and the later black refiners are forced to
-        # drag a too-stiff base trace sideways after the fact.
-        if mode in colored_modes:
-            dp_smooth_lambda = 0.001
-            dp_curv_lambda = 0.001
-            max_step_dp = 200  # Allow unlimited movement to follow gamma ray spikes
-        else:
-            curve_type_upper = curve_type.upper()
-            if curve_type_upper == "GR":
+                # MAXIMUM local window and absolute minimum threshold to snap to any ink
+                refine_kwargs = {"dominance_ratio": snap_threshold, "max_shift": 25, "min_prob": 0.005}
+                # Disable outlier removal - keep every point for maximum accuracy
+                outlier_threshold = 100.0  # Effectively disabled
+            else:
+                # Use user threshold for non-colored modes too (default was 1.1)
+                refine_kwargs = {"dominance_ratio": snap_threshold}
+                # Non-GR black curves are supposed to follow visible crest tips.
+                # Any median smoothing here flattens short visible crest tips, so
+                # leave the trace unsmoothed and let the black-specific edge snap
+                # shape it instead.
+                if curve_type.upper() != "GR":
+                    curve_smooth_window = 1
+                    outlier_threshold = 12.0
+            # Effectively zero smoothness penalty for colored modes to prefer jagged ink over smooth artifacts.
+            # Black mode needs looser DP than the old max_step=3 / smooth_lambda=0.5 settings;
+            # otherwise the path lags real excursions and the later black refiners are forced to
+            # drag a too-stiff base trace sideways after the fact.
+            if mode in colored_modes:
                 dp_smooth_lambda = 0.001
                 dp_curv_lambda = 0.001
-                max_step_dp = 150
+                max_step_dp = 200  # Allow unlimited movement to follow gamma ray spikes
             else:
-                dp_smooth_lambda = 0.005
-                dp_curv_lambda = 0.001
-                max_step_dp = 150
+                curve_type_upper = curve_type.upper()
+                if curve_type_upper == "GR":
+                    dp_smooth_lambda = 0.001
+                    dp_curv_lambda = 0.001
+                    max_step_dp = 150
+                else:
+                    dp_smooth_lambda = 0.005
+                    dp_curv_lambda = 0.001
+                    max_step_dp = 150
 
         # Optional pixel-perfect skeleton tracer (preserve every bump)
         if not enable_viterbi:
