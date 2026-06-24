@@ -4842,6 +4842,11 @@
                     scale_type: (document.getElementById(`scaleType${i}`)?.value || 'linear').toLowerCase(),
                     wrapped: !!document.getElementById(`wrapped${i}`)?.checked,
                     mode: document.getElementById(`mode${i}`)?.value || 'black',
+                    enable_grid_suppression: document.getElementById(`traceGridSuppression${i}`) ? document.getElementById(`traceGridSuppression${i}`).checked : true,
+                    enable_curve_masking: document.getElementById(`traceCurveMasking${i}`) ? document.getElementById(`traceCurveMasking${i}`).checked : true,
+                    enable_cc_cleanup: document.getElementById(`traceCCCleanup${i}`) ? document.getElementById(`traceCCCleanup${i}`).checked : true,
+                    enable_skeletonization: document.getElementById(`traceSkeletonization${i}`) ? document.getElementById(`traceSkeletonization${i}`).checked : true,
+                    enable_viterbi: document.getElementById(`traceViterbi${i}`) ? document.getElementById(`traceViterbi${i}`).checked : true,
                 });
             }
 
@@ -10147,6 +10152,23 @@
             summaryEl.textContent = swapMessage;
         }
 
+        window.updateTraceToggles = function(i) {
+            const preset = document.getElementById(`tracePreset${i}`).value;
+            if (preset === 'best_auto_trace') {
+                document.getElementById(`traceGridSuppression${i}`).checked = true;
+                document.getElementById(`traceCurveMasking${i}`).checked = true;
+                document.getElementById(`traceCCCleanup${i}`).checked = true;
+                document.getElementById(`traceSkeletonization${i}`).checked = true;
+                document.getElementById(`traceViterbi${i}`).checked = true;
+            } else if (preset === 'legacy_viterbi') {
+                document.getElementById(`traceGridSuppression${i}`).checked = false;
+                document.getElementById(`traceCurveMasking${i}`).checked = false;
+                document.getElementById(`traceCCCleanup${i}`).checked = false;
+                document.getElementById(`traceSkeletonization${i}`).checked = false;
+                document.getElementById(`traceViterbi${i}`).checked = true;
+            }
+        };
+
         function applyHeaderScaleForCurve(index) {
             const leftValEl = document.getElementById(`leftVal${index}`);
             const rightValEl = document.getElementById(`rightVal${index}`);
@@ -10721,6 +10743,37 @@
                             <div class="field">
                                 <label for="wrapped${i}" style="font-size:0.8em;">Wrapped</label>
                                 <input type="checkbox" id="wrapped${i}" title="Curve re-enters opposite side (common on old resistivity)">
+                            </div>
+                            <!-- Trace Pipeline controls -->
+                            <div class="field" style="grid-column: span 2;">
+                                <label for="tracePreset${i}">Trace Preset</label>
+                                <select id="tracePreset${i}" onchange="updateTraceToggles(${i})">
+                                    <option value="best_auto_trace" selected>Best Auto Trace</option>
+                                    <option value="legacy_viterbi">Legacy Viterbi</option>
+                                    <option value="custom">Custom</option>
+                                </select>
+                            </div>
+                            <div class="field" style="grid-column: span 2;">
+                                <label style="cursor: pointer; color: #4DA8DA; display: inline-block; user-select: none;" onclick="const el = document.getElementById('advancedTraceToggles${i}'); el.style.display = el.style.display === 'none' ? 'block' : 'none';">
+                                    ▶ Advanced Pipeline Settings
+                                </label>
+                                <div id="advancedTraceToggles${i}" style="display: none; padding-top: 8px; font-size: 0.85rem; border: 1px solid #333; padding: 10px; border-radius: 4px; background: #1a1a1a; margin-top: 5px;">
+                                    <label style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
+                                        <input type="checkbox" id="traceGridSuppression${i}" checked onchange="document.getElementById('tracePreset${i}').value = 'custom';"> Grid Suppression
+                                    </label>
+                                    <label style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
+                                        <input type="checkbox" id="traceCurveMasking${i}" checked onchange="document.getElementById('tracePreset${i}').value = 'custom';"> Curve Masking
+                                    </label>
+                                    <label style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
+                                        <input type="checkbox" id="traceCCCleanup${i}" checked onchange="document.getElementById('tracePreset${i}').value = 'custom';"> Connected-Component Cleanup
+                                    </label>
+                                    <label style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
+                                        <input type="checkbox" id="traceSkeletonization${i}" checked onchange="document.getElementById('tracePreset${i}').value = 'custom';"> Skeletonization / Thinning
+                                    </label>
+                                    <label style="display: flex; align-items: center; gap: 6px;">
+                                        <input type="checkbox" id="traceViterbi${i}" checked onchange="document.getElementById('tracePreset${i}').value = 'custom';"> Viterbi Dynamic Programming Tracer
+                                    </label>
+                                </div>
                             </div>
                         </div>
                         <div class="hint-text" id="curveHint${i}" style="margin-top:4px;"></div>
