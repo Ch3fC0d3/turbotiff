@@ -12658,6 +12658,58 @@ def download_las_zip():
     try:
         depth_arr = np.array(depths, dtype=np.float32)
         
+        # --- MERGE WRAPPED CURVES ---
+        processed_curves = {}
+        wrap_curves = {}
+        
+        # Separate normal curves from wrapped curves (case-insensitive suffix)
+        for curve_name, curve_info in curves.items():
+            c_lower = curve_name.lower()
+            if c_lower.endswith('_wrap') or c_lower.endswith('_wrapped'):
+                wrap_curves[curve_name] = curve_info
+            else:
+                # Make a deep copy to avoid mutating original dict if reused
+                processed_curves[curve_name] = {
+                    'unit': curve_info.get('unit', ''),
+                    'values': list(curve_info.get('values', []))
+                }
+                
+        # Apply wrapped curve data to main curves
+        for wrap_name, wrap_info in wrap_curves.items():
+            c_lower = wrap_name.lower()
+            if c_lower.endswith('_wrapped'):
+                main_name_lower = c_lower[:-8]
+            else:
+                main_name_lower = c_lower[:-5]
+                
+            # Find actual main curve name (case-insensitive)
+            actual_main_name = None
+            for name in processed_curves.keys():
+                if name.lower() == main_name_lower:
+                    actual_main_name = name
+                    break
+                    
+            if actual_main_name:
+                main_vals = np.array(processed_curves[actual_main_name]['values'], dtype=np.float32)
+                wrap_vals = np.array(wrap_info.get('values', []), dtype=np.float32)
+                
+                # Check for length mismatch (shouldn't happen but be safe)
+                min_len = min(len(main_vals), len(wrap_vals))
+                
+                # A value is valid if it's not nan and not the standard LAS null value
+                valid_wrap_mask = ~np.isnan(wrap_vals[:min_len]) & (wrap_vals[:min_len] != -999.25)
+                
+                main_vals[:min_len][valid_wrap_mask] = wrap_vals[:min_len][valid_wrap_mask]
+                processed_curves[actual_main_name]['values'] = main_vals.tolist()
+                
+                # Inherit units if main curve doesn't have one and wrapped does
+                if not processed_curves[actual_main_name]['unit'] and wrap_info.get('unit'):
+                    processed_curves[actual_main_name]['unit'] = wrap_info['unit']
+                    
+        # Update curves dictionary for the loop below
+        curves = processed_curves
+        # ----------------------------
+        
         # Create in-memory ZIP
         zip_buffer = BytesIO()
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:

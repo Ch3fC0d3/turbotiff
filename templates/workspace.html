@@ -1769,6 +1769,10 @@
                                 <div class="curve-list-wrapper" style="margin-top:4px;">
                                     <div id="curveListView" class="curve-list-summary hint-text"></div>
                                 </div>
+                                
+                                <div class="hint-text mt-1" style="font-size: 0.85em; background: #1e293b; padding: 8px; border-radius: 4px; border-left: 3px solid #3b82f6; margin-top: 8px;">
+                                    <strong>Tip:</strong> For wrapped/off-scale curves, create a second curve named <code>[main curve]_wrap</code> (e.g., <code>GR_wrap</code>), trace the wrapped segment separately, and set its scale to the corrected wrapped range. The export will automatically combine it into the main curve.
+                                </div>
 
                                 <div style="margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
                                     <button class="btn" type="button" onclick="runDigitization()" id="digitizeBtn">
