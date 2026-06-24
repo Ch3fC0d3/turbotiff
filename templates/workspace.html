@@ -1820,6 +1820,35 @@
                                     <div class="hint-text" style="font-weight:600; font-size:0.82rem; margin-bottom:6px;">
                                         Advanced — <span id="step5CurveName" style="color:#94a3b8;">none selected</span>
                                     </div>
+                                    <div class="trace-layer-controls mb-2" id="traceLayerControls" style="display:none; background:#1e293b; padding:8px; border-radius:6px; border:1px solid #334155;">
+                                        <label style="font-weight:600; font-size:0.85em; color:#e2e8f0; margin-bottom:4px; display:block;">Trace Layers</label>
+                                        <div class="flex-wrap-center gap-2">
+                                            <label class="cursor-pointer text-sm flex-center gap-1"><input type="radio" name="activeLayer" value="main" checked onchange="s5SwitchLayer('main')"> Main Trace</label>
+                                            <label class="cursor-pointer text-sm flex-center gap-1" id="wrapTraceRadioContainer" style="display:none;"><input type="radio" name="activeLayer" value="wrap" onchange="s5SwitchLayer('wrap')"> Wrap Trace</label>
+                                            
+                                            <button type="button" class="btn btn-xs ml-auto" id="addWrapTraceBtn" onclick="s5AddWrapTrace()">+ Add Wrap Trace</button>
+                                            <button type="button" class="btn btn-xs" id="clearWrapTraceBtn" style="display:none;" onclick="s5ClearWrapTrace()">Clear Wrap</button>
+                                            <button type="button" class="btn btn-xs" id="deleteWrapTraceBtn" style="display:none; color:#f87171; border-color:#ef4444;" onclick="s5DeleteWrapTrace()">Delete Wrap</button>
+                                        </div>
+                                        <div id="wrapTraceSettings" style="display:none; margin-top:8px; padding-top:8px; border-top:1px dashed #334155; font-size:0.85em;">
+                                            <div class="grid" style="grid-template-columns:1fr 1fr; gap:8px;">
+                                                <div class="field">
+                                                    <label>Wrap Left Value</label>
+                                                    <input type="number" id="wrapLeftValue" step="any" onchange="s5UpdateWrapConfig()">
+                                                </div>
+                                                <div class="field">
+                                                    <label>Wrap Right Value</label>
+                                                    <input type="number" id="wrapRightValue" step="any" onchange="s5UpdateWrapConfig()">
+                                                </div>
+                                                <div class="field" style="grid-column:1/-1;">
+                                                    <label style="display:flex; justify-content:space-between; align-items:center;">
+                                                        Wrap Trace Color
+                                                        <input type="color" id="wrapColor" value="#00ffff" style="width:24px; height:24px; padding:0; cursor:pointer;" onchange="s5UpdateWrapConfig()">
+                                                    </label>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
                                     <div class="grid" style="grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;">
                                         <div class="field">
                                             <label>X offset</label>
@@ -2077,10 +2106,16 @@
         }
 
         function getActiveCurveTracePoints(curveId = null) {
-            const traceKey = getActiveCurveTraceKey(curveId);
+            let traceKey = getActiveCurveTraceKey(curveId);
             if (!traceKey || !lastCurveTraces || typeof lastCurveTraces !== 'object') {
                 return { traceKey: null, points: null };
             }
+            
+            // Redirect to wrap layer if active
+            if (editCurveLayer === 'wrap') {
+                traceKey = traceKey + '_wrap';
+            }
+            
             let pts = lastCurveTraces[traceKey];
             if (!Array.isArray(pts)) {
                 const upper = traceKey.toUpperCase();
@@ -2648,6 +2683,7 @@
 
         // Toolbar State
         let activeTool = 'pointer'; // 'pointer', 'draw', 'addPoint', 'eraser'
+        let editCurveLayer = 'main'; // 'main' or 'wrap'
         let crosshairEnabled = false;
         let eraserStart = null;
         let eraserBox = null;
@@ -3944,6 +3980,132 @@
                 if (src && dst) dst.checked = src.checked;
             });
             updateScaleWrapStatus(mnemonic);
+            s5SyncTraceLayers(mnemonic);
+        }
+
+        function s5SyncTraceLayers(mnemonic) {
+            const controls = document.getElementById('traceLayerControls');
+            if (!controls || !mnemonic || !lastDigitizedCurves) {
+                if (controls) controls.style.display = 'none';
+                return;
+            }
+            
+            const normKey = normalizeCurveKey(mnemonic);
+            const entryKey = Object.keys(lastDigitizedCurves).find(k => normalizeCurveKey(k) === normKey);
+            const entry = entryKey ? lastDigitizedCurves[entryKey] : null;
+            
+            if (!entry) {
+                controls.style.display = 'none';
+                return;
+            }
+            
+            controls.style.display = 'block';
+            
+            const hasWrapLayer = !!entry.wrapLayer;
+            document.getElementById('wrapTraceRadioContainer').style.display = hasWrapLayer ? '' : 'none';
+            document.getElementById('wrapTraceSettings').style.display = hasWrapLayer ? '' : 'none';
+            document.getElementById('addWrapTraceBtn').style.display = hasWrapLayer ? 'none' : '';
+            document.getElementById('clearWrapTraceBtn').style.display = hasWrapLayer ? '' : 'none';
+            document.getElementById('deleteWrapTraceBtn').style.display = hasWrapLayer ? '' : 'none';
+            
+            if (hasWrapLayer) {
+                document.getElementById('wrapLeftValue').value = entry.wrapLayer.left_value ?? '';
+                document.getElementById('wrapRightValue').value = entry.wrapLayer.right_value ?? '';
+                document.getElementById('wrapColor').value = entry.wrapLayer.color ?? '#00ffff';
+                
+                // Keep the current layer selection if possible, otherwise revert to main
+                if (editCurveLayer === 'wrap') {
+                    document.querySelector('input[name="activeLayer"][value="wrap"]').checked = true;
+                } else {
+                    document.querySelector('input[name="activeLayer"][value="main"]').checked = true;
+                    editCurveLayer = 'main';
+                }
+            } else {
+                document.querySelector('input[name="activeLayer"][value="main"]').checked = true;
+                editCurveLayer = 'main';
+            }
+        }
+
+        function s5SwitchLayer(layer) {
+            editCurveLayer = layer;
+        }
+
+        function s5AddWrapTrace() {
+            if (!editCurveId || !lastDigitizedCurves || !lastDigitizedDepth) return;
+            const normKey = normalizeCurveKey(editCurveId);
+            const entryKey = Object.keys(lastDigitizedCurves).find(k => normalizeCurveKey(k) === normKey);
+            if (!entryKey) return;
+            
+            const entry = lastDigitizedCurves[entryKey];
+            if (!entry.wrapLayer) {
+                entry.wrapLayer = {
+                    values: new Array(lastDigitizedDepth.length).fill(null),
+                    left_value: null,
+                    right_value: null,
+                    color: '#00ffff'
+                };
+            }
+            
+            // Auto-switch to the new layer
+            s5SwitchLayer('wrap');
+            s5SyncTraceLayers(editCurveId);
+            
+            // Rebuild canvas overlays to show the new wrap trace
+            rebuildCurveTraceFromDigitized(editCurveId);
+            if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
+            
+            showStatus(`Added Wrap Trace to ${editCurveId}. You are now editing the Wrap Trace.`, 'success');
+        }
+
+        function s5DeleteWrapTrace() {
+            if (!editCurveId || !lastDigitizedCurves) return;
+            const normKey = normalizeCurveKey(editCurveId);
+            const entryKey = Object.keys(lastDigitizedCurves).find(k => normalizeCurveKey(k) === normKey);
+            if (!entryKey) return;
+            
+            if (confirm(`Delete the Wrap Trace for ${editCurveId}? This cannot be undone.`)) {
+                delete lastDigitizedCurves[entryKey].wrapLayer;
+                s5SwitchLayer('main');
+                s5SyncTraceLayers(editCurveId);
+                rebuildCurveTraceFromDigitized(editCurveId);
+                if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
+            }
+        }
+        
+        function s5ClearWrapTrace() {
+            if (!editCurveId || !lastDigitizedCurves || !lastDigitizedDepth) return;
+            const normKey = normalizeCurveKey(editCurveId);
+            const entryKey = Object.keys(lastDigitizedCurves).find(k => normalizeCurveKey(k) === normKey);
+            if (!entryKey) return;
+            
+            const entry = lastDigitizedCurves[entryKey];
+            if (entry && entry.wrapLayer) {
+                if (confirm(`Clear all points on the Wrap Trace for ${editCurveId}?`)) {
+                    entry.wrapLayer.values = new Array(lastDigitizedDepth.length).fill(null);
+                    rebuildCurveTraceFromDigitized(editCurveId);
+                    if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
+                }
+            }
+        }
+
+        function s5UpdateWrapConfig() {
+            if (!editCurveId || !lastDigitizedCurves) return;
+            const normKey = normalizeCurveKey(editCurveId);
+            const entryKey = Object.keys(lastDigitizedCurves).find(k => normalizeCurveKey(k) === normKey);
+            if (!entryKey) return;
+            
+            const entry = lastDigitizedCurves[entryKey];
+            if (entry && entry.wrapLayer) {
+                const lv = document.getElementById('wrapLeftValue').value;
+                const rv = document.getElementById('wrapRightValue').value;
+                entry.wrapLayer.left_value = lv ? parseFloat(lv) : null;
+                entry.wrapLayer.right_value = rv ? parseFloat(rv) : null;
+                entry.wrapLayer.color = document.getElementById('wrapColor').value;
+                
+                // Color update might require a re-render of overlays
+                rebuildCurveTraceFromDigitized(editCurveId);
+                if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
+            }
         }
 
         function s5SyncToCurve(fieldId) {
@@ -4277,6 +4439,25 @@
             return topPx + frac * (bottomPx - topPx);
         }
 
+        function getActiveLayerValues(entry) {
+            if (!entry) return null;
+            if (editCurveLayer === 'wrap' && entry.wrapLayer && Array.isArray(entry.wrapLayer.values)) {
+                return entry.wrapLayer.values;
+            }
+            return entry.values;
+        }
+
+        function getActiveLayerTrackConfig(entry, track) {
+            if (!track) return null;
+            if (editCurveLayer === 'wrap' && entry && entry.wrapLayer) {
+                const wrapTrack = { ...track };
+                if (Number.isFinite(entry.wrapLayer.left_value)) wrapTrack.scaleMin = entry.wrapLayer.left_value;
+                if (Number.isFinite(entry.wrapLayer.right_value)) wrapTrack.scaleMax = entry.wrapLayer.right_value;
+                return wrapTrack;
+            }
+            return track;
+        }
+
         function pixelToTrackValue(xImg, track, options = {}) {
             if (!track) return null;
             const leftX = track.leftX;
@@ -4581,6 +4762,33 @@
 
             if (options.persist !== false) {
                 lastCurveTraces[traceKey] = points;
+                
+                // Build wrap layer trace points if it exists
+                if (found.entry.wrapLayer && Array.isArray(found.entry.wrapLayer.values)) {
+                    const wrapValues = found.entry.wrapLayer.values;
+                    const wrapPoints = [];
+                    // Create a synthetic track config for the wrap layer to use its custom scales
+                    const wrapTrack = { ...track };
+                    if (Number.isFinite(found.entry.wrapLayer.left_value)) wrapTrack.scaleMin = found.entry.wrapLayer.left_value;
+                    if (Number.isFinite(found.entry.wrapLayer.right_value)) wrapTrack.scaleMax = found.entry.wrapLayer.right_value;
+                    
+                    // Note: Wrap traces don't need hole-filling interpolation right now, 
+                    // we just project the valid values back to pixels
+                    for (let dIdx = 0; dIdx < count; dIdx++) {
+                        const wVal = wrapValues[dIdx];
+                        if (isMissingDigitizedValue(wVal)) continue;
+                        
+                        const wRawX = trackValueToPixelX(wVal, wrapTrack, { rawValue: true });
+                        const yImg = getPixelYForDepthIndex(dIdx, depthCfg);
+                        if (!Number.isFinite(wRawX) || !Number.isFinite(yImg)) continue;
+                        
+                        const wDispX = clamp(wRawX, leftBound, rightBound);
+                        wrapPoints.push([wDispX, yImg, dIdx, 'manual', Date.now(), wRawX]);
+                    }
+                    lastCurveTraces[traceKey + '_wrap'] = wrapPoints;
+                } else {
+                    delete lastCurveTraces[traceKey + '_wrap'];
+                }
             }
             return { traceKey, points };
         }
@@ -5216,10 +5424,10 @@
                     p[0] = newX;
 
                     const dIdx = Number.isInteger(p[2]) ? p[2] : null;
-                    if (dIdx != null && dIdx >= 0 && dIdx < entry.values.length) {
-                        const newVal = pixelToTrackValue(newX, track, { depthIndex: dIdx, values: entry.values });
+                    if (dIdx != null && dIdx >= 0 && dIdx < getActiveLayerValues(entry).length) {
+                        const newVal = pixelToTrackValue(newX, getActiveLayerTrackConfig(entry, track), { depthIndex: dIdx, values: getActiveLayerValues(entry) });
                         if (Number.isFinite(newVal)) {
-                            entry.values[dIdx] = newVal;
+                            getActiveLayerValues(entry)[dIdx] = newVal;
                         }
                     }
                 }
@@ -5675,7 +5883,7 @@
             if (!entry || !Array.isArray(entry.values) || idx >= entry.values.length) return;
 
             const clampedX = Math.max(targetTrack.leftX, Math.min(targetTrack.rightX, xImg));
-            const newValue = pixelToTrackValue(clampedX, targetTrack, { depthIndex: idx, values: entry.values });
+            const newValue = pixelToTrackValue(clampedX, getActiveLayerTrackConfig(entry, targetTrack), { depthIndex: idx, values: getActiveLayerValues(entry) });
             if (!Number.isFinite(newValue)) return;
 
             // Save old value for undo
@@ -5699,7 +5907,7 @@
             }
             editUndoStack.push({ curveKey, curveId: editCurveId, traceKey, idx, oldValue, oldTraceX, oldTraceY, yImg: yImgUse, depthIndex: idx, pointIndex });
 
-            entry.values[idx] = newValue;
+            getActiveLayerValues(entry)[idx] = newValue;
 
             if (!lastCurveTraces) {
                 lastCurveTraces = {};
@@ -5803,10 +6011,10 @@
                 // Skip pinned depths
                 if (isDepthIndexPinned(editCurveId, idx)) continue;
                 const yImgUse = getPixelYForDepthIndex(idx, depthCfg) ?? yImg;
-                const newValue = pixelToTrackValue(xImg, targetTrack, { depthIndex: idx, values: entry.values });
+                const newValue = pixelToTrackValue(xImg, getActiveLayerTrackConfig(entry, targetTrack), { depthIndex: idx, values: getActiveLayerValues(entry) });
                 if (!Number.isFinite(newValue)) continue;
                 if (idx >= entry.values.length) continue;
-                entry.values[idx] = newValue;
+                getActiveLayerValues(entry)[idx] = newValue;
                 // Update / insert trace point
                 const activeTrace = getActiveCurveTracePoints(editCurveId);
                 const pts2 = activeTrace.points || [];
@@ -5937,7 +6145,7 @@
                 
                 const newDisplayX = wrapActive ? wrapRawXToTrack(newRawX, targetTrack) : Math.max(targetTrack.leftX, Math.min(targetTrack.rightX, newRawX));
                 
-                entry.values[dIdx] = pointValue;
+                getActiveLayerValues(entry)[dIdx] = pointValue;
                 touchedDepths.push(dIdx);
 
                 let existingIdx = findBestPointIndexForDepth(pts, dIdx, pointY, newDisplayX);
@@ -6027,7 +6235,7 @@
                 pointIndex: nearestIndex,
             });
 
-            entry.values[depthIdx] = null;
+            getActiveLayerValues(entry)[depthIdx] = null;
             fillDeletedDepthSpan(entry.values, depthIdx, depthIdx, lastNullValue);
 
             // Remove the point from the trace array
@@ -6076,8 +6284,8 @@
             // Push undo snapshot
             const undoPoints = pts.map((p, i) => ({ pointIndex: i, oldX: p[0], oldDepthIndex: p[2] }));
             const undoValues = [];
-            if (found && Array.isArray(found.entry && found.entry.values)) {
-                found.entry.values.forEach((v, i) => undoValues.push({ idx: i, oldValue: v }));
+            if (found && Array.isArray(found.entry && getActiveLayerValues(found.entry))) {
+                getActiveLayerValues(found.entry).forEach((v, i) => undoValues.push({ idx: i, oldValue: v }));
             }
             editUndoStack.push({
                 type: 'bulk_transform',
@@ -6132,9 +6340,9 @@
                 pts[i][0] = newXs[i];
                 if (track && found && found.entry) {
                     const dIdx = Number.isInteger(pts[i][2]) ? pts[i][2] : -1;
-                    const val = pixelToTrackValue(newXs[i], track, { depthIndex: dIdx, values: found.entry.values });
-                    if (Number.isFinite(val) && dIdx >= 0 && dIdx < found.entry.values.length) {
-                        found.entry.values[dIdx] = val;
+                    const val = pixelToTrackValue(newXs[i], getActiveLayerTrackConfig(found.entry, track), { depthIndex: dIdx, values: getActiveLayerValues(found.entry) });
+                    if (Number.isFinite(val) && dIdx >= 0 && dIdx < getActiveLayerValues(found.entry).length) {
+                        getActiveLayerValues(found.entry)[dIdx] = val;
                     }
                 }
             }
@@ -6192,8 +6400,8 @@
             // Push undo snapshot
             const undoPoints = pts.map((p, i) => ({ pointIndex: i, oldX: p[0], oldDepthIndex: p[2] }));
             const undoValues = [];
-            if (found && Array.isArray(found.entry && found.entry.values)) {
-                found.entry.values.forEach((v, i) => undoValues.push({ idx: i, oldValue: v }));
+            if (found && Array.isArray(found.entry && getActiveLayerValues(found.entry))) {
+                getActiveLayerValues(found.entry).forEach((v, i) => undoValues.push({ idx: i, oldValue: v }));
             }
             editUndoStack.push({
                 type: 'bulk_transform',
@@ -6229,9 +6437,9 @@
                 pts[i][0] = newX;
                 if (track && found && found.entry) {
                     const dIdx = Number.isInteger(pts[i][2]) ? pts[i][2] : -1;
-                    const val = pixelToTrackValue(newX, track, { depthIndex: dIdx, values: found.entry.values });
-                    if (Number.isFinite(val) && dIdx >= 0 && dIdx < found.entry.values.length) {
-                        found.entry.values[dIdx] = val;
+                    const val = pixelToTrackValue(newX, getActiveLayerTrackConfig(found.entry, track), { depthIndex: dIdx, values: getActiveLayerValues(found.entry) });
+                    if (Number.isFinite(val) && dIdx >= 0 && dIdx < getActiveLayerValues(found.entry).length) {
+                        getActiveLayerValues(found.entry)[dIdx] = val;
                     }
                 }
             }
@@ -6750,10 +6958,10 @@
                 const depthIdx = (Array.isArray(pts[idx]) && Number.isInteger(pts[idx][2])) ? pts[idx][2] : -1;
                 if (curveId && isDepthIndexPinned(curveId, depthIdx)) return;
                 pts[idx][0] = newX;
-                const newVal = pixelToTrackValue(newX, targetTrack, { depthIndex: depthIdx, values: entry.values });
+                const newVal = pixelToTrackValue(newX, getActiveLayerTrackConfig(entry, targetTrack), { depthIndex: depthIdx, values: getActiveLayerValues(entry) });
                 if (Number.isFinite(newVal)) {
                     const depthIdx = (Array.isArray(pts[idx]) && Number.isInteger(pts[idx][2])) ? pts[idx][2] : -1;
-                    if (depthIdx >= 0 && depthIdx < entry.values.length) entry.values[depthIdx] = newVal;
+                    if (depthIdx >= 0 && depthIdx < getActiveLayerValues(entry).length) getActiveLayerValues(entry)[depthIdx] = newVal;
                 }
             });
         }
@@ -6805,7 +7013,7 @@
                 const deltaValue = (deltaX / trackWidth) * trackRange;
                 targetValue = centerN.originalValue + deltaValue;
             } else {
-                targetValue = pixelToTrackValue(xImg, targetTrack, { depthIndex: centerN.depthIndex, values: entry.values });
+                targetValue = pixelToTrackValue(xImg, getActiveLayerTrackConfig(entry, targetTrack), { depthIndex: centerN.depthIndex, values: getActiveLayerValues(entry) });
             }
 
             // Check smoothing toggle
@@ -6828,7 +7036,7 @@
             // Pass 1: Clear old indices to prevent values overwriting each other when shifting up/down
             neighbors.forEach(n => {
                 if (isDepthIndexPinned(state.curveId, n.depthIndex) && n.pointIndex !== centerIndex) return;
-                if (n.depthIndex >= 0 && n.depthIndex < entry.values.length) {
+                if (n.depthIndex >= 0 && n.depthIndex < getActiveLayerValues(entry).length) {
                     entry.values[n.depthIndex] = null;
                 }
             });
@@ -6849,7 +7057,7 @@
                     weight = 1.0 - (depthDelta / maxRadius);
                     if (weight <= 0) {
                         // Perfectly restore unmodified points
-                        if (n.depthIndex >= 0 && n.depthIndex < entry.values.length) {
+                        if (n.depthIndex >= 0 && n.depthIndex < getActiveLayerValues(entry).length) {
                             entry.values[n.depthIndex] = n.originalValue;
                         }
                         pts[n.pointIndex][0] = n.originalX;
@@ -6907,7 +7115,7 @@
                 let newDepthIndex = n.depthIndex;
                 if (Number.isFinite(newDepth)) {
                     const idx = findNearestDepthIndex(newDepth, lastDigitizedDepth);
-                    if (idx >= 0 && idx < entry.values.length) {
+                    if (idx >= 0 && idx < getActiveLayerValues(entry).length) {
                         newDepthIndex = idx;
                     }
                 }
@@ -6918,7 +7126,7 @@
 
                 const newVal = pixelToTrackValue(newRawX, targetTrack, { rawX: true });
                 if (Number.isFinite(newVal)) {
-                    entry.values[newDepthIndex] = newVal;
+                    getActiveLayerValues(entry)[newDepthIndex] = newVal;
                 }
             });
         }
@@ -7228,9 +7436,9 @@
                     const snapped = snapToCurveColor(snapX, snapY, targetTrack.leftX, targetTrack.rightX, { mode: trackModeForSnap });
                     if (snapped.x !== snapX) {
                         pts[localIdx][0] = snapped.x;
-                        const newVal = pixelToTrackValue(snapped.x, targetTrack, { depthIndex: snapDIdx, values: entry.values });
-                        if (Number.isFinite(newVal) && snapDIdx >= 0 && snapDIdx < entry.values.length) {
-                            entry.values[snapDIdx] = newVal;
+                        const newVal = pixelToTrackValue(snapped.x, getActiveLayerTrackConfig(entry, targetTrack), { depthIndex: snapDIdx, values: getActiveLayerValues(entry) });
+                        if (Number.isFinite(newVal) && snapDIdx >= 0 && snapDIdx < getActiveLayerValues(entry).length) {
+                            getActiveLayerValues(entry)[snapDIdx] = newVal;
                         }
                     }
                 }
@@ -7358,9 +7566,9 @@
                         showSnapPulse(refinedX, currentY);
 
                         // Update the LAS value
-                        const newVal = pixelToTrackValue(refinedX, targetTrack, { depthIndex, values: entry.values });
-                        if (Number.isFinite(newVal) && depthIndex >= 0 && depthIndex < entry.values.length) {
-                            entry.values[depthIndex] = newVal;
+                        const newVal = pixelToTrackValue(refinedX, getActiveLayerTrackConfig(entry, targetTrack), { depthIndex, values: getActiveLayerValues(entry) });
+                        if (Number.isFinite(newVal) && depthIndex >= 0 && depthIndex < getActiveLayerValues(entry).length) {
+                            getActiveLayerValues(entry)[depthIndex] = newVal;
                         }
 
                         logCorrectionEvent({
@@ -7405,9 +7613,9 @@
                                         pts[neighborIdx][0] = pt.x;
                                         pts[neighborIdx][2] = neighborDepthIdx;
 
-                                        const nVal = pixelToTrackValue(pt.x, targetTrack, { depthIndex: neighborDepthIdx, values: entry.values });
-                                        if (Number.isFinite(nVal) && neighborDepthIdx < entry.values.length) {
-                                            entry.values[neighborDepthIdx] = nVal;
+                                        const nVal = pixelToTrackValue(pt.x, getActiveLayerTrackConfig(entry, targetTrack), { depthIndex: neighborDepthIdx, values: getActiveLayerValues(entry) });
+                                        if (Number.isFinite(nVal) && neighborDepthIdx < getActiveLayerValues(entry).length) {
+                                            getActiveLayerValues(entry)[neighborDepthIdx] = nVal;
                                         }
                                     }
                                 }
@@ -7422,9 +7630,9 @@
                         const beforeX = currentX;
                         const beforeY = currentY;
                         pts[pIdx][0] = snapped.x;
-                        const newVal = pixelToTrackValue(snapped.x, targetTrack, { depthIndex, values: entry.values });
-                        if (Number.isFinite(newVal) && depthIndex >= 0 && depthIndex < entry.values.length) {
-                            entry.values[depthIndex] = newVal;
+                        const newVal = pixelToTrackValue(snapped.x, getActiveLayerTrackConfig(entry, targetTrack), { depthIndex, values: getActiveLayerValues(entry) });
+                        if (Number.isFinite(newVal) && depthIndex >= 0 && depthIndex < getActiveLayerValues(entry).length) {
+                            getActiveLayerValues(entry)[depthIndex] = newVal;
                         }
 
                         logCorrectionEvent({
@@ -7449,9 +7657,9 @@
                     const beforeX = currentX;
                     const beforeY = currentY;
                     pts[pIdx][0] = snapped.x;
-                    const newVal = pixelToTrackValue(snapped.x, targetTrack, { depthIndex, values: entry.values });
-                    if (Number.isFinite(newVal) && depthIndex >= 0 && depthIndex < entry.values.length) {
-                        entry.values[depthIndex] = newVal;
+                    const newVal = pixelToTrackValue(snapped.x, getActiveLayerTrackConfig(entry, targetTrack), { depthIndex, values: getActiveLayerValues(entry) });
+                    if (Number.isFinite(newVal) && depthIndex >= 0 && depthIndex < getActiveLayerValues(entry).length) {
+                        getActiveLayerValues(entry)[depthIndex] = newVal;
                     }
 
                     logCorrectionEvent({
@@ -8239,7 +8447,7 @@
                                     }
                                 }
 
-                                if (idx >= 0 && idx < entry.values.length) {
+                                if (idx >= 0 && idx < getActiveLayerValues(entry).length) {
                                     setDepthIndexPinned(editCurveId, idx, false);
                                     // Save for undo
                                     deletedItems.push({
@@ -8248,7 +8456,7 @@
                                         pt: [px, py, idx]
                                     });
                                     // Nullify
-                                    entry.values[idx] = null;
+                                    getActiveLayerValues(entry)[idx] = null;
                                     return;
                                 }
                             }
@@ -9724,25 +9932,31 @@
             let leftPx = 0;
             let rightPx = imageWidth;
 
-            if (primaryRegion && Number.isFinite(primaryRegion.left_px) && Number.isFinite(primaryRegion.right_px)) {
+            if (editMode && editCurveId) {
+                const track = findTrackByCurveId(editCurveId);
+                if (track && Number.isFinite(track.leftX) && Number.isFinite(track.rightX)) {
+                    leftPx = Math.min(track.leftX, track.rightX);
+                    rightPx = Math.max(track.leftX, track.rightX);
+                } else {
+                    showStatus('❌ Selected curve does not have valid left/right track bounds.', 'error');
+                    return;
+                }
+            } else if (primaryRegion && Number.isFinite(primaryRegion.left_px) && Number.isFinite(primaryRegion.right_px)) {
                 leftPx = Math.max(0, Number(primaryRegion.left_px));
                 rightPx = Math.min(imageWidth, Number(primaryRegion.right_px));
             } else {
                 // Try to get bounds from existing curves/tracks
                 const tracks = (typeof getTrackCalibrationsSnapshot === 'function') ? getTrackCalibrationsSnapshot() : null;
                 if (tracks && tracks.length > 0) {
-                    // Use the first track's bounds (tracks use leftX/rightX, not left_px/right_px)
                     const track = tracks[0];
                     if (track && Number.isFinite(track.leftX) && Number.isFinite(track.rightX)) {
                         leftPx = Math.max(0, Math.floor(Number(track.leftX)));
                         rightPx = Math.min(imageWidth, Math.ceil(Number(track.rightX)));
                     } else {
-                        // Fallback to full width if track bounds are invalid
                         leftPx = 0;
                         rightPx = imageWidth;
                     }
                 } else {
-                    // No region and no tracks: default to full width
                     leftPx = 0;
                     rightPx = imageWidth;
                 }
@@ -9774,31 +9988,74 @@
                     
                     showStatus(`✅ ML prediction complete! Got ${pixelTrace.length} points`, 'success');
 
-                    // Convert pixel trace to curve points
-                    const curvePoints = [];
-                    for (let i = 0; i < pixelTrace.length; i++) {
-                        const x = leftPx + pixelTrace[i];
-                        const y = topPx + i;
-                        curvePoints.push({ x: x, y: y });
-                    }
+                    if (editMode && editCurveId) {
+                        const targetName = editCurveLayer === 'wrap' ? 'Wrap Trace' : 'Main Trace';
+                        if (confirm(`Overwrite the ${targetName} for ${editCurveId} with ML prediction?`)) {
+                            const track = findTrackByCurveId(editCurveId);
+                            const found = findDigitizedCurveEntry(editCurveId);
+                            if (track && found && found.entry) {
+                                const activeValues = getActiveLayerValues(found.entry);
+                                const activeTrack = getActiveLayerTrackConfig(found.entry, track);
+                                const depthCfg = lastDepthConfig || getDepthConfigFromInputs();
+                                
+                                // Push undo snapshot
+                                const undoValues = [];
+                                activeValues.forEach((v, i) => undoValues.push({ idx: i, oldValue: v }));
+                                editUndoStack.push({
+                                    type: 'bulk_transform',
+                                    label: 'ml_predict',
+                                    curveKey: found.key,
+                                    curveId: editCurveId,
+                                    traceKey: getActiveCurveTraceKey(editCurveId) + (editCurveLayer === 'wrap' ? '_wrap' : ''),
+                                    undoValues: undoValues,
+                                    undoPoints: []
+                                });
 
-                    // Add as a new curve overlay
-                    if (!window.mlPredictedCurves) {
-                        window.mlPredictedCurves = [];
-                    }
-                    
-                    window.mlPredictedCurves.push({
-                        name: `ML_CURVE_${window.mlPredictedCurves.length + 1}`,
-                        points: curvePoints,
-                        color: '#FF00FF'  // Magenta for ML curves
-                    });
+                                // Apply ML pixel traces back to track values
+                                for (let i = 0; i < pixelTrace.length; i++) {
+                                    const yImg = topPx + i;
+                                    const rawX = leftPx + pixelTrace[i];
+                                    const dIdx = getDepthIndexForPixelY(yImg, depthCfg);
+                                    if (dIdx !== null && dIdx >= 0 && dIdx < activeValues.length) {
+                                        const val = pixelToTrackValue(rawX, activeTrack, { depthIndex: dIdx, values: activeValues });
+                                        if (Number.isFinite(val)) {
+                                            activeValues[dIdx] = val;
+                                        }
+                                    }
+                                }
+                                
+                                rebuildCurveTraceFromDigitized(editCurveId);
+                                if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
+                                showStatus(`✅ ML curve applied to ${editCurveId} (${targetName}). Ctrl+Z to undo.`, 'success');
+                            }
+                        }
+                    } else {
+                        // Convert pixel trace to curve points
+                        const curvePoints = [];
+                        for (let i = 0; i < pixelTrace.length; i++) {
+                            const x = leftPx + pixelTrace[i];
+                            const y = topPx + i;
+                            curvePoints.push({ x: x, y: y });
+                        }
 
-                    // Redraw canvas to show the predicted curve
-                    if (lastCurveTraces) {
-                        renderCurveTraceOverlays(lastCurveTraces);
+                        // Add as a new curve overlay
+                        if (!window.mlPredictedCurves) {
+                            window.mlPredictedCurves = [];
+                        }
+                        
+                        window.mlPredictedCurves.push({
+                            name: `ML_CURVE_${window.mlPredictedCurves.length + 1}`,
+                            points: curvePoints,
+                            color: '#FF00FF'  // Magenta for ML curves
+                        });
+
+                        // Redraw canvas to show the predicted curve
+                        if (lastCurveTraces) {
+                            renderCurveTraceOverlays(lastCurveTraces);
+                        }
+                        
+                        showStatus(`✅ ML curve displayed in magenta. You can now add it as a regular curve or run digitization.`, 'success');
                     }
-                    
-                    showStatus(`✅ ML curve displayed in magenta. You can now add it as a regular curve or run digitization.`, 'success');
                 } else {
                     showStatus(`❌ ML prediction failed: ${result.error}`, 'error');
                 }
@@ -13096,9 +13353,31 @@
                 // (Note: lastDigitizedCurves should already be updated by applyRefinedSegment/updateCurveData)
                 syncWrapMarkersToDigitizedCurves();
                 
+                const exportCurves = {};
+                for (const [key, curveData] of Object.entries(lastDigitizedCurves)) {
+                    // clone curveData to avoid mutating original state
+                    const exportData = { ...curveData };
+                    if (Array.isArray(curveData.values)) {
+                        exportData.values = [...curveData.values];
+                        
+                        // Merge wrap layer values if they exist
+                        if (curveData.wrapLayer && Array.isArray(curveData.wrapLayer.values)) {
+                            for (let i = 0; i < exportData.values.length; i++) {
+                                const wVal = curveData.wrapLayer.values[i];
+                                if (wVal !== null && wVal !== undefined && !Number.isNaN(wVal)) {
+                                    exportData.values[i] = wVal;
+                                }
+                            }
+                        }
+                        // Remove wrapLayer from export to avoid polluting payload
+                        delete exportData.wrapLayer;
+                    }
+                    exportCurves[key] = exportData;
+                }
+                
                 const payload = {
                     depths: lastDigitizedDepth,
-                    curves: lastDigitizedCurves,
+                    curves: exportCurves,
                     header_metadata: headerMetadata || {},
                     depth_unit: lastDepthConfig ? lastDepthConfig.unit : 'FT'
                 };
