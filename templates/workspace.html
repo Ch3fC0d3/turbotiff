@@ -1843,6 +1843,11 @@
                                             <button type="button" class="btn btn-xs" id="clearWrapTraceBtn" style="color:#f87171; border-color:#ef4444;" onclick="s5ClearWrapTrace()">Clear Wrap Line</button>
                                         </div>
                                         <div id="wrapTraceSettings" style="padding-top:8px; border-top:1px dashed #334155; font-size:0.85em;">
+                                            <div style="margin-bottom: 8px;">
+                                                <label class="cursor-pointer text-sm flex-center gap-1 font-semibold" title="Enable wrap detection for this track">
+                                                    <input type="checkbox" id="s5TrackWrapped" onchange="s5UpdateTrackWrapped()"> Track is Wrapped
+                                                </label>
+                                            </div>
                                             <div class="grid" style="grid-template-columns:1fr 1fr; gap:8px;">
                                                 <div class="field">
                                                     <label>Wrap Left Value</label>
@@ -4878,9 +4883,27 @@
                     const startX = Number(displayXs[prevValid]);
                     const endX = rawX;
                     const span = depthIndex - prevValid;
-                    for (let fillIdx = prevValid + 1; fillIdx < depthIndex; fillIdx++) {
-                        const t = (fillIdx - prevValid) / Math.max(1, span);
-                        displayXs[fillIdx] = startX + (endX - startX) * t;
+                    
+                    const tWidth = Math.abs(track.rightX - track.leftX);
+                    const dx = Math.abs(endX - startX);
+                    const edgeMargin = Math.max(6, tWidth * 0.35);
+                    const leftBoundary = Math.min(track.leftX, track.rightX);
+                    const rightBoundary = Math.max(track.leftX, track.rightX);
+                    const nearLeft0 = startX <= leftBoundary + edgeMargin;
+                    const nearRight0 = startX >= rightBoundary - edgeMargin;
+                    const nearLeft1 = endX <= leftBoundary + edgeMargin;
+                    const nearRight1 = endX >= rightBoundary - edgeMargin;
+                    const oppositeEdges = (nearLeft0 && nearRight1) || (nearRight0 && nearLeft1);
+                    
+                    // Do not interpolate if it spans across the track (wrap jump), otherwise it defeats wrap detection
+                    // and makes the eraser tool appear to not work because the gap instantly fills back in.
+                    const isWrapJump = tWidth > 0 && ((oppositeEdges && dx >= tWidth * 0.40) || dx >= tWidth * 0.80);
+
+                    if (!isWrapJump) {
+                        for (let fillIdx = prevValid + 1; fillIdx < depthIndex; fillIdx++) {
+                            const t = (fillIdx - prevValid) / Math.max(1, span);
+                            displayXs[fillIdx] = startX + (endX - startX) * t;
+                        }
                     }
                 }
                 prevValid = depthIndex;
