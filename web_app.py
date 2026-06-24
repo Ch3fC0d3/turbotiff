@@ -10360,10 +10360,14 @@ def pipeline_cc_cleanup(mask, min_size=20):
     # Binarize mask before CC
     _, binary = cv2.threshold(mask, 10, 255, cv2.THRESH_BINARY)
     num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(binary, connectivity=8)
+    
+    # Fast vectorized label filtering to prevent Gunicorn timeouts
+    keep = stats[:, cv2.CC_STAT_AREA] >= min_size
+    keep[0] = False  # Ignore background
+    valid_mask = keep[labels]
+    
     clean_mask = np.zeros_like(mask)
-    for i in range(1, num_labels):
-        if stats[i, cv2.CC_STAT_AREA] >= min_size:
-            clean_mask[labels == i] = mask[labels == i]
+    clean_mask[valid_mask] = mask[valid_mask]
     return clean_mask
 
 def pipeline_skeletonize(mask):
