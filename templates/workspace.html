@@ -2376,19 +2376,19 @@
 
             const dx = Math.abs(x1 - x0);
             const dy = Math.abs(y1 - y0);
-            const edgeMargin = Math.max(6, width * 0.07);
+            const edgeMargin = Math.max(6, width * 0.20);
             const nearLeft0 = x0 <= left + edgeMargin;
             const nearRight0 = x0 >= right - edgeMargin;
             const nearLeft1 = x1 <= left + edgeMargin;
             const nearRight1 = x1 >= right - edgeMargin;
             const oppositeEdges = (nearLeft0 && nearRight1) || (nearRight0 && nearLeft1);
-            const longFlatBridge = dx >= width * 0.36 && dy <= Math.max(24, width * 0.18);
+            
+            if (oppositeEdges && dx >= width * 0.45) return true;
 
+            const longFlatBridge = dx >= width * 0.36 && dy <= Math.max(24, width * 0.18);
             if (longFlatBridge) return true;
 
-            return oppositeEdges &&
-                dx >= width * 0.45 &&
-                dy <= Math.max(24, width * 0.18);
+            return false;
         }
 
         function getSelectedWrapCurveContext() {
