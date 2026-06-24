@@ -5912,7 +5912,9 @@
                 const weight = (Math.cos(normalizedDist * Math.PI) + 1) / 2;
                 
                 let pointValue;
-                if (Number.isFinite(originalValue)) {
+                const isNullValue = !Number.isFinite(originalValue) || Math.abs(originalValue - (window.lastNullValue || -999.25)) < 0.001;
+                
+                if (!isNullValue) {
                     // Interpolate track values to properly support crossovers (wrapping)
                     pointValue = originalValue * (1 - weight) + clickedTrackValue * weight;
                 } else {
@@ -5920,6 +5922,7 @@
                     if (dist === 0) {
                         pointValue = clickedTrackValue;
                     } else {
+                        // Skip surrounding points if there's no valid curve to interpolate from
                         continue; 
                     }
                 }
