@@ -6114,6 +6114,9 @@
 
             // ── Apply samples: one point per unique depth index ──
             const seenDepth = new Set();
+            const wrapActive = isTrackWrapActive(targetTrack, curveKey);
+            let prevRawX = null;
+
             for (const [xImg, yImg] of samples) {
                 const depth = pixelToDepthFromConfig(yImg, depthCfg);
                 if (!Number.isFinite(depth)) continue;
@@ -6123,10 +6126,24 @@
                 // Skip pinned depths
                 if (isDepthIndexPinned(editCurveId, idx)) continue;
                 const yImgUse = getPixelYForDepthIndex(idx, depthCfg) ?? yImg;
-                const newValue = pixelToTrackValue(xImg, getActiveLayerTrackConfig(entry, targetTrack), { depthIndex: idx, values: getActiveLayerValues(entry) });
-                if (!Number.isFinite(newValue)) continue;
-                if (idx >= entry.values.length) continue;
-                getActiveLayerValues(entry)[idx] = newValue;
+
+                let currentRawX = xImg;
+                if (wrapActive) {
+                    if (prevRawX !== null) {
+                        currentRawX = unwrapDisplayXNearReference(xImg, prevRawX, targetTrack);
+                    }
+                    prevRawX = currentRawX;
+                    const val = pixelToTrackValue(currentRawX, targetTrack, { rawX: true });
+                    if (Number.isFinite(val) && idx < entry.values.length) {
+                        getActiveLayerValues(entry)[idx] = val;
+                    }
+                } else {
+                    const newValue = pixelToTrackValue(xImg, getActiveLayerTrackConfig(entry, targetTrack), { depthIndex: idx, values: getActiveLayerValues(entry) });
+                    if (Number.isFinite(newValue) && idx < entry.values.length) {
+                        getActiveLayerValues(entry)[idx] = newValue;
+                    }
+                }
+
                 // Update / insert trace point
                 const activeTrace = getActiveCurveTracePoints(editCurveId);
                 const pts2 = activeTrace.points || [];
@@ -10147,15 +10164,30 @@
                                     undoPoints: []
                                 });
 
+                                const wrapActive = isTrackWrapActive(track, found.key);
+                                let prevRawX = null;
+
                                 // Apply ML pixel traces back to track values
                                 for (let i = 0; i < pixelTrace.length; i++) {
                                     const yImg = topPx + i;
-                                    const rawX = leftPx + pixelTrace[i];
+                                    let displayX = leftPx + pixelTrace[i];
                                     const dIdx = getDepthIndexForPixelY(yImg, depthCfg);
                                     if (dIdx !== null && dIdx >= 0 && dIdx < activeValues.length) {
-                                        const val = pixelToTrackValue(rawX, activeTrack, { depthIndex: dIdx, values: activeValues });
-                                        if (Number.isFinite(val)) {
-                                            activeValues[dIdx] = val;
+                                        if (wrapActive) {
+                                            let currentRawX = displayX;
+                                            if (prevRawX !== null) {
+                                                currentRawX = unwrapDisplayXNearReference(displayX, prevRawX, track);
+                                            }
+                                            prevRawX = currentRawX;
+                                            const val = pixelToTrackValue(currentRawX, track, { rawX: true });
+                                            if (Number.isFinite(val)) {
+                                                activeValues[dIdx] = val;
+                                            }
+                                        } else {
+                                            const val = pixelToTrackValue(displayX, activeTrack, { depthIndex: dIdx, values: activeValues });
+                                            if (Number.isFinite(val)) {
+                                                activeValues[dIdx] = val;
+                                            }
                                         }
                                     }
                                 }
