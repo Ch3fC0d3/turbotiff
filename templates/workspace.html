@@ -2361,7 +2361,7 @@
             if (isScaleWrapBoundaryForPoints(curveId, prevPoint, currPoint)) return true;
             if (!track || !Array.isArray(prevPoint) || !Array.isArray(currPoint)) return false;
             const markers = getWrapMarkersForRenderCurve(curveId, track);
-            if (!markers.length) return false;
+            if (!markers.length && !track.wrapped) return false;
 
             const left = Math.min(Number(track.leftX), Number(track.rightX));
             const right = Math.max(Number(track.leftX), Number(track.rightX));
@@ -4704,7 +4704,7 @@
             return baseX + nearestCycle * width;
         }
 
-        function drawWrappedTrackSegment(ctx, rawX1, y1, rawX2, y2, track, scaleX, scaleY) {
+        function drawWrappedTrackSegment(ctx, rawX1, y1, rawX2, y2, track, scaleX, scaleY, onSegment) {
             const left = Number(track && track.leftX);
             const right = Number(track && track.rightX);
             const width = right - left;
@@ -4713,12 +4713,14 @@
             const startY = Number(y1);
             const endY = Number(y2);
             if (![left, right, width, x1, x2, startY, endY].every(Number.isFinite) || width <= 0) {
+                if (onSegment) onSegment(x1, wrapRawXToTrack(x1, track) * scaleX, startY * scaleY);
                 ctx.lineTo(Number(rawX2) * scaleX, Number(y2) * scaleY);
                 return;
             }
 
             const dx = x2 - x1;
             if (Math.abs(dx) < 1e-9) {
+                if (onSegment) onSegment(x1, wrapRawXToTrack(x1, track) * scaleX, startY * scaleY);
                 ctx.lineTo(wrapRawXToTrack(x2, track) * scaleX, endY * scaleY);
                 return;
             }
@@ -4727,10 +4729,14 @@
                 const cycles = (rawX - left) / width;
                 return Math.abs(cycles - Math.round(cycles)) < 1e-7;
             };
-            // At an exact boundary, the side used depends on travel direction:
-            // increasing raw X resumes at the left rail; decreasing resumes right.
+            
+            let currentPenX = wrapRawXToTrack(x1, track) * scaleX;
+            let currentPenY = startY * scaleY;
+
             if (isOnBoundary(x1)) {
-                ctx.moveTo((dx > 0 ? left : right) * scaleX, startY * scaleY);
+                currentPenX = (dx > 0 ? left : right) * scaleX;
+                currentPenY = startY * scaleY;
+                ctx.moveTo(currentPenX, currentPenY);
             }
 
             const boundaries = [];
@@ -4749,14 +4755,24 @@
                 }
             }
 
+            let currentRawX = x1;
             for (const boundary of boundaries) {
                 const t = (boundary - x1) / dx;
                 const crossY = startY + t * (endY - startY);
                 const exitX = dx > 0 ? right : left;
                 const resumeX = dx > 0 ? left : right;
+                
+                if (onSegment) onSegment((currentRawX + boundary) / 2, currentPenX, currentPenY);
                 ctx.lineTo(exitX * scaleX, crossY * scaleY);
-                ctx.moveTo(resumeX * scaleX, crossY * scaleY);
+                
+                currentPenX = resumeX * scaleX;
+                currentPenY = crossY * scaleY;
+                ctx.moveTo(currentPenX, currentPenY);
+                
+                currentRawX = boundary;
             }
+            
+            if (onSegment) onSegment((currentRawX + x2) / 2, currentPenX, currentPenY);
             const endDisplayX = isOnBoundary(x2)
                 ? (dx > 0 ? right : left)
                 : wrapRawXToTrack(x2, track);
@@ -12874,6 +12890,32 @@
 
                         const wrapActive = isTrackWrapActive(trackMeta, name, renderPoints);
                         
+                        let currentStrokeColor = lineCoreColor;
+                        let wrapColor = '#00ffff';
+                        const foundWrap = findDigitizedCurveEntry(name);
+                        if (foundWrap && foundWrap.entry && foundWrap.entry.wrapLayer && foundWrap.entry.wrapLayer.color) {
+                            wrapColor = foundWrap.entry.wrapLayer.color;
+                        }
+
+                        const onSegment = wrapActive ? (midRawX, penX, penY) => {
+                            const left = Math.min(trackMeta.leftX, trackMeta.rightX);
+                            const width = Math.abs(trackMeta.rightX - trackMeta.leftX);
+                            let cycle = 0;
+                            if (width > 0) {
+                                cycle = Math.floor((midRawX - left + 1e-5) / width);
+                            }
+                            const desiredColor = cycle === 0 ? lineCoreColor : wrapColor;
+                            if (currentStrokeColor !== desiredColor) {
+                                ctx.stroke();
+                                ctx.beginPath();
+                                ctx.strokeStyle = desiredColor;
+                                currentStrokeColor = desiredColor;
+                                if (penX !== undefined && penY !== undefined) {
+                                    ctx.moveTo(penX, penY);
+                                }
+                            }
+                        } : null;
+
                         const firstRawX = wrapActive
                             ? getTracePointRawX(renderPoints[0], trackMeta, name)
                             : Number(renderPoints[0][0]);
@@ -12882,6 +12924,8 @@
                             : Number(renderPoints[0][0]);
                         const firstX = (firstDisplayX * scaleX);
                         const firstY = (renderPoints[0][1] * scaleY);
+
+                        if (onSegment) onSegment(firstRawX, firstX, firstY);
                         ctx.moveTo(firstX, firstY);
                         const splitWrappedJumps = false;
                         const wrapJumpThreshold = Infinity;
@@ -12900,16 +12944,26 @@
 
                             if (wrapActive && trackMeta) {
                                 const prevRawX = getTracePointRawX(prevPoint, trackMeta, name);
-                                drawWrappedTrackSegment(
-                                    ctx,
-                                    prevRawX,
-                                    prevPoint[1],
-                                    currRawX,
-                                    currPoint[1],
-                                    trackMeta,
-                                    scaleX,
-                                    scaleY
-                                );
+                                const trackWidth = Math.abs(trackMeta.rightX - trackMeta.leftX);
+                                const rawJumpX = Math.abs(currRawX - prevRawX);
+                                const isRawDiscontinuity = trackWidth > 0 && rawJumpX > trackWidth * 0.45;
+
+                                if (isRawDiscontinuity && isScaleWrapDisplayJump(name, prevPoint, currPoint, trackMeta)) {
+                                    if (onSegment) onSegment(currRawX, xDom, yDom);
+                                    ctx.moveTo(xDom, yDom);
+                                } else {
+                                    drawWrappedTrackSegment(
+                                        ctx,
+                                        prevRawX,
+                                        prevPoint[1],
+                                        currRawX,
+                                        currPoint[1],
+                                        trackMeta,
+                                        scaleX,
+                                        scaleY,
+                                        onSegment
+                                    );
+                                }
                             } else {
                                 const jumpX = Math.abs(Number(currPoint[0]) - Number(prevPoint[0]));
                                 if (isScaleWrapDisplayJump(name, prevPoint, currPoint, trackMeta) ||
