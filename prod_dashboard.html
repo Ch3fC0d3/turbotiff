@@ -4110,14 +4110,16 @@
                         // NEW: Snap neighbors using the returned path segment
                         // This ensures "lines between points go on the existing lines"
                         if (result.refinedPath && Array.isArray(result.refinedPath)) {
-                            const maxNeighborDY = 35; // only adjust local neighborhood around the edit
+                            const maxNeighborDY = 60; // blend over the full window (winSize/2)
                             const neighborMinConf = Math.max(minConf, 0.30);
                             result.refinedPath.forEach(pt => {
                                 // pt is { offsetY, x, confidence }
                                 if (pt.confidence < neighborMinConf) return;
                                 
                                 const absY = cropTop + pt.offsetY;
-                                if (Math.abs(absY - currentY) > maxNeighborDY) return;
+                                const absDy = Math.abs(absY - currentY);
+                                if (absDy > maxNeighborDY) return;
+                                
                                 const depthCfg = lastDepthConfig || getDepthConfigFromInputs();
                                 if (!depthCfg || !Array.isArray(lastDigitizedDepth) || !lastDigitizedDepth.length) return;
 
@@ -4132,12 +4134,20 @@
 
                                 const neighborIdx = findPointIndexByDepthIndex(pts, neighborDepthIdx);
                                 if (neighborIdx >= 0 && neighborIdx !== pIdx) {
-                                    // Remove neighborMaxDist restriction completely: if the user drags near here,
-                                    // and the backend finds a path, we want ALL points within maxNeighborDY to snap to it!
-                                    pts[neighborIdx][0] = pt.x;
+                                    // Smoothly blend the backend's path into the existing curve
+                                    // to prevent sharp horizontal jumps when the curve is far away
+                                    let blendWeight = 1.0;
+                                    if (absDy > 15) {
+                                        blendWeight = 0.5 * (1 + Math.cos(Math.PI * (absDy - 15) / (maxNeighborDY - 15)));
+                                    }
+                                    
+                                    const currentPtX = pts[neighborIdx][0];
+                                    const newX = currentPtX * (1 - blendWeight) + pt.x * blendWeight;
+                                    
+                                    pts[neighborIdx][0] = newX;
                                     pts[neighborIdx][2] = neighborDepthIdx;
 
-                                    const nVal = pixelToTrackValue(pt.x, targetTrack);
+                                    const nVal = pixelToTrackValue(newX, targetTrack);
                                     if (Number.isFinite(nVal) && neighborDepthIdx < entry.values.length) {
                                         entry.values[neighborDepthIdx] = nVal;
                                     }
