@@ -2350,6 +2350,9 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
         use_contrast = False
         use_invert = False
 
+    enable_grid_suppression = ui_filters.get('enable_grid_suppression', True)
+    enable_curve_masking = ui_filters.get('enable_curve_masking', True)
+
     if _dual_polarity_allowed and mode == "auto" and use_invert:
         try:
             ui_filters_no_invert = dict(ui_filters)
@@ -2769,7 +2772,7 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
             pass
 
         # Additional grid removal on the mask itself (less aggressive if already processed)
-        if h >= 20 and w >= 20:
+        if enable_grid_suppression and h >= 20 and w >= 20:
             if is_bw_log:
                 # Lighter grid removal since we already did aggressive removal
                 k_v = cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(8, min(40, h // 3))))
@@ -2820,14 +2823,14 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
     edge_score = edges_blur.astype(np.float32) / 255.0
     
     # For color modes, gate edges by color mask to suppress non-colored edges
-    if mode in colored_modes:
+    if enable_curve_masking and mode in colored_modes:
         edge_score *= color_score
 
     # 3) Suppress vertical "rails" (grid / borders) and track edges
     # REMOVED morphological erasure because it was deleting steep curve segments.
     # We will rely on the column-statistics penalty (rail_penalty) instead.
 
-    if h >= 4 and w >= 2:
+    if enable_grid_suppression and h >= 4 and w >= 2:
         col_on_frac = (color_score > 0).mean(axis=0)
         
         # For black mode, slow-varying curves (DTC, RHOB) can occupy one column for
@@ -10350,6 +10353,37 @@ def upload_file():
         'vision_api_available': bool(VISION_API_AVAILABLE or LOCAL_OCR_AVAILABLE)
     })
 
+def pipeline_cc_cleanup(mask, min_size=20):
+    """Connected-component noise cleanup. Removes small isolated blobs of pixels."""
+    if mask is None or mask.size == 0:
+        return mask
+    # Binarize mask before CC
+    _, binary = cv2.threshold(mask, 10, 255, cv2.THRESH_BINARY)
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(binary, connectivity=8)
+    clean_mask = np.zeros_like(mask)
+    for i in range(1, num_labels):
+        if stats[i, cv2.CC_STAT_AREA] >= min_size:
+            clean_mask[labels == i] = mask[labels == i]
+    return clean_mask
+
+def pipeline_skeletonize(mask):
+    """Skeletonization / Centerline Thinning."""
+    if mask is None or mask.size == 0:
+        return mask
+    _, binary = cv2.threshold(mask, 10, 255, cv2.THRESH_BINARY)
+    if hasattr(cv2, 'ximgproc'):
+        thinned = cv2.ximgproc.thinning(binary, thinningType=cv2.ximgproc.THINNING_ZHANGSUEN)
+        # Restore original probabilities where skeleton is present
+        result = np.zeros_like(mask)
+        result[thinned > 0] = mask[thinned > 0]
+        return result
+    else:
+        kernel = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
+        eroded = cv2.erode(binary, kernel, iterations=1)
+        result = np.zeros_like(mask)
+        result[eroded > 0] = mask[eroded > 0]
+        return result
+
 @app.route('/digitize', methods=['POST'])
 @login_required()
 def digitize():
@@ -10508,12 +10542,32 @@ def digitize():
         # Define colored modes set (including auto which detects hue automatically)
         colored_modes = {"green", "red", "blue", "auto", "cyan", "magenta", "yellow", "orange", "purple"}
 
+        # Read pipeline toggles
+        enable_grid_suppression = bool(c.get('enable_grid_suppression', True))
+        enable_curve_masking = bool(c.get('enable_curve_masking', True))
+        enable_cc_cleanup = bool(c.get('enable_cc_cleanup', True))
+        enable_skeletonization = bool(c.get('enable_skeletonization', True))
+        enable_viterbi = bool(c.get('enable_viterbi', True))
+
+        # Update preview_filters for this curve
+        curve_ui_filters = dict(preview_filters)
+        curve_ui_filters['enable_grid_suppression'] = enable_grid_suppression
+        curve_ui_filters['enable_curve_masking'] = enable_curve_masking
+
         # NEW: Build a soft probability mask for the curve using color/edges
         # plus vertical-rail suppression. This returns an 8-bit image where
         # higher values mean higher likelihood of curve pixels.
         # Use compute_prob_map for all modes - it has sophisticated edge detection
         # and centerline boost that works well
-        mask = compute_prob_map(roi, mode=mode, ui_filters=preview_filters)
+        mask = compute_prob_map(roi, mode=mode, ui_filters=curve_ui_filters)
+
+        # Pipeline: Connected-Component Cleanup
+        if enable_cc_cleanup:
+            mask = pipeline_cc_cleanup(mask, min_size=20)
+
+        # Pipeline: Skeletonization / Thinning
+        if enable_skeletonization:
+            mask = pipeline_skeletonize(mask)
 
         if mode not in {"green", "red", "blue", "auto", "cyan", "magenta", "yellow", "orange", "purple"}:
             _pm = mask.astype(np.float32) / 255.0
@@ -10525,10 +10579,26 @@ def digitize():
         # NEW: Use DP-based smooth path tracing with plausibility checks
         curve_type = c.get('type', 'GR')  # Get curve type for plausibility
 
-        # For explicit color modes, allow more left-right wiggle (lower
-        # smoothness penalty) and rely mostly on the DP + local maxima
-        # refinement rather than heavy 1D smoothing so the traced path can
-        # hug the colored curve as tightly as possible.
+        # If viterbi is disabled, use a simple argmax over the mask
+        if not enable_viterbi:
+            h_mask, w_mask = mask.shape
+            xs = np.full(h_mask, np.nan, dtype=np.float32)
+            confidence = np.zeros(h_mask, dtype=np.float32)
+            for y in range(h_mask):
+                row = mask[y]
+                max_val = np.max(row)
+                if max_val > 0:
+                    xs[y] = np.argmax(row)
+                    confidence[y] = float(max_val) / 255.0
+            
+            curve_smooth_window = 1
+            refine_kwargs = {}
+            outlier_threshold = 100.0
+        else:
+            # For explicit color modes, allow more left-right wiggle (lower
+            # smoothness penalty) and rely mostly on the DP + local maxima
+            # refinement rather than heavy 1D smoothing so the traced path can
+            # hug the colored curve as tightly as possible.
         curve_smooth_window = smooth_window
         refine_kwargs = {}
         outlier_threshold = 3.0
@@ -10569,7 +10639,10 @@ def digitize():
                 max_step_dp = 150
 
         # Optional pixel-perfect skeleton tracer (preserve every bump)
-        if ai_tracer.is_available() and trace_mode == "ai_tracer":
+        if not enable_viterbi:
+            # Simple argmax tracer already ran above, do nothing here
+            pass
+        elif ai_tracer.is_available() and trace_mode == "ai_tracer":
             # Use the AI model for tracing
             try:
                 # The AI model predicts coordinates relative to the ROI's left edge
