@@ -4708,6 +4708,10 @@
             return getAmbiguousLayer();
         }
 
+        function _getEffectiveActiveLayer() {
+            return window.currentDragLayer || window.paintTargetLayer || (typeof editDragState !== 'undefined' && editDragState ? editDragState.dragLayer : null) || 'main';
+        }
+
         function isLayerLocked(layer, entry = null) {
             if (entry && entry.wrapLayer && Array.isArray(entry.wrapLayer.values)) {
                 if (layer === 'wrap') return !!window.lineLockWrap;
@@ -4718,12 +4722,13 @@
         }
 
         function isPointLocked(val, track, entry = null) {
+            const activeLayer = _getEffectiveActiveLayer();
             if (entry && entry.wrapLayer && Array.isArray(entry.wrapLayer.values)) {
-                if (window.currentDragLayer === 'wrap') return !!window.lineLockWrap;
-                if (window.currentDragLayer === 'main') return !!window.lineLockMain;
+                if (activeLayer === 'wrap') return !!window.lineLockWrap;
+                if (activeLayer === 'main') return !!window.lineLockMain;
             }
             if (!track) return false;
-            if (val == null) return !!window.lineLockMain; // New points are main points
+            if (val == null) return activeLayer === 'wrap' ? !!window.lineLockWrap : !!window.lineLockMain;
             const minV = Math.min(track.scaleMin, track.scaleMax);
             const maxV = Math.max(track.scaleMin, track.scaleMax);
             // Consider a point wrapped if it is outside the track scale bounds by more than a tiny epsilon
@@ -4732,12 +4737,13 @@
         }
 
         function isPointLockedByRawX(rawX, track, entry = null) {
+            const activeLayer = _getEffectiveActiveLayer();
             if (entry && entry.wrapLayer && Array.isArray(entry.wrapLayer.values)) {
-                if (window.currentDragLayer === 'wrap') return !!window.lineLockWrap;
-                if (window.currentDragLayer === 'main') return !!window.lineLockMain;
+                if (activeLayer === 'wrap') return !!window.lineLockWrap;
+                if (activeLayer === 'main') return !!window.lineLockMain;
             }
             if (!track) return false;
-            if (rawX == null) return !!window.lineLockMain; // New points are main points
+            if (rawX == null) return activeLayer === 'wrap' ? !!window.lineLockWrap : !!window.lineLockMain;
             const minX = Math.min(track.leftX, track.rightX);
             const maxX = Math.max(track.leftX, track.rightX);
             const isWrapPoint = (rawX > maxX + 1e-4) || (rawX < minX - 1e-4);
@@ -4748,7 +4754,8 @@
 
         function getActiveLayerValues(entry) {
             if (!entry) return null;
-            if (window.currentDragLayer === 'wrap' && entry.wrapLayer && Array.isArray(entry.wrapLayer.values)) {
+            const activeLayer = _getEffectiveActiveLayer();
+            if (activeLayer === 'wrap' && entry.wrapLayer && Array.isArray(entry.wrapLayer.values)) {
                 return entry.wrapLayer.values;
             }
             return entry.values;
@@ -4756,7 +4763,8 @@
 
         function getActiveLayerTrackConfig(entry, track) {
             if (!track) return null;
-            if (window.currentDragLayer === 'wrap' && entry && entry.wrapLayer) {
+            const activeLayer = _getEffectiveActiveLayer();
+            if (activeLayer === 'wrap' && entry && entry.wrapLayer) {
                 const wrapTrack = { ...track };
                 if (Number.isFinite(entry.wrapLayer.left_value)) wrapTrack.scaleMin = entry.wrapLayer.left_value;
                 if (Number.isFinite(entry.wrapLayer.right_value)) wrapTrack.scaleMax = entry.wrapLayer.right_value;
@@ -6271,10 +6279,11 @@
             if (!Number.isFinite(depth)) return;
             const idx = findNearestDepthIndex(depth, lastDigitizedDepth);
             const entry = lastDigitizedCurves[curveKey];
-            const activeValues = getActiveLayerValues(entry);
-            if (!entry || !activeValues || idx >= activeValues.length) return;
-            
+            if (!entry) return;
             window.currentDragLayer = resolveActiveLayer(xImg, yImg, entry, targetTrack);
+            const activeValues = getActiveLayerValues(entry);
+            if (!activeValues || idx >= activeValues.length) return;
+            
             if (isLayerLocked(window.currentDragLayer, entry)) {
                 showStatus(`Cannot edit: ${window.currentDragLayer === 'wrap' ? 'Wrap Line' : 'Main Line'} is locked.`, 'warning');
                 return;
@@ -6571,7 +6580,7 @@
                 
             const clickedTrackValue = wrapActive
                 ? pixelToTrackValue(rawEditX, targetTrack, { rawX: true })
-                : pixelToTrackValue(Math.max(targetTrack.leftX, Math.min(targetTrack.rightX, xImg)), targetTrack, { depthIndex: idx, values: entry.values });
+                : pixelToTrackValue(Math.max(targetTrack.leftX, Math.min(targetTrack.rightX, xImg)), targetTrack, { depthIndex: idx, values: getActiveLayerValues(entry) });
 
             if (!Number.isFinite(clickedTrackValue)) return;
 
@@ -9272,6 +9281,7 @@
                         return;
                     }
                     paintTargetLayer = targetLayer;
+                    window.currentDragLayer = targetLayer;
                     paintStrokeActive = true;
                     const pressure = pe.pointerType === 'pen' ? pe.pressure : null;
                     handlePaintSample(coords.xImg, coords.yImg, true, pressure);
