@@ -1638,6 +1638,9 @@
                                             <label class="toolbar-inline-checkbox toolbar-inline-checkbox-compact" title="Magnet Snap to curve while drawing/dragging">
                                                 <input type="checkbox" id="magnetEditToggle" checked> Magnet
                                             </label>
+                                            <label class="toolbar-inline-checkbox toolbar-inline-checkbox-compact" title="Bezier Control Point Edit Mode">
+                                                <input type="checkbox" id="bezierEditToggle" onchange="scheduleCurveOverlayRedraw()"> Bezier
+                                            </label>
                                         </div>
                                         <div style="display: flex; align-items: center; gap: 4px; font-size: 0.8em; color: #a1a1aa;" title="Paint brush thickness">
                                             <span>Brush:</span>
@@ -7257,6 +7260,83 @@
             }
             // Removed tight bounds check to allow edits outside track
 
+            const bezierToggle = document.getElementById('bezierEditToggle');
+            if (bezierToggle && bezierToggle.checked) {
+                const controls = window.bezierCurveControls && window.bezierCurveControls[editCurveId];
+                const entry = lastDigitizedCurves[curveKey];
+                if (targetTrack && entry && Array.isArray(controls)) {
+                    const wrapActive = targetTrack.wrapped;
+                    let bestDist = Infinity;
+                    let bestSegIdx = -1;
+                    let bestCtrlIdx = -1;
+                    const maxClickDist = 12; // image pixels
+                    
+                    controls.forEach((seg, sIdx) => {
+                        const getDispX = (rawX) => wrapActive ? wrapRawXToTrack(rawX, targetTrack) : rawX;
+                        
+                        // Check P1
+                        const p1_disp = [getDispX(seg.p1[0]), seg.p1[1]];
+                        const d1 = Math.sqrt((p1_disp[0] - xImg) ** 2 + (p1_disp[1] - yImg) ** 2);
+                        if (d1 < maxClickDist && d1 < bestDist) {
+                            bestDist = d1;
+                            bestSegIdx = sIdx;
+                            bestCtrlIdx = 1;
+                        }
+                        
+                        // Check P2
+                        const p2_disp = [getDispX(seg.p2[0]), seg.p2[1]];
+                        const d2 = Math.sqrt((p2_disp[0] - xImg) ** 2 + (p2_disp[1] - yImg) ** 2);
+                        if (d2 < maxClickDist && d2 < bestDist) {
+                            bestDist = d2;
+                            bestSegIdx = sIdx;
+                            bestCtrlIdx = 2;
+                        }
+                    });
+                    
+                    if (bestSegIdx >= 0) {
+                        const seg = controls[bestSegIdx];
+                        const originalCtrl = bestCtrlIdx === 1 ? seg.p1 : seg.p2;
+                        
+                        // Save initial values for undo
+                        const activeValues = getActiveLayerValues(entry);
+                        const valsBefore = activeValues.slice(seg.startIdx, seg.endIdx + 1).map((v, offset) => ({
+                            idx: seg.startIdx + offset,
+                            oldValue: v
+                        }));
+                        
+                        // Push undo state
+                        editUndoStack.push({
+                            type: 'bulk_transform',
+                            label: 'bezier_edit',
+                            curveKey,
+                            curveId: editCurveId,
+                            dragLayer: window.currentDragLayer || 'main',
+                            undoPoints: [],
+                            undoValues: valsBefore
+                        });
+                        
+                        _dragHasMoved = false;
+                        editDragState = {
+                            curveId: editCurveId,
+                            curveKey: curveKey,
+                            isBezierControl: true,
+                            segmentIndex: bestSegIdx,
+                            controlIndex: bestCtrlIdx,
+                            targetTrack: targetTrack,
+                            entry: entry,
+                            startX: xImg,
+                            startY: yImg,
+                            originalControlX: originalCtrl[0],
+                            originalControlY: originalCtrl[1],
+                            currentX: xImg,
+                            currentY: yImg,
+                            dragLayer: window.currentDragLayer || 'main'
+                        };
+                        return true;
+                    }
+                }
+            }
+
             const activeTrace = getActiveCurveTracePoints(editCurveId);
             const traceKey = activeTrace.traceKey || getActiveCurveTraceKey(editCurveId) || editCurveId;
             let pts = activeTrace.points;
@@ -7508,6 +7588,27 @@
             let xImg = state.currentX;
             let yImg = state.currentY;
             if (xImg == null || yImg == null) return;
+
+            if (state.isBezierControl) {
+                const deltaX = xImg - state.startX;
+                const controls = window.bezierCurveControls[state.curveId];
+                if (controls && controls[state.segmentIndex]) {
+                    const seg = controls[state.segmentIndex];
+                    if (state.controlIndex === 1) {
+                        seg.p1[0] = state.originalControlX + deltaX;
+                    } else {
+                        seg.p2[0] = state.originalControlX + deltaX;
+                    }
+                    
+                    // Apply to digitizer values
+                    applyBezierToSegmentValues(state.curveId, seg);
+                    
+                    // Rebuild trace
+                    rebuildCurveTraceFromDigitized(state.curveId);
+                }
+                return;
+            }
+
             const curveKey = state.curveKey || state.curveId;
             if (!curveKey || !lastDigitizedCurves || !lastDigitizedCurves[curveKey]) return;
             
@@ -7650,6 +7751,260 @@
 
             // Paint Tool technique: regenerate trace cleanly from digitized values!
             rebuildCurveTraceFromDigitized(state.curveId);
+        }
+
+        // ─── BEZIER CURVE EDITING HELPERS ──────────────────────────────────────
+        function getBezierSegments(curveId) {
+            const activeTrace = getActiveCurveTracePoints(curveId);
+            const pts = activeTrace.points;
+            if (!Array.isArray(pts) || pts.length < 2) return [];
+            
+            const pinIndices = [];
+            // Add first point index
+            pinIndices.push(0);
+            // Add all pinned indices
+            for (let i = 1; i < pts.length - 1; i++) {
+                const dIdx = pts[i][2];
+                if (dIdx != null && isDepthIndexPinned(curveId, dIdx)) {
+                    pinIndices.push(i);
+                }
+            }
+            // Add last point index
+            pinIndices.push(pts.length - 1);
+            
+            // Deduplicate and sort
+            const uniquePinIndices = Array.from(new Set(pinIndices)).sort((a, b) => a - b);
+            
+            const segments = [];
+            for (let s = 0; s < uniquePinIndices.length - 1; s++) {
+                const startIdx = uniquePinIndices[s];
+                const endIdx = uniquePinIndices[s + 1];
+                if (endIdx - startIdx < 2) continue; // skip extremely small segments
+                
+                segments.push({
+                    startIdx,
+                    endIdx,
+                    curveId
+                });
+            }
+            return segments;
+        }
+
+        function fitBezierToSegment(pts, startIdx, endIdx) {
+            const p0_rawX = pts[startIdx][5] !== undefined ? pts[startIdx][5] : pts[startIdx][0];
+            const p3_rawX = pts[endIdx][5] !== undefined ? pts[endIdx][5] : pts[endIdx][0];
+            
+            const p0 = [p0_rawX, pts[startIdx][1]];
+            const p3 = [p3_rawX, pts[endIdx][1]];
+            
+            const n = endIdx - startIdx;
+            
+            // Y coordinates of control points are distributed linearly
+            const y1 = p0[1] + (p3[1] - p0[1]) / 3;
+            const y2 = p0[1] + 2 * (p3[1] - p0[1]) / 3;
+            
+            let sum_u2 = 0;
+            let sum_uv = 0;
+            let sum_v2 = 0;
+            let sum_uC = 0;
+            let sum_vC = 0;
+            
+            for (let i = startIdx; i <= endIdx; i++) {
+                const t = (i - startIdx) / n;
+                const x_orig = pts[i][5] !== undefined ? pts[i][5] : pts[i][0];
+                
+                // Bezier basis functions for cubic curve:
+                // B(t) = (1-t)^3 p0 + 3(1-t)^2 t p1 + 3(1-t) t^2 p2 + t^3 p3
+                const b0 = (1 - t) ** 3;
+                const b1 = 3 * ((1 - t) ** 2) * t;
+                const b2 = 3 * (1 - t) * (t ** 2);
+                const b3 = t ** 3;
+                
+                const C = x_orig - b0 * p0[0] - b3 * p3[0];
+                
+                sum_u2 += b1 * b1;
+                sum_uv += b1 * b2;
+                sum_v2 += b2 * b2;
+                sum_uC += b1 * C;
+                sum_vC += b2 * C;
+            }
+            
+            const det = sum_u2 * sum_v2 - sum_uv * sum_uv;
+            let x1, x2;
+            if (Math.abs(det) > 1e-6) {
+                x1 = (sum_v2 * sum_uC - sum_uv * sum_vC) / det;
+                x2 = (sum_u2 * sum_vC - sum_uv * sum_uC) / det;
+            } else {
+                // Fallback to linear interpolation
+                x1 = p0[0] + (p3[0] - p0[0]) / 3;
+                x2 = p0[0] + 2 * (p3[0] - p0[0]) / 3;
+            }
+            
+            return {
+                p0,
+                p1: [x1, y1],
+                p2: [x2, y2],
+                p3
+            };
+        }
+
+        function syncBezierControlsForCurve(curveId) {
+            if (!curveId) return;
+            window.bezierCurveControls = window.bezierCurveControls || {};
+            
+            const activeTrace = getActiveCurveTracePoints(curveId);
+            const pts = activeTrace.points;
+            if (!Array.isArray(pts) || pts.length < 2) {
+                window.bezierCurveControls[curveId] = [];
+                return;
+            }
+            
+            const segments = getBezierSegments(curveId);
+            const existing = window.bezierCurveControls[curveId] || [];
+            const updated = [];
+            
+            segments.forEach(seg => {
+                const match = existing.find(e => e.startIdx === seg.startIdx && e.endIdx === seg.endIdx);
+                const p0_raw = pts[seg.startIdx][5] !== undefined ? pts[seg.startIdx][5] : pts[seg.startIdx][0];
+                const p3_raw = pts[seg.endIdx][5] !== undefined ? pts[seg.endIdx][5] : pts[seg.endIdx][0];
+                
+                if (match) {
+                    // Update P0 and P3 from current trace point coordinates (since they are pins and might have moved)
+                    match.p0 = [p0_raw, pts[seg.startIdx][1]];
+                    match.p3 = [p3_raw, pts[seg.endIdx][1]];
+                    // Keep control points P1 and P2, but ensure their Y coordinates remain linearly spaced
+                    match.p1[1] = match.p0[1] + (match.p3[1] - match.p0[1]) / 3;
+                    match.p2[1] = match.p0[1] + 2 * (match.p3[1] - match.p0[1]) / 3;
+                    updated.push(match);
+                } else {
+                    const fit = fitBezierToSegment(pts, seg.startIdx, seg.endIdx);
+                    updated.push({
+                        startIdx: seg.startIdx,
+                        endIdx: seg.endIdx,
+                        p0: fit.p0,
+                        p1: fit.p1,
+                        p2: fit.p2,
+                        p3: fit.p3
+                    });
+                }
+            });
+            
+            window.bezierCurveControls[curveId] = updated;
+        }
+
+        function applyBezierToSegmentValues(curveId, segment) {
+            const curveKey = editCurveDataKey || curveId;
+            const entry = lastDigitizedCurves[normalizeCurveKey(curveKey)];
+            if (!entry || !Array.isArray(entry.values)) return;
+            const activeValues = getActiveLayerValues(entry);
+            const targetTrack = findTrackByCurveId(curveId);
+            if (!targetTrack || !activeValues) return;
+            
+            const activeTrace = getActiveCurveTracePoints(curveId);
+            const pts = activeTrace.points;
+            if (!pts) return;
+
+            const n = segment.endIdx - segment.startIdx;
+            const p0 = segment.p0;
+            const p1 = segment.p1;
+            const p2 = segment.p2;
+            const p3 = segment.p3;
+            
+            for (let i = segment.startIdx; i <= segment.endIdx; i++) {
+                const t = (i - segment.startIdx) / n;
+                const b0 = (1 - t) ** 3;
+                const b1 = 3 * ((1 - t) ** 2) * t;
+                const b2 = 3 * (1 - t) * (t ** 2);
+                const b3 = t ** 3;
+                
+                const rawX = b0 * p0[0] + b1 * p1[0] + b2 * p2[0] + b3 * p3[0];
+                
+                const depthIdx = pts[i][2];
+                if (depthIdx == null || depthIdx < 0 || depthIdx >= activeValues.length) continue;
+                if (isDepthIndexPinned(curveId, depthIdx)) {
+                    // Do not overwrite pins except at the boundaries P0 and P3
+                    if (depthIdx !== pts[segment.startIdx][2] && depthIdx !== pts[segment.endIdx][2]) {
+                        continue;
+                    }
+                }
+                if (isPointLocked(activeValues[depthIdx], targetTrack, entry)) continue;
+                
+                const val = pixelToTrackValue(rawX, getActiveLayerTrackConfig(entry, targetTrack), { rawX: true });
+                if (Number.isFinite(val)) {
+                    activeValues[depthIdx] = val;
+                }
+            }
+        }
+
+        function renderBezierControls(ctx, scaleX, scaleY, trackMeta) {
+            if (!editMode || !editCurveId) return;
+            const bezierToggle = document.getElementById('bezierEditToggle');
+            if (!bezierToggle || !bezierToggle.checked) return;
+            
+            // Sync first
+            syncBezierControlsForCurve(editCurveId);
+            
+            const controls = window.bezierCurveControls && window.bezierCurveControls[editCurveId];
+            if (!Array.isArray(controls)) return;
+            
+            ctx.save();
+            
+            controls.forEach((seg) => {
+                const wrapActive = trackMeta && trackMeta.wrapped;
+                
+                const getDispX = (rawX) => {
+                    return wrapActive ? wrapRawXToTrack(rawX, trackMeta) : rawX;
+                };
+                
+                const p0_dispX = getDispX(seg.p0[0]);
+                const p1_dispX = getDispX(seg.p1[0]);
+                const p2_dispX = getDispX(seg.p2[0]);
+                const p3_dispX = getDispX(seg.p3[0]);
+                
+                const x0 = p0_dispX * scaleX;
+                const y0 = seg.p0[1] * scaleY;
+                const x1 = p1_dispX * scaleX;
+                const y1 = seg.p1[1] * scaleY;
+                const x2 = p2_dispX * scaleX;
+                const y2 = seg.p2[1] * scaleY;
+                const x3 = p3_dispX * scaleX;
+                const y3 = seg.p3[1] * scaleY;
+                
+                // Draw tangent lines
+                ctx.beginPath();
+                ctx.setLineDash([4, 3]);
+                ctx.strokeStyle = '#eab308'; // Amber/Yellow
+                ctx.lineWidth = 1.5;
+                
+                // Line from P0 to P1
+                ctx.moveTo(x0, y0);
+                ctx.lineTo(x1, y1);
+                
+                // Line from P3 to P2
+                ctx.moveTo(x3, y3);
+                ctx.lineTo(x2, y2);
+                
+                ctx.stroke();
+                
+                // Draw P1 handle
+                ctx.beginPath();
+                ctx.setLineDash([]);
+                ctx.arc(x1, y1, 5, 0, Math.PI * 2);
+                ctx.fillStyle = '#f59e0b'; // Amber fill
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 1.5;
+                ctx.fill();
+                ctx.stroke();
+                
+                // Draw P2 handle
+                ctx.beginPath();
+                ctx.arc(x2, y2, 5, 0, Math.PI * 2);
+                ctx.fillStyle = '#f59e0b';
+                ctx.fill();
+                ctx.stroke();
+            });
+            
+            ctx.restore();
         }
 
         // Snap-to-curve: find the curve color in a small region around the point
@@ -13551,6 +13906,13 @@
                 }
             }
             renderScaleWrapMarkersOnCanvas(ctx, scaleX, scaleY, tracks);
+            
+            if (editMode && editCurveId) {
+                const targetTrack = findTrackByCurveId(editCurveId);
+                if (targetTrack) {
+                    renderBezierControls(ctx, scaleX, scaleY, targetTrack);
+                }
+            }
         }
 
         function clearDepthOverlays() {
