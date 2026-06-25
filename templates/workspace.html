@@ -4615,6 +4615,11 @@
             return 'main';
         }
 
+        function isLayerLocked(layer) {
+            if (layer === 'wrap') return !!window.lineLockWrap;
+            return !!window.lineLockMain;
+        }
+
         function getActiveLayerValues(entry) {
             if (!entry) return null;
             if (window.currentDragLayer === 'wrap' && entry.wrapLayer && Array.isArray(entry.wrapLayer.values)) {
@@ -8451,7 +8456,13 @@
                     // Resolve which layer we are drawing on based on distance/locks
                     const curveKey = editCurveDataKey || editCurveId;
                     const entry = lastDigitizedCurves && curveKey ? lastDigitizedCurves[curveKey] : null;
-                    window.currentDragLayer = resolveActiveLayer(xImg, yImg, entry, clickedTrack);
+                    const targetLayer = resolveActiveLayer(xImg, yImg, entry, clickedTrack);
+                    if (isLayerLocked(targetLayer)) {
+                        showStatus(`Cannot edit: ${targetLayer === 'wrap' ? 'Wrap Line' : 'Main Line'} is locked.`, 'warning');
+                        event.preventDefault();
+                        return;
+                    }
+                    window.currentDragLayer = targetLayer;
                     
                     drawStrokeActive = true;
                     drawStrokePoints = [[xImg, yImg]];
@@ -8468,7 +8479,13 @@
                 if (activeTool === 'paint' && event.button === 0) {
                     const curveKey = editCurveDataKey || editCurveId;
                     const entry = lastDigitizedCurves && curveKey ? lastDigitizedCurves[curveKey] : null;
-                    paintTargetLayer = resolveActiveLayer(xImg, yImg, entry, clickedTrack);
+                    const targetLayer = resolveActiveLayer(xImg, yImg, entry, clickedTrack);
+                    if (isLayerLocked(targetLayer)) {
+                        showStatus(`Cannot edit: ${targetLayer === 'wrap' ? 'Wrap Line' : 'Main Line'} is locked.`, 'warning');
+                        event.preventDefault();
+                        return;
+                    }
+                    paintTargetLayer = targetLayer;
                     
                     paintStrokeActive = true;
                     handlePaintSample(xImg, yImg, true);
@@ -8479,7 +8496,13 @@
                 if (activeTool === 'eraser' && event.button === 0) {
                     const curveKey = editCurveDataKey || editCurveId;
                     const entry = lastDigitizedCurves && curveKey ? lastDigitizedCurves[curveKey] : null;
-                    window.currentDragLayer = resolveActiveLayer(xImg, yImg, entry, clickedTrack);
+                    const targetLayer = resolveActiveLayer(xImg, yImg, entry, clickedTrack);
+                    if (isLayerLocked(targetLayer)) {
+                        showStatus(`Cannot edit: ${targetLayer === 'wrap' ? 'Wrap Line' : 'Main Line'} is locked.`, 'warning');
+                        event.preventDefault();
+                        return;
+                    }
+                    window.currentDragLayer = targetLayer;
                     
                     eraserStart = { x: xImg, y: yImg, clientX: event.clientX, clientY: event.clientY };
                     eraserBox = document.createElement('div');
@@ -8500,13 +8523,28 @@
                 if (event.button === 0) {
                     // Left-click: behavior depends on active tool
                     if (activeTool === 'pointer') {
+                        const curveKey = editCurveDataKey || editCurveId;
+                        const entry = lastDigitizedCurves && curveKey ? lastDigitizedCurves[curveKey] : null;
+                        const targetLayer = resolveActiveLayer(xImg, yImg, entry, clickedTrack);
+                        if (isLayerLocked(targetLayer)) {
+                            showStatus(`Cannot edit: ${targetLayer === 'wrap' ? 'Wrap Line' : 'Main Line'} is locked.`, 'warning');
+                            event.preventDefault();
+                            return;
+                        }
+                        window.currentDragLayer = targetLayer;
                         // Start drag / nudge
                         beginCurveEditInteraction(xImg, yImg);
                     } else if (activeTool === 'addPoint') {
                         // Explicitly add a control point at this bend
                         const curveKey = editCurveDataKey || editCurveId;
                         const entry = lastDigitizedCurves && curveKey ? lastDigitizedCurves[curveKey] : null;
-                        window.currentDragLayer = resolveActiveLayer(xImg, yImg, entry, clickedTrack);
+                        const targetLayer = resolveActiveLayer(xImg, yImg, entry, clickedTrack);
+                        if (isLayerLocked(targetLayer)) {
+                            showStatus(`Cannot edit: ${targetLayer === 'wrap' ? 'Wrap Line' : 'Main Line'} is locked.`, 'warning');
+                            event.preventDefault();
+                            return;
+                        }
+                        window.currentDragLayer = targetLayer;
                         handleCurveAddPoint(xImg, yImg);
                     }
                 }
