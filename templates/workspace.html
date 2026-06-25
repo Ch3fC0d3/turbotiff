@@ -4591,25 +4591,42 @@
             if (!Number.isFinite(depth)) return 'main';
             const dIdx = typeof findNearestDepthIndex === 'function' ? findNearestDepthIndex(depth, lastDigitizedDepth) : -1;
             
+            const getAmbiguousLayer = () => {
+                if (window.lineLockMain && !window.lineLockWrap) return 'wrap';
+                return 'main';
+            };
+            
             if (dIdx >= 0 && dIdx < lastDigitizedDepth.length) {
                 const mainVal = entry.values[dIdx];
                 const wrapVal = entry.wrapLayer.values[dIdx];
-                if (mainVal == null && wrapVal != null) return 'wrap';
-                if (wrapVal == null && mainVal != null) return 'main';
-                if (mainVal == null && wrapVal == null) return 'main';
                 
                 const wrapTrack = { ...track };
                 if (Number.isFinite(entry.wrapLayer.left_value)) wrapTrack.scaleMin = entry.wrapLayer.left_value;
                 if (Number.isFinite(entry.wrapLayer.right_value)) wrapTrack.scaleMax = entry.wrapLayer.right_value;
                 
-                const mainX = valueToPixel(mainVal, track);
-                const wrapX = valueToPixel(wrapVal, wrapTrack);
+                const mainX = mainVal != null ? valueToPixel(mainVal, track) : null;
+                const wrapX = wrapVal != null ? valueToPixel(wrapVal, wrapTrack) : null;
                 
-                if (mainX != null && wrapX != null) {
-                    if (Math.abs(wrapX - xImg) < Math.abs(mainX - xImg)) return 'wrap';
+                let distMain = mainX != null ? Math.abs(mainX - xImg) : Infinity;
+                let distWrap = wrapX != null ? Math.abs(wrapX - xImg) : Infinity;
+                
+                // If both are far away (>30px), treat as empty space click
+                if (distMain > 30 && distWrap > 30) {
+                    return getAmbiguousLayer();
                 }
+                
+                // If both are nearby, prefer the UNLOCKED one if one is locked
+                if (distMain <= 30 && distWrap <= 30) {
+                    if (window.lineLockMain && !window.lineLockWrap) return 'wrap';
+                    if (window.lineLockWrap && !window.lineLockMain) return 'main';
+                }
+                
+                // Otherwise, return the closest one
+                if (distWrap < distMain) return 'wrap';
+                return 'main';
             }
-            return 'main';
+            
+            return getAmbiguousLayer();
         }
 
         function isLayerLocked(layer) {
