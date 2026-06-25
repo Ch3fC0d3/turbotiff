@@ -3074,11 +3074,11 @@
         }
 
         function getMaxSafeZoom() {
-            const minZoom = 0.5;
+            const minZoom = 0.05;
             const hardMaxZoom = 20.0;
-            // Allow much higher zoom on tall logs without exploding layout width.
-            const maxCssWidth = 120000;
-            const maxCssHeight = 600000;
+            // Allow much higher zoom on tall/wide logs without exploding layout.
+            const maxCssWidth = 1200000;
+            const maxCssHeight = 6000000;
             if (!imageWidth || !imageHeight) return Math.max(minZoom, hardMaxZoom);
             const maxByW = maxCssWidth / Math.max(1, imageWidth);
             const maxByH = maxCssHeight / Math.max(1, imageHeight);
@@ -3087,7 +3087,7 @@
         }
 
         function setZoom(value) {
-            const minZoom = 0.25;
+            const minZoom = 0.05;
             const maxZoom = getMaxSafeZoom();
             const requested = Number(value);
             const clamped = Math.max(minZoom, Math.min(maxZoom, requested));
