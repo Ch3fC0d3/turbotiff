@@ -1480,14 +1480,14 @@
                                 <div class="control-section">
                                     <span class="control-title">Zoom</span>
                                     <div class="toolbar-pill-grid">
+                                        <button type="button" class="btn" onclick="setZoom(0.10)">10%</button>
                                         <button type="button" class="btn" onclick="setZoom(0.25)">25%</button>
                                         <button type="button" class="btn" onclick="setZoom(0.5)">50%</button>
                                         <button type="button" class="btn" onclick="setZoom(1.0)">100%</button>
                                         <button type="button" class="btn" onclick="setZoom(2.0)">200%</button>
-                                        <button type="button" class="btn" onclick="setZoom(4.0)">400%</button>
                                     </div>
                                     <div class="toolbar-slider-row">
-                                        <input type="range" id="zoomSlider" min="50" max="4800" value="100" step="5" oninput="setZoom(this.value / 100)" />
+                                        <input type="range" id="zoomSlider" min="10" max="4800" value="100" step="5" oninput="setZoom(this.value / 100)" />
                                         <span id="zoomLabel" class="hint-text">100%</span>
                                     </div>
                                 </div>
@@ -1621,7 +1621,7 @@
                                     </div>
                                     <div style="display: flex; flex-direction: column; gap: 2px;">
                                         <span style="font-size: 0.65rem; color: #94a3b8; text-align: center;">Speed</span>
-                                        <input type="range" id="scrollSpeed" min="1" max="15" value="3" style="width: 100%;">
+                                        <input type="range" id="scrollSpeed" min="0.1" max="15" value="1" step="0.1" style="width: 100%;">
                                     </div>
                                 </div>
 
@@ -15523,7 +15523,7 @@ function autoScrollStep() {
     
     const scroller = document.querySelector('.overlay-scroll');
     const speedInput = document.getElementById('scrollSpeed');
-    const speed = speedInput ? parseInt(speedInput.value, 10) : 3;
+    const speed = speedInput ? parseFloat(speedInput.value) : 3;
     const dy = speed * autoScrollDirection;
 
     if (scroller && scroller.scrollHeight > scroller.clientHeight) {
