@@ -2065,6 +2065,7 @@
         let headerCaptureEnabled = true;
         let lastDigitizedDepth = null;   // array of depths from last /digitize
         let lastDigitizedCurves = null;  // { curveId: { unit, values[] } }
+        let activeLogId = {% if log_data %}{{ log_data.id | tojson | safe }}{% else %}null{% endif %}; // active DB log ID
         let lastLasContent = null;       // LAS text from last digitization
         let lastLasFilename = null;      // LAS filename from last digitization
         let originalUploadedFile = null; // The File object of the uploaded TIFF/PNG
@@ -13748,9 +13749,9 @@
                     lastLasFilename = data.filename || 'digitized_log.las';
                     lastDepthConfig = depthCfg;
                     lastNullValue = (config.global_options && typeof config.global_options.null === 'number') ? config.global_options.null : -999.25;
-                    if (!lastLasContent && Array.isArray(lastDigitizedDepth) && lastDigitizedDepth.length > 0 &&
+                    if (Array.isArray(lastDigitizedDepth) && lastDigitizedDepth.length > 0 &&
                         lastDigitizedCurves && typeof lastDigitizedCurves === 'object') {
-                        const rebuiltLas = buildLasFromDigitized(lastDigitizedDepth, lastDigitizedCurves, lastDepthConfig, lastNullValue);
+                        const rebuiltLas = buildLasFromDigitized(lastDigitizedDepth, lastDigitizedCurves, lastDepthConfig || depthCfg, lastNullValue);
                         if (rebuiltLas && typeof rebuiltLas === 'string' && rebuiltLas.trim().length) {
                             lastLasContent = rebuiltLas;
                         }
@@ -14060,7 +14061,8 @@
             if (Array.isArray(lastDigitizedDepth) && lastDigitizedDepth.length > 0 &&
                 lastDigitizedCurves && typeof lastDigitizedCurves === 'object' &&
                 Object.keys(lastDigitizedCurves).length > 0) {
-                const rebuilt = buildLasFromDigitized(lastDigitizedDepth, lastDigitizedCurves, lastDepthConfig, lastNullValue);
+                const depthCfg = lastDepthConfig || (typeof getDepthConfigFromInputs === 'function' ? getDepthConfigFromInputs() : null);
+                const rebuilt = buildLasFromDigitized(lastDigitizedDepth, lastDigitizedCurves, depthCfg, lastNullValue);
                 if (rebuilt && typeof rebuilt === 'string' && rebuilt.trim().length) {
                     finalLasContent = rebuilt;
                 }
@@ -14106,6 +14108,7 @@
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
+                        log_id: activeLogId,
                         name: logName,
                         curve_count: curveCount,
                         depth_start: topDepth,
@@ -14119,6 +14122,7 @@
 
                 const data = await response.json();
                 if (data.success) {
+                    if (data.log_id) activeLogId = data.log_id;
                     console.log(`✅ Log auto-saved: ${logName}`);
                     showStatus(`✅ Log saved: ${logName}`, 'success');
                     showSaveConfirmation(data.log_name || logName);
@@ -14132,21 +14136,24 @@
 
         function downloadLastLas() {
             let lasText = null;
+            let unstrippedLas = null;
 
             // Prefer a LAS rebuilt from the in-memory digitized arrays so any
             // manual edits made in the viewer are reflected in the download.
             if (Array.isArray(lastDigitizedDepth) && lastDigitizedDepth.length > 0 &&
-                lastDigitizedCurves && typeof lastDigitizedCurves === 'object' &&
-                lastDepthConfig) {
-                const rebuilt = buildLasFromDigitized(lastDigitizedDepth, lastDigitizedCurves, lastDepthConfig, lastNullValue);
+                lastDigitizedCurves && typeof lastDigitizedCurves === 'object') {
+                const depthCfg = lastDepthConfig || (typeof getDepthConfigFromInputs === 'function' ? getDepthConfigFromInputs() : null);
+                const rebuilt = buildLasFromDigitized(lastDigitizedDepth, lastDigitizedCurves, depthCfg, lastNullValue);
                 if (rebuilt && typeof rebuilt === 'string' && rebuilt.trim().length) {
                     lasText = rebuilt;
+                    unstrippedLas = rebuilt;
                 }
             }
 
             // Fallback: use the LAS content returned by the server.
             if (!lasText && lastLasContent) {
                 lasText = lastLasContent;
+                unstrippedLas = lastLasContent;
             }
 
             if (!lasText) {
@@ -14158,8 +14165,8 @@
                 lasText = stripTurbotiffStateFromLasText(lasText);
             }
 
-            // Keep the cached LAS in sync with whatever we are downloading.
-            lastLasContent = lasText;
+            // Keep the cached LAS in sync with unstripped content.
+            lastLasContent = unstrippedLas || lasText;
 
             const blob = new Blob([lasText], { type: 'text/plain' });
             const url = URL.createObjectURL(blob);
@@ -14196,9 +14203,9 @@
             // Rebuild LAS to include manual edits
             let finalLasContent = lastLasContent || '';
             if (Array.isArray(lastDigitizedDepth) && lastDigitizedDepth.length > 0 &&
-                lastDigitizedCurves && typeof lastDigitizedCurves === 'object' &&
-                lastDepthConfig) {
-                const rebuilt = buildLasFromDigitized(lastDigitizedDepth, lastDigitizedCurves, lastDepthConfig, lastNullValue);
+                lastDigitizedCurves && typeof lastDigitizedCurves === 'object') {
+                const depthCfg = lastDepthConfig || (typeof getDepthConfigFromInputs === 'function' ? getDepthConfigFromInputs() : null);
+                const rebuilt = buildLasFromDigitized(lastDigitizedDepth, lastDigitizedCurves, depthCfg, lastNullValue);
                 if (rebuilt && typeof rebuilt === 'string' && rebuilt.trim().length) {
                     finalLasContent = rebuilt;
                 }
@@ -14210,6 +14217,7 @@
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({
+                    log_id: activeLogId,
                     name: logName,
                     curve_count: curveCount,
                     depth_start: topDepth,
@@ -14223,6 +14231,7 @@
             .then(r => r.json())
             .then(data => {
                 if (data.success) {
+                    if (data.log_id) activeLogId = data.log_id;
                     btn.innerHTML = '✅ Saved!';
                     showStatus(`Log saved successfully: ${logName}`, 'success');
                     setTimeout(() => {
@@ -14830,6 +14839,17 @@
                             renderCurveTraceOverlays(lastCurveTraces);
                         }, 100);
                     }
+                    if (stateBlob.digitizedCurves && typeof stateBlob.digitizedCurves === 'object') {
+                        lastDigitizedCurves = stateBlob.digitizedCurves;
+                        window.lastDigitizedCurves = stateBlob.digitizedCurves;
+                    }
+                    if (stateBlob.curveWrapMarkers && typeof stateBlob.curveWrapMarkers === 'object') {
+                        curveWrapMarkers = stateBlob.curveWrapMarkers;
+                    }
+                    if (stateBlob.regions && typeof stateBlob.regions === 'object') {
+                        if (stateBlob.regions.primary) primaryRegion = stateBlob.regions.primary;
+                        if (stateBlob.regions.header) headerRegion = stateBlob.regions.header;
+                    }
                 } else {
                     const restoredMetadata = extractHeaderMetadataFromLasText(lastLasContent);
                     if (restoredMetadata) {
@@ -14911,6 +14931,14 @@
             const arrays = curveNames.map((name) => {
                 const meta = curves[name] || {};
                 const vals = Array.isArray(meta.values) ? meta.values.slice() : [];
+                if (meta.wrapLayer && Array.isArray(meta.wrapLayer.values)) {
+                    for (let k = 0; k < vals.length; k++) {
+                        const wVal = meta.wrapLayer.values[k];
+                        if (wVal !== null && wVal !== undefined && !Number.isNaN(wVal)) {
+                            vals[k] = wVal;
+                        }
+                    }
+                }
                 if (vals.length < depths.length) {
                     while (vals.length < depths.length) {
                         vals.push(nullVal);
@@ -14936,7 +14964,53 @@
                 lines.push(row.join(' ') + eol);
             }
 
-            return lines.join('');
+            return embedTurbotiffStateIntoLasText(lines.join(''));
+        }
+
+        function embedTurbotiffStateIntoLasText(lasText) {
+            if (!lasText || typeof lasText !== 'string') return lasText || '';
+            let cleanText = lasText;
+            if (cleanText.includes('TURBOTIFF_STATE_START')) {
+                cleanText = (typeof stripTurbotiffStateFromLasText === 'function') ? stripTurbotiffStateFromLasText(cleanText) : cleanText;
+            }
+            const eol = cleanText.includes('\r\n') ? '\r\n' : '\n';
+            const cfg = (typeof buildDigitizeConfigFromInputs === 'function') ? buildDigitizeConfigFromInputs() : null;
+            if (cfg && Array.isArray(cfg.curves)) {
+                cfg.curves.forEach(c => {
+                    if (c && c.left_value !== undefined && c.scale_min === undefined) c.scale_min = c.left_value;
+                    if (c && c.right_value !== undefined && c.scale_max === undefined) c.scale_max = c.right_value;
+                });
+            }
+            const stateBlob = {
+                headerMetadata: (typeof syncHeaderMetadataFromInputs === 'function') ? syncHeaderMetadataFromInputs() : (typeof headerMetadata !== 'undefined' ? headerMetadata : {}),
+                config: cfg,
+                curveTraces: (typeof lastCurveTraces !== 'undefined' && lastCurveTraces) ? lastCurveTraces : {},
+                digitizedCurves: (typeof lastDigitizedCurves !== 'undefined' && lastDigitizedCurves) ? lastDigitizedCurves : {},
+                curveWrapMarkers: (typeof curveWrapMarkers !== 'undefined' && curveWrapMarkers) ? curveWrapMarkers : {},
+                regions: {
+                    primary: (typeof primaryRegion !== 'undefined' && primaryRegion) ? primaryRegion : null,
+                    header: (typeof headerRegion !== 'undefined' && headerRegion) ? headerRegion : null
+                }
+            };
+            let b64 = '';
+            try {
+                b64 = btoa(unescape(encodeURIComponent(JSON.stringify(stateBlob))));
+            } catch (err) {
+                console.error("Failed to base64 encode stateBlob:", err);
+                return cleanText;
+            }
+            const chunks = [];
+            for (let i = 0; i < b64.length; i += 70) {
+                chunks.push('# ' + b64.substring(i, i + 70));
+            }
+            const stateBlock = [
+                '',
+                '~Other',
+                '# TURBOTIFF_STATE_START',
+                ...chunks,
+                '# TURBOTIFF_STATE_END'
+            ].join(eol);
+            return cleanText.replace(/\s+$/, '') + eol + eol + stateBlock + eol;
         }
 
         function stripTurbotiffStateFromLasText(lasText) {

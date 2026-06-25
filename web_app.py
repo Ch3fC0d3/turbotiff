@@ -9932,7 +9932,7 @@ def save_log():
     
     try:
         import uuid
-        log_id = str(uuid.uuid4())
+        passed_log_id = data.get('log_id') or data.get('id')
         name = data.get('name', 'Untitled Log')
         curve_count = data.get('curve_count', 0)
         depth_start = float(data.get('depth_start', 0))
@@ -9950,14 +9950,31 @@ def save_log():
                 except Exception as e:
                     print("Admin user init error:", e)
 
-            conn.execute("""
-                INSERT INTO user_logs (id, user_id, name, curve_count, depth_start, depth_end, depth_unit, las_content, original_image_path, cropped_image_path, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                log_id, user['id'], name, curve_count, depth_start, depth_end, depth_unit, las_content, original_image_path, cropped_image_path,
-                datetime.now(timezone.utc).isoformat(),
-                datetime.now(timezone.utc).isoformat()
-            ))
+            existing_log = None
+            if passed_log_id:
+                existing_log = conn.execute("SELECT id FROM user_logs WHERE id = ? AND user_id = ?", (str(passed_log_id), user['id'])).fetchone()
+
+            if existing_log:
+                log_id = str(passed_log_id)
+                conn.execute("""
+                    UPDATE user_logs 
+                    SET name = ?, curve_count = ?, depth_start = ?, depth_end = ?, depth_unit = ?, las_content = ?, original_image_path = COALESCE(?, original_image_path), cropped_image_path = COALESCE(?, cropped_image_path), updated_at = ?
+                    WHERE id = ? AND user_id = ?
+                """, (
+                    name, curve_count, depth_start, depth_end, depth_unit, las_content, original_image_path, cropped_image_path,
+                    datetime.now(timezone.utc).isoformat(),
+                    log_id, user['id']
+                ))
+            else:
+                log_id = str(passed_log_id) if passed_log_id else str(uuid.uuid4())
+                conn.execute("""
+                    INSERT INTO user_logs (id, user_id, name, curve_count, depth_start, depth_end, depth_unit, las_content, original_image_path, cropped_image_path, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    log_id, user['id'], name, curve_count, depth_start, depth_end, depth_unit, las_content, original_image_path, cropped_image_path,
+                    datetime.now(timezone.utc).isoformat(),
+                    datetime.now(timezone.utc).isoformat()
+                ))
             conn.commit()
             
         print(f"[SAVE LOG] Successfully saved log {log_id} for user {user['id']}: {name}")
