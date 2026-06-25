@@ -6348,7 +6348,7 @@
         let paintUndoValuesBefore = [];
         let paintUndoPtsBefore = [];
 
-        function handlePaintSample(xImg, yImg, isFirstPoint = false) {
+        function handlePaintSample(xImg, yImg, isFirstPoint = false, pressure = null) {
             if (!paintStrokeActive || !editMode || !editCurveId) return;
             const curveKey = editCurveDataKey || editCurveId;
             if (!lastDigitizedCurves || !lastDigitizedCurves[curveKey]) return;
@@ -6373,7 +6373,12 @@
             if (!Number.isFinite(val)) return;
 
             const brushSizeStr = document.getElementById('paintBrushSize')?.value || "1";
-            const brushRadius = Math.max(0, parseInt(brushSizeStr, 10) - 1); // 1 = radius 0, 3 = radius 1, 5 = radius 2
+            const baseBrushSize = parseInt(brushSizeStr, 10);
+            
+            // Apply pressure to brush size if provided (e.g. tablet pen): 
+            // scales baseBrushSize based on pressure (0.0 to 1.0)
+            const currentBrushSize = pressure !== null ? Math.max(1, Math.round(baseBrushSize * pressure)) : baseBrushSize;
+            const brushRadius = Math.max(0, currentBrushSize - 1);
 
             // Record changes
             const applyVal = (targetIdx, targetVal) => {
@@ -8536,60 +8541,6 @@
                 if (event.button === 2) {
                     return;
                 }
-                // DRAW (PEN) TOOL
-                if (activeTool === 'draw' && (event.button === 0 || (event.pointerType && event.pointerType !== 'mouse'))) {
-                    // Resolve which layer we are drawing on based on distance/locks
-                    const curveKey = editCurveDataKey || editCurveId;
-                    const entry = lastDigitizedCurves && curveKey ? lastDigitizedCurves[curveKey] : null;
-                    const targetLayer = resolveActiveLayer(xImg, yImg, entry, clickedTrack);
-                    
-                    // Check point-level locks for draw tool (since draw only creates main points)
-                    if (targetLayer === 'main' && window.lineLockMain) {
-                        showStatus('Cannot edit: Main Line is locked.', 'warning');
-                        event.preventDefault();
-                        return;
-                    }
-                    if (targetLayer === 'wrap' && window.lineLockWrap) {
-                        showStatus('Cannot edit: Wrap Line is locked.', 'warning');
-                        event.preventDefault();
-                        return;
-                    }
-
-                    window.currentDragLayer = targetLayer;
-                    
-                    drawStrokeActive = true;
-                    drawStrokePoints = [[xImg, yImg]];
-                    // Create a visual cursor ring that follows the pen
-                    if (!drawCursorRing && overlay) {
-                        drawCursorRing = document.createElement('div');
-                        drawCursorRing.className = 'draw-cursor-ring';
-                        overlay.appendChild(drawCursorRing);
-                    }
-                    event.preventDefault();
-                    return;
-                }
-                // PAINT TRACE TOOL
-                if (activeTool === 'paint' && event.button === 0) {
-                    const curveKey = editCurveDataKey || editCurveId;
-                    const entry = lastDigitizedCurves && curveKey ? lastDigitizedCurves[curveKey] : null;
-                    const targetLayer = resolveActiveLayer(xImg, yImg, entry, clickedTrack);
-                    if (targetLayer === 'main' && window.lineLockMain) {
-                        showStatus('Cannot edit: Main Line is locked.', 'warning');
-                        event.preventDefault();
-                        return;
-                    }
-                    if (targetLayer === 'wrap' && window.lineLockWrap) {
-                        showStatus('Cannot edit: Wrap Line is locked.', 'warning');
-                        event.preventDefault();
-                        return;
-                    }
-                    paintTargetLayer = targetLayer;
-                    
-                    paintStrokeActive = true;
-                    handlePaintSample(xImg, yImg, true);
-                    event.preventDefault();
-                    return;
-                }
                 // ERASER TOOL
                 if (activeTool === 'eraser' && event.button === 0) {
                     const curveKey = editCurveDataKey || editCurveId;
@@ -8707,18 +8658,6 @@
             // Update crosshair
             updateCrosshair(xImg, yImg, rect, event);
             
-            // Handle Draw (Pen) Stroke Sampling
-            if (drawStrokeActive && activeTool === 'draw') {
-                handleDrawSample(xImg, yImg);
-                // Move the visual cursor ring
-                if (drawCursorRing && imageWidth && imageHeight) {
-                    drawCursorRing.style.left = `${(xImg / (imageWidth - 1)) * 100}%`;
-                    drawCursorRing.style.top  = `${(yImg / (imageHeight - 1)) * 100}%`;
-                }
-                event.preventDefault();
-                return;
-            }
-
             // Handle Eraser Drag
             if (eraserStart && eraserBox) {
                 const x1 = Math.min(eraserStart.x, xImg);
@@ -8873,12 +8812,6 @@
         });
 
         document.addEventListener('mouseup', async (event) => {
-            // Handle Draw Stroke Finalization
-            if (drawStrokeActive && activeTool === 'draw') {
-                commitDrawStroke();
-                return;
-            }
-
             // Handle Eraser Finalization
             if (eraserStart) {
                 if (eraserBox) eraserBox.remove();
@@ -9308,7 +9241,13 @@
                 const clickedTrack = getTrackUnderImageX(coords.xImg);
 
                 if (activeTool === 'draw') {
-                    window.currentDragLayer = resolveActiveLayer(coords.xImg, coords.yImg, entry, clickedTrack);
+                    const targetLayer = resolveActiveLayer(coords.xImg, coords.yImg, entry, clickedTrack);
+                    if (isLayerLocked(targetLayer, entry)) {
+                        showStatus(`Cannot edit: ${targetLayer === 'wrap' ? 'Wrap Line' : 'Main Line'} is locked.`, 'warning');
+                        pe.preventDefault();
+                        return;
+                    }
+                    window.currentDragLayer = targetLayer;
                     drawStrokeActive = true;
                     drawStrokePoints = [[coords.xImg, coords.yImg]];
                     if (!drawCursorRing) {
@@ -9320,9 +9259,16 @@
                         }
                     }
                 } else if (activeTool === 'paint') {
-                    paintTargetLayer = resolveActiveLayer(coords.xImg, coords.yImg, entry, clickedTrack);
+                    const targetLayer = resolveActiveLayer(coords.xImg, coords.yImg, entry, clickedTrack);
+                    if (isLayerLocked(targetLayer, entry)) {
+                        showStatus(`Cannot edit: ${targetLayer === 'wrap' ? 'Wrap Line' : 'Main Line'} is locked.`, 'warning');
+                        pe.preventDefault();
+                        return;
+                    }
+                    paintTargetLayer = targetLayer;
                     paintStrokeActive = true;
-                    handlePaintSample(coords.xImg, coords.yImg, true);
+                    const pressure = pe.pointerType === 'pen' ? pe.pressure : null;
+                    handlePaintSample(coords.xImg, coords.yImg, true, pressure);
                 }
                 pe.preventDefault();
                 pe.stopPropagation();
@@ -9340,7 +9286,8 @@
                         drawCursorRing.style.top  = `${(coords.yImg / (imageHeight - 1)) * 100}%`;
                     }
                 } else if (activeTool === 'paint' && paintStrokeActive) {
-                    handlePaintSample(coords.xImg, coords.yImg, false);
+                    const pressure = pe.pointerType === 'pen' ? pe.pressure : null;
+                    handlePaintSample(coords.xImg, coords.yImg, false, pressure);
                 }
                 pe.preventDefault();
                 pe.stopPropagation();
