@@ -2328,6 +2328,106 @@ def suppress_grid_hough(gray, h_thresh_ratio=0.25, v_thresh_ratio=0.25):
     return cleaned
 
 
+def score_and_suppress_black_components(mask, xs_guide, curve_type=None):
+    """Connected-Component (CC) Scoring to filter out grid/labels from black curves.
+    
+    Scores components based on aspect ratio, vertical continuity, thinness,
+    and proximity to the guide line. Suppresses bad components (grids, labels, noise)
+    before running Viterbi.
+    """
+    if mask is None or mask.size == 0 or xs_guide is None or xs_guide.size == 0:
+        return mask
+
+    h_mask, w_mask = mask.shape
+    try:
+        # Interpolate NaNs in guide line so we have a continuous baseline
+        xs_guide_filled = pd.Series(xs_guide).interpolate(method='linear', limit_direction='both').ffill().bfill().to_numpy()
+    except Exception:
+        xs_guide_filled = xs_guide
+
+    if xs_guide_filled is None or xs_guide_filled.size == 0 or not np.isfinite(xs_guide_filled).any():
+        xs_guide_filled = np.full(h_mask, w_mask / 2.0, dtype=np.float32)
+
+    try:
+        # Threshold the probability map to get candidate components
+        _, binary = cv2.threshold(mask, 15, 255, cv2.THRESH_BINARY)
+        n_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(binary, 8)
+        
+        out_mask = mask.copy()
+        for label in range(1, n_labels):
+            x, y, w, h, area = [int(v) for v in stats[label]]
+            if area <= 0:
+                continue
+
+            # Calculate horizontal aspect ratio and thinness (avg width)
+            aspect = float(w) / float(max(1, h))
+            avg_width = float(area) / float(max(1, h))
+
+            # 1. Proximity to guide line
+            # Get pixels belonging to this component
+            pts = np.argwhere(labels == label)
+            ys = pts[:, 0]
+            xs_pts = pts[:, 1]
+            guide_vals = xs_guide_filled[ys]
+            
+            # Since xs_guide_filled is fully interpolated, all guide_vals should be finite.
+            # Just in case, double check.
+            valid_guide = np.isfinite(guide_vals)
+            if np.any(valid_guide):
+                mean_dist = float(np.mean(np.abs(xs_pts[valid_guide] - guide_vals[valid_guide])))
+            else:
+                mean_dist = float(np.mean(np.abs(xs_pts - w_mask / 2.0)))
+
+            # 2. Rejection of horizontal grid lines / shelves
+            # Horizontal lines have high aspect ratio (w/h) and a wide horizontal span
+            horiz_penalty = 1.0
+            if aspect > 1.1:
+                # Penalize aspect ratio
+                horiz_penalty *= max(0.01, 1.0 - (aspect - 1.1) * 1.5)
+            # Absolute width penalty: if component spans a significant chunk of track
+            w_ratio = float(w) / float(w_mask)
+            if w_ratio > 0.12:
+                horiz_penalty *= max(0.01, 1.0 - (w_ratio - 0.12) * 5.0)
+            if aspect > 2.0 or w_ratio > 0.25:
+                horiz_penalty = min(horiz_penalty, 0.005)
+
+            # 3. Rejection of annotations/text
+            # Compact isolated components far from guide
+            text_penalty = 1.0
+            is_small = (area < 50) and (h < 18) and (w < 18)
+            if is_small and mean_dist > 10.0:
+                text_penalty *= max(0.01, 1.0 - (mean_dist - 10.0) * 0.08)
+
+            # 4. Global distance penalty (suppress track borders/other tracks)
+            dist_penalty = 1.0
+            if mean_dist > 6.0:
+                dist_penalty *= np.exp(-0.04 * (mean_dist - 6.0))
+            if mean_dist > 35.0:
+                dist_penalty = min(dist_penalty, 0.005)
+
+            # 5. Vertical continuity boost
+            # Vertically long components are much more likely to be the curve
+            continuity_boost = 1.0
+            if h > 40:
+                continuity_boost = 1.25
+            elif h < 8 and mean_dist > 8.0:
+                continuity_boost = 0.1  # suppress short segments that are away from guide
+
+            # Combine scores
+            score_mult = horiz_penalty * text_penalty * dist_penalty * continuity_boost
+            score_mult = np.clip(score_mult, 0.005, 1.3)
+
+            # Suppress component in the output mask
+            if score_mult < 0.99 or score_mult > 1.01:
+                label_mask = labels == label
+                out_mask[label_mask] = np.clip(mask[label_mask] * score_mult, 0, 255).astype(np.uint8)
+
+        return out_mask
+    except Exception as e:
+        print(f"⚠️ Connected-Component scoring failed: {e}")
+        return mask
+
+
 def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allowed=True):
     """Build a soft probability map for the curve in a track ROI.
 
@@ -10876,7 +10976,24 @@ def digitize():
                 pass
             
         else:
-            # For black/other modes, use DP with smoothness constraints
+            # 1. Run a first-pass DP tracer to establish a guide line (baseline)
+            try:
+                xs_guide, _ = trace_curve_with_dp(
+                    mask,
+                    scale_min=left_value,
+                    scale_max=right_value,
+                    curve_type=curve_type,
+                    max_step=max_step_dp,
+                    smooth_lambda=dp_smooth_lambda,
+                    curv_lambda=dp_curv_lambda,
+                    hot_side=hot_side,
+                )
+                if xs_guide is not None and xs_guide.size > 0:
+                    mask = score_and_suppress_black_components(mask, xs_guide, curve_type=curve_type)
+            except Exception as e:
+                print(f"⚠️ score_and_suppress_black_components failed: {e}")
+
+            # For black/other modes, use DP with smoothness constraints (using filtered mask!)
             xs, confidence = trace_curve_with_dp(
                 mask,
                 scale_min=left_value,
@@ -12320,6 +12437,18 @@ def batch_digitize():
 
                     mask = mask_orig
                 else:
+                    # 1. Run a first-pass DP tracer to establish a guide line (baseline)
+                    try:
+                        xs_guide, _ = trace_curve_with_dp(
+                            mask, scale_min=left_value, scale_max=right_value,
+                            curve_type=curve_type, max_step=3, smooth_lambda=0.5, curv_lambda=0.05,
+                            hot_side=hot_side,
+                        )
+                        if xs_guide is not None and xs_guide.size > 0:
+                            mask = score_and_suppress_black_components(mask, xs_guide, curve_type=curve_type)
+                    except Exception as e:
+                        print(f"⚠️ score_and_suppress_black_components failed in batch_digitize: {e}")
+
                     xs, confidence = trace_curve_with_dp(
                         mask, scale_min=left_value, scale_max=right_value,
                         curve_type=curve_type, max_step=3, smooth_lambda=0.5, curv_lambda=0.05,

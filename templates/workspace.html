@@ -1631,9 +1631,14 @@
                                         <button class="tool-btn" id="btnFilterContrast" title="High Contrast" onclick="toggleFilter('contrast')">◐</button>
                                     </div>
                                     <div style="display: flex; flex-direction: column; gap: 4px;">
-                                        <label class="toolbar-inline-checkbox toolbar-inline-checkbox-compact" title="Move neighbors with drag">
-                                            <input type="checkbox" id="smoothEditToggle"> Smooth
-                                        </label>
+                                        <div style="display: flex; gap: 8px;">
+                                            <label class="toolbar-inline-checkbox toolbar-inline-checkbox-compact" title="Move neighbors with drag">
+                                                <input type="checkbox" id="smoothEditToggle"> Smooth
+                                            </label>
+                                            <label class="toolbar-inline-checkbox toolbar-inline-checkbox-compact" title="Magnet Snap to curve while drawing/dragging">
+                                                <input type="checkbox" id="magnetEditToggle" checked> Magnet
+                                            </label>
+                                        </div>
                                         <div style="display: flex; align-items: center; gap: 4px; font-size: 0.8em; color: #a1a1aa;" title="Paint brush thickness">
                                             <span>Brush:</span>
                                             <select id="paintBrushSize" style="background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); color: #fff; border-radius: 4px; padding: 2px 4px; outline: none; cursor: pointer;">
