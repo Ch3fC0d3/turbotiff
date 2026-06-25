@@ -377,10 +377,10 @@
             overflow-y: auto;
         }
         #paneResizer {
-            width: 8px;
+            width: 14px;
             cursor: col-resize;
-            background: rgba(148, 163, 184, 0.12);
-            border-radius: 4px;
+            background: rgba(148, 163, 184, 0.15);
+            border-radius: 6px;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -389,11 +389,11 @@
             user-select: none;
         }
         #paneResizer:hover, #paneResizer.dragging {
-            background: rgba(59, 130, 246, 0.4);
+            background: rgba(59, 130, 246, 0.45);
         }
         .workspace {
             display: grid;
-            grid-template-columns: minmax(0, 1fr) 8px var(--side-panel-width, minmax(300px, 380px));
+            grid-template-columns: minmax(0, 1fr) 14px var(--side-panel-width, minmax(300px, 380px));
             gap: 10px;
             margin-bottom: 0px;
             align-items: start;
@@ -402,7 +402,7 @@
             display: flex;
             flex-direction: column;
             gap: 8px;
-            max-height: calc(100vh - 80px);
+            max-height: calc(100vh - 40px);
             overflow-y: auto;
             overflow-x: hidden;
             position: sticky;
@@ -525,6 +525,18 @@
             color: #64748b;
             line-height: 1;
         }
+        .viewer-controls select {
+            background: #ffffff;
+            border: 1px solid #cbd5e1;
+            color: #1e293b;
+            font-weight: 600;
+            border-radius: 6px;
+            padding: 4px 6px;
+            font-size: 0.75rem;
+            outline: none;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+            width: 100%;
+        }
         .toolbar-button-row {
             display: flex;
             flex-wrap: wrap;
@@ -625,8 +637,8 @@
             gap: 3px;
         }
         .viewer-scroll {
-            height: calc(100vh - 120px) !important;
-            max-height: calc(100vh - 120px) !important;
+            height: calc(100vh - 40px) !important;
+            max-height: calc(100vh - 40px) !important;
             overflow: auto !important;
             position: relative;
             display: flex;
@@ -763,7 +775,7 @@
         }
         @media (min-width: 1201px) {
             .workspace {
-                grid-template-columns: minmax(350px, 1fr) 8px var(--side-panel-width, minmax(340px, 430px));
+                grid-template-columns: minmax(350px, 1fr) 14px var(--side-panel-width, minmax(340px, 430px));
             }
         }
         .curve-actions {
@@ -1505,10 +1517,10 @@
                                         <button type="button" class="btn" onclick="setZoom(2.0)">200%</button>
                                     </div>
                                     <div class="toolbar-slider-row">
-                                        <input type="range" id="zoomSlider" min="10" max="4800" value="100" step="5" oninput="setZoom(this.value / 100)" />
+                                        <input type="range" id="zoomSlider" min="5" max="4800" value="100" step="5" oninput="setZoom(this.value / 100)" />
                                         <div style="display: flex; align-items: center; gap: 1px;">
-                                            <input type="number" id="zoomLabel" min="5" max="4800" value="100" onchange="setZoom(this.value / 100)" style="width: 46px; background: transparent; border: 1px solid rgba(148, 163, 184, 0.4); color: inherit; border-radius: 4px; padding: 1px 2px; text-align: center; font-size: 0.75rem; outline: none;" title="Custom Zoom Percentage" />
-                                            <span style="font-size: 0.75rem; color: #94a3b8;">%</span>
+                                            <input type="number" id="zoomLabel" min="5" max="4800" value="100" oninput="setZoom(this.value / 100)" onchange="setZoom(this.value / 100)" onkeyup="if(event.key==='Enter') setZoom(this.value / 100)" style="width: 50px; background: #ffffff; border: 1px solid #cbd5e1; color: #1e293b; font-weight: 600; border-radius: 4px; padding: 2px 4px; text-align: center; font-size: 0.75rem; outline: none; box-shadow: 0 1px 2px rgba(0,0,0,0.05);" title="Custom Zoom Percentage" />
+                                            <span style="font-size: 0.75rem; font-weight: 600; color: #64748b;">%</span>
                                         </div>
                                     </div>
                                 </div>
@@ -1653,7 +1665,7 @@
 
                 <!-- Draggable Pane Resizer Handle -->
                 <div id="paneResizer" title="Drag left/right to resize main and side windows">
-                    <div style="width: 2px; height: 36px; background: rgba(148, 163, 184, 0.5); border-radius: 1px;"></div>
+                    <div style="width: 4px; height: 48px; background: rgba(100, 116, 139, 0.7); border-radius: 2px;"></div>
                 </div>
 
                 <!-- Right: calibration tabs -->
@@ -3044,6 +3056,7 @@
         }
 
         function applyZoom() {
+            if (typeof updateDisplayBaseScale === 'function') updateDisplayBaseScale();
             const overlay = document.getElementById('overlay');
             const img = document.getElementById('imagePreview');
             const canvas = document.getElementById('curveCanvas');
@@ -5946,7 +5959,6 @@
                 editMode = false;
                 editCurveId = null;
                 editCurveDataKey = null;
-                if (pinnedDepthIndices) pinnedDepthIndices.clear();
                 setEditModeUI();
                 showStatus('Edit mode off.', 'info');
             }
@@ -6205,6 +6217,43 @@
             const pinnedNow = toggleDepthIndexPinned(curveId, depthIdx);
             if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
             showStatus(pinnedNow ? 'Point pinned.' : 'Point unpinned.', 'info');
+        }
+
+        function restorePinnedPointsAfterRedigitize(previousTraces, previousCurves) {
+            if (!pinnedDepthIndices || pinnedDepthIndices.size === 0) return;
+            for (const [rawKey, pinnedSet] of pinnedDepthIndices.entries()) {
+                if (!pinnedSet || pinnedSet.size === 0) continue;
+                
+                const traceMatch = getActiveCurveTracePoints(rawKey);
+                const newPts = traceMatch ? traceMatch.points : null;
+                const oldPts = previousTraces ? (previousTraces[traceMatch?.traceKey || rawKey] || previousTraces[rawKey]) : null;
+                if (Array.isArray(oldPts) && Array.isArray(newPts)) {
+                    const oldByDepth = new Map();
+                    for (const pt of oldPts) {
+                        if (Array.isArray(pt) && Number.isInteger(pt[2])) oldByDepth.set(pt[2], pt);
+                    }
+                    for (const pt of newPts) {
+                        if (Array.isArray(pt) && Number.isInteger(pt[2]) && pinnedSet.has(pt[2])) {
+                            const oldPt = oldByDepth.get(pt[2]);
+                            if (oldPt) {
+                                pt[0] = oldPt[0];
+                                pt[1] = oldPt[1];
+                            }
+                        }
+                    }
+                }
+
+                const curveMatch = findDigitizedCurveEntry(rawKey);
+                const newEntry = curveMatch ? curveMatch.entry : null;
+                const oldCurveMatch = previousCurves ? (previousCurves[curveMatch?.key || rawKey] || previousCurves[rawKey]) : null;
+                if (oldCurveMatch && newEntry && Array.isArray(oldCurveMatch.values) && Array.isArray(newEntry.values)) {
+                    for (const dIdx of pinnedSet) {
+                        if (dIdx >= 0 && dIdx < oldCurveMatch.values.length && dIdx < newEntry.values.length) {
+                            newEntry.values[dIdx] = oldCurveMatch.values[dIdx];
+                        }
+                    }
+                }
+            }
         }
 
         function handleCurveEditClick(xImg, yImg) {
@@ -6749,6 +6798,7 @@
                 showStatus('Enable edit mode and select a curve first.', 'info');
                 return;
             }
+            ensureTracePointsHaveDepthIndex(editCurveId);
             const traceKey = getActiveCurveTraceKey(editCurveId);
             if (!traceKey || !lastCurveTraces || !Array.isArray(lastCurveTraces[traceKey])) {
                 showStatus('No trace found for the selected curve.', 'info');
@@ -6857,6 +6907,7 @@
                 showStatus('Enable edit mode and select a curve first.', 'info');
                 return;
             }
+            ensureTracePointsHaveDepthIndex(editCurveId);
             const traceKey = getActiveCurveTraceKey(editCurveId);
             if (!traceKey || !lastCurveTraces || !Array.isArray(lastCurveTraces[traceKey])) {
                 showStatus('No trace found for the selected curve.', 'info');
@@ -13802,6 +13853,8 @@
                 }
 
                 if (data.success) {
+                    const previousCurves = lastDigitizedCurves;
+                    const previousTraces = lastCurveTraces;
                     // Store digitized data for cursor readout and later download
                     lastDigitizedDepth = Array.isArray(data.digitized_depth) ? data.digitized_depth : null;
                     lastDigitizedCurves = data.digitized_curves || null;
@@ -13861,6 +13914,10 @@
                             console.info('[trace debug]', window.lastCurveTraceDebug);
                         }
                         lastCurveTraces = traces;
+                        if (typeof ensureTracePointsHaveDepthIndex === 'function') {
+                            Object.keys(traces || {}).forEach(k => ensureTracePointsHaveDepthIndex(k));
+                        }
+                        restorePinnedPointsAfterRedigitize(previousTraces, previousCurves);
                         curveIndexToTraceKey = {};
                         const emptyTraceCurves = [];
 
@@ -13941,7 +13998,6 @@
                     editMode = false;
                     editCurveId = null;
                     editUndoStack = [];  // Clear undo history for fresh digitization
-                    if (pinnedDepthIndices) pinnedDepthIndices.clear();
                     setEditModeUI();
 
                     // Turn off selection modes after digitization so green band doesn't interfere
@@ -15636,7 +15692,7 @@ function autoScrollStep() {
         if (!isResizing) return;
         const wsRect = ws.getBoundingClientRect();
         let newWidth = wsRect.right - e.clientX - 10;
-        newWidth = Math.max(260, Math.min(850, newWidth));
+        newWidth = Math.max(200, Math.min(1600, newWidth));
         ws.style.setProperty('--side-panel-width', newWidth + 'px');
     });
 
