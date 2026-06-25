@@ -1504,9 +1504,15 @@
 
                                 <div class="control-section">
                                     <span class="control-title">Line</span>
-                                    <div class="toolbar-slider-row">
-                                        <input type="range" id="lineWidthSlider" min="0.10" max="24" value="2" step="0.05" oninput="updateOverlaySize()" />
-                                        <span id="lineWidthLabel" class="hint-text">2</span>
+                                    <div class="toolbar-slider-row" style="margin-bottom: 4px;" title="Main Line Width">
+                                        <span style="font-size: 0.65rem; color: #94a3b8; width: 24px;">Main</span>
+                                        <input type="range" id="lineWidthSlider" min="0.10" max="24" value="2" step="0.05" oninput="updateOverlaySize()" style="flex:1;" />
+                                        <span id="lineWidthLabel" class="hint-text" style="width: 28px;">2</span>
+                                    </div>
+                                    <div class="toolbar-slider-row" title="Wrap Line Width">
+                                        <span style="font-size: 0.65rem; color: #94a3b8; width: 24px;">Wrap</span>
+                                        <input type="range" id="wrapLineWidthSlider" min="0.10" max="24" value="2" step="0.05" oninput="updateOverlaySize()" style="flex:1;" />
+                                        <span id="wrapLineWidthLabel" class="hint-text" style="width: 28px;">2</span>
                                     </div>
                                 </div>
 
@@ -3112,6 +3118,7 @@
         const MAX_OVERLAY_POINT_COUNT = 2400;
 
         let overlayLineWidth = 2;
+        let overlayWrapLineWidth = 2;
         let overlayLineLength = DEFAULT_OVERLAY_LINE_LENGTH;
         let overlayLineHeight = DEFAULT_OVERLAY_LINE_HEIGHT;
         let overlayPointSize = DEFAULT_OVERLAY_POINT_RADIUS;
@@ -3195,15 +3202,20 @@
                 const lineSlider = document.getElementById('lineWidthSlider');
                 const pointSizeSlider = document.getElementById('pointSizeSlider');
                 const pointSlider = document.getElementById('pointCountSlider');
+                const wrapLineSlider = document.getElementById('wrapLineWidthSlider');
 
                 const lineLabel = document.getElementById('lineWidthLabel');
                 const pointSizeLabel = document.getElementById('pointSizeLabel');
                 const pointLabel = document.getElementById('pointCountLabel');
+                const wrapLineLabel = document.getElementById('wrapLineWidthLabel');
 
                 if (lineSlider && Number.isFinite(parsed.lineWidth)) {
                     lineSlider.value = String(parsed.lineWidth);
                     overlayLineWidth = Number(parsed.lineWidth);
                     if (lineLabel) lineLabel.textContent = overlayLineWidth.toFixed(2);
+                    overlayWrapLineWidth = Number.isFinite(parsed.wrapLineWidth) ? Number(parsed.wrapLineWidth) : overlayLineWidth;
+                    if (wrapLineSlider) wrapLineSlider.value = overlayWrapLineWidth;
+                    if (wrapLineLabel) wrapLineLabel.textContent = overlayWrapLineWidth.toFixed(2);
                 }
                 overlayLineLength = DEFAULT_OVERLAY_LINE_LENGTH;
                 overlayLineHeight = DEFAULT_OVERLAY_LINE_HEIGHT;
@@ -3263,6 +3275,7 @@
             if (overlaySettingsByCurveId && overlaySettingsByCurveId[key]) {
                 const existing = overlaySettingsByCurveId[key];
                 if (!Number.isFinite(existing.lineWidth)) existing.lineWidth = Number.isFinite(overlayLineWidth) ? overlayLineWidth : 2;
+                if (!Number.isFinite(existing.wrapLineWidth)) existing.wrapLineWidth = Number.isFinite(overlayWrapLineWidth) ? overlayWrapLineWidth : 2;
                 existing.lineLength = DEFAULT_OVERLAY_LINE_LENGTH;
                 existing.lineHeight = DEFAULT_OVERLAY_LINE_HEIGHT;
                 if (!Number.isFinite(existing.pointSize)) existing.pointSize = Number.isFinite(overlayPointSize) ? overlayPointSize : DEFAULT_OVERLAY_POINT_RADIUS;
@@ -3276,6 +3289,7 @@
             }
             overlaySettingsByCurveId[key] = {
                 lineWidth: Number.isFinite(overlayLineWidth) ? overlayLineWidth : 2,
+                wrapLineWidth: Number.isFinite(overlayWrapLineWidth) ? overlayWrapLineWidth : 2,
                 lineLength: DEFAULT_OVERLAY_LINE_LENGTH,
                 lineHeight: DEFAULT_OVERLAY_LINE_HEIGHT,
                 pointSize: Number.isFinite(overlayPointSize) ? overlayPointSize : DEFAULT_OVERLAY_POINT_RADIUS,
@@ -3379,6 +3393,7 @@
             const lineSlider = document.getElementById('lineWidthSlider');
             const pointSizeSlider = document.getElementById('pointSizeSlider');
             const pointSlider = document.getElementById('pointCountSlider');
+            const wrapLineSlider = document.getElementById('wrapLineWidthSlider');
             const lineLabel = document.getElementById('lineWidthLabel');
             const pointSizeLabel = document.getElementById('pointSizeLabel');
             const pointLabel = document.getElementById('pointCountLabel');
@@ -3387,6 +3402,9 @@
                 lineSlider.value = String(settings.lineWidth);
                 overlayLineWidth = Number(settings.lineWidth);
                 if (lineLabel) lineLabel.textContent = overlayLineWidth.toFixed(2);
+                overlayWrapLineWidth = Number.isFinite(settings.wrapLineWidth) ? Number(settings.wrapLineWidth) : overlayLineWidth;
+                if (wrapLineSlider) wrapLineSlider.value = overlayWrapLineWidth;
+                if (wrapLineLabel) wrapLineLabel.textContent = overlayWrapLineWidth.toFixed(2);
             }
             overlayLineLength = DEFAULT_OVERLAY_LINE_LENGTH;
             overlayLineHeight = DEFAULT_OVERLAY_LINE_HEIGHT;
@@ -3429,16 +3447,23 @@
             const lineLabel = document.getElementById('lineWidthLabel');
             const pointSizeLabel = document.getElementById('pointSizeLabel');
             const pointLabel = document.getElementById('pointCountLabel');
+            const wrapLineSlider = document.getElementById('wrapLineWidthSlider');
+            const wrapLineLabel = document.getElementById('wrapLineWidthLabel');
 
             const next = {
                 lineWidth: lineSlider ? parseFloat(lineSlider.value) : overlayLineWidth,
                 pointSize: pointSizeSlider ? parseFloat(pointSizeSlider.value) : overlayPointSize,
                 pointCount: pointSlider ? parseFloat(pointSlider.value) : overlayPointCount,
+                wrapLineWidth: wrapLineSlider ? parseFloat(wrapLineSlider.value) : overlayWrapLineWidth,
             };
 
             if (Number.isFinite(next.lineWidth)) {
                 overlayLineWidth = next.lineWidth;
                 if (lineLabel) lineLabel.textContent = overlayLineWidth.toFixed(2);
+            }
+            if (Number.isFinite(next.wrapLineWidth)) {
+                overlayWrapLineWidth = next.wrapLineWidth;
+                if (wrapLineLabel) wrapLineLabel.textContent = overlayWrapLineWidth.toFixed(2);
             }
             overlayLineLength = DEFAULT_OVERLAY_LINE_LENGTH;
             overlayLineHeight = DEFAULT_OVERLAY_LINE_HEIGHT;
@@ -3503,7 +3528,8 @@
                 console.log('[updateOverlaySize] Target is All. Updating curves:', Array.from(allIds));
                 console.log('[updateOverlaySize] Global settings:', { 
                     lineWidth: overlayLineWidth, 
-                    pointSize: overlayPointSize,
+                    wrapLineWidth: overlayWrapLineWidth,
+                    pointSize: overlayPointSize, 
                     pointCount: overlayPointCount 
                 });
 
@@ -12854,9 +12880,11 @@
                 let effectiveLineHeight = DEFAULT_OVERLAY_LINE_HEIGHT;
                 let effectivePointSize = (curveSettings && Number.isFinite(curveSettings.pointSize)) ? curveSettings.pointSize : (overlayPointSize || DEFAULT_OVERLAY_POINT_RADIUS);
                 let effectivePointCount = (curveSettings && Number.isFinite(curveSettings.pointCount)) ? curveSettings.pointCount : (overlayPointCount || DEFAULT_OVERLAY_POINT_COUNT);
+                let effectiveWrapLineWidth = (curveSettings && Number.isFinite(curveSettings.wrapLineWidth)) ? curveSettings.wrapLineWidth : (overlayWrapLineWidth || effectiveLineWidth || 2);
 
                 if (isAllUnlocked) {
                     if (Number.isFinite(overlayLineWidth)) effectiveLineWidth = overlayLineWidth;
+                    if (Number.isFinite(overlayWrapLineWidth)) effectiveWrapLineWidth = overlayWrapLineWidth;
                     if (Number.isFinite(overlayPointSize)) effectivePointSize = overlayPointSize;
                     if (Number.isFinite(overlayPointCount)) effectivePointCount = overlayPointCount;
                 }
@@ -13029,11 +13057,16 @@
                 // browser-smoothed approximation of them.
                 const renderPoints = sortedPoints;
 
+                ctx.lineWidth = name.endsWith('_wrap') ? effectiveWrapLineWidth : effectiveLineWidth;
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                
                 // Draw chain
                 if (showLine) {
                     // Main line thickness comes from the Line slider.
                     // Stick thickness comes from the Line height slider (fallback to Line).
-                    const mainThickness = Math.max(0.1, effectiveLineWidth);
+                    const actualThickness = name.endsWith('_wrap') ? effectiveWrapLineWidth : effectiveLineWidth;
+                    const mainThickness = Math.max(0.1, actualThickness);
                     const stickThickness = Math.max(0.1, effectiveLineHeight);
                     const stickLen = isBlackLikeMode
                         ? Math.max(1.5, Math.min(3.0, effectiveLineLength * 0.25))
