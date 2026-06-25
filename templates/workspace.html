@@ -1606,6 +1606,18 @@
                                         </div>
                                     </div>
                                 </div>
+                                <div class="control-section">
+                                    <span class="control-title">Auto-Scroll</span>
+                                    <div style="display: flex; justify-content: center; gap: 4px; margin-bottom: 6px;">
+                                        <button class="tool-btn" id="btnScrollUp" onclick="setAutoScroll(-1)" title="Scroll Up">⬆️</button>
+                                        <button class="tool-btn active" id="btnScrollStop" onclick="setAutoScroll(0)" title="Stop Scroll">⏸️</button>
+                                        <button class="tool-btn" id="btnScrollDown" onclick="setAutoScroll(1)" title="Scroll Down">⬇️</button>
+                                    </div>
+                                    <div style="display: flex; flex-direction: column; gap: 2px;">
+                                        <span style="font-size: 0.65rem; color: #94a3b8; text-align: center;">Speed</span>
+                                        <input type="range" id="scrollSpeed" min="1" max="15" value="3" style="width: 100%;">
+                                    </div>
+                                </div>
 
                             </div>
                         </div>
@@ -15446,6 +15458,46 @@ document.addEventListener('DOMContentLoaded', async () => {
 <script src="{{ url_for('static', filename='drive_trace.js') }}"></script>
 
 <script>
+// ===================== AUTO-SCROLL LOGIC =====================
+let autoScrollDirection = 0; // -1 for up, 1 for down, 0 for stop
+let autoScrollRafId = null;
+
+function setAutoScroll(dir) {
+    autoScrollDirection = dir;
+    
+    // Update active button state
+    document.getElementById('btnScrollUp').classList.toggle('active', dir === -1);
+    document.getElementById('btnScrollStop').classList.toggle('active', dir === 0);
+    document.getElementById('btnScrollDown').classList.toggle('active', dir === 1);
+
+    if (dir === 0) {
+        if (autoScrollRafId) {
+            cancelAnimationFrame(autoScrollRafId);
+            autoScrollRafId = null;
+        }
+    } else {
+        if (!autoScrollRafId) {
+            autoScrollRafId = requestAnimationFrame(autoScrollStep);
+        }
+    }
+}
+
+function autoScrollStep() {
+    if (autoScrollDirection === 0) {
+        autoScrollRafId = null;
+        return;
+    }
+    
+    const scroller = document.querySelector('.overlay-scroll');
+    if (scroller) {
+        const speedInput = document.getElementById('scrollSpeed');
+        const speed = speedInput ? parseInt(speedInput.value, 10) : 3;
+        scroller.scrollTop += speed * autoScrollDirection;
+    }
+    
+    autoScrollRafId = requestAnimationFrame(autoScrollStep);
+}
+
 (function initToolbarDrag() {
     const tb = document.getElementById('digitizerToolbar');
     if (!tb) return;
