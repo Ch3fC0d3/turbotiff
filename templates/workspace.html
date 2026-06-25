@@ -1488,7 +1488,10 @@
                                     </div>
                                     <div class="toolbar-slider-row">
                                         <input type="range" id="zoomSlider" min="10" max="4800" value="100" step="5" oninput="setZoom(this.value / 100)" />
-                                        <span id="zoomLabel" class="hint-text">100%</span>
+                                        <div style="display: flex; align-items: center; gap: 1px;">
+                                            <input type="number" id="zoomLabel" min="5" max="4800" value="100" onchange="setZoom(this.value / 100)" style="width: 46px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.2); color: #fff; border-radius: 4px; padding: 1px 2px; text-align: center; font-size: 0.75rem; outline: none;" title="Custom Zoom Percentage" />
+                                            <span style="font-size: 0.75rem; color: #94a3b8;">%</span>
+                                        </div>
                                     </div>
                                 </div>
 
@@ -3042,7 +3045,11 @@
                 canvas.style.height = `${Math.round(imageHeight * z)}px`;
             }
             if (label) {
-                label.textContent = `${Math.round(zoomLevel * 100)}%`;
+                if (label.tagName === 'INPUT') {
+                    if (document.activeElement !== label) label.value = String(Math.round(zoomLevel * 100));
+                } else {
+                    label.textContent = `${Math.round(zoomLevel * 100)}%`;
+                }
             }
             if (slider) {
                 slider.value = String(Math.round(zoomLevel * 100));
