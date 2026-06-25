@@ -376,10 +376,25 @@
         .overlay-scroll {
             overflow-y: auto;
         }
+        #paneResizer {
+            width: 8px;
+            cursor: col-resize;
+            background: rgba(148, 163, 184, 0.12);
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.2s;
+            align-self: stretch;
+            user-select: none;
+        }
+        #paneResizer:hover, #paneResizer.dragging {
+            background: rgba(59, 130, 246, 0.4);
+        }
         .workspace {
             display: grid;
-            grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
-            gap: 20px;
+            grid-template-columns: minmax(0, 1fr) 8px var(--side-panel-width, minmax(300px, 380px));
+            gap: 10px;
             margin-bottom: 0px;
             align-items: start;
         }
@@ -718,6 +733,9 @@
                 grid-template-columns: 1fr;
                 gap: 16px;
             }
+            #paneResizer {
+                display: none !important;
+            }
             .viewer-pane-layout {
                 grid-template-columns: 1fr;
             }
@@ -745,7 +763,7 @@
         }
         @media (min-width: 1201px) {
             .workspace {
-                grid-template-columns: minmax(600px, 1fr) minmax(340px, 430px);
+                grid-template-columns: minmax(350px, 1fr) 8px var(--side-panel-width, minmax(340px, 430px));
             }
         }
         .curve-actions {
@@ -1631,6 +1649,11 @@
                             </div>
                         </div>
                     </div>
+                </div>
+
+                <!-- Draggable Pane Resizer Handle -->
+                <div id="paneResizer" title="Drag left/right to resize main and side windows">
+                    <div style="width: 2px; height: 36px; background: rgba(148, 163, 184, 0.5); border-radius: 1px;"></div>
                 </div>
 
                 <!-- Right: calibration tabs -->
@@ -15587,6 +15610,52 @@ function autoScrollStep() {
             try { tb.releasePointerCapture(e.pointerId); } catch (_) {}
         }
     });
+})();
+
+(function initPaneResizer() {
+    const resizer = document.getElementById('paneResizer');
+    const ws = document.getElementById('workspace');
+    if (!resizer || !ws) return;
+
+    const savedWidth = localStorage.getItem('turbotiff_side_panel_width');
+    if (savedWidth) {
+        ws.style.setProperty('--side-panel-width', savedWidth + 'px');
+    }
+
+    let isResizing = false;
+
+    resizer.addEventListener('pointerdown', (e) => {
+        isResizing = true;
+        resizer.classList.add('dragging');
+        document.body.style.userSelect = 'none';
+        document.body.style.cursor = 'col-resize';
+        try { resizer.setPointerCapture(e.pointerId); } catch (_) {}
+    });
+
+    resizer.addEventListener('pointermove', (e) => {
+        if (!isResizing) return;
+        const wsRect = ws.getBoundingClientRect();
+        let newWidth = wsRect.right - e.clientX - 10;
+        newWidth = Math.max(260, Math.min(850, newWidth));
+        ws.style.setProperty('--side-panel-width', newWidth + 'px');
+    });
+
+    const stopResize = (e) => {
+        if (isResizing) {
+            isResizing = false;
+            resizer.classList.remove('dragging');
+            document.body.style.userSelect = '';
+            document.body.style.cursor = '';
+            try { resizer.releasePointerCapture(e.pointerId); } catch (_) {}
+            const currentWidth = ws.style.getPropertyValue('--side-panel-width');
+            if (currentWidth) {
+                localStorage.setItem('turbotiff_side_panel_width', parseInt(currentWidth, 10));
+            }
+        }
+    };
+
+    resizer.addEventListener('pointerup', stopResize);
+    resizer.addEventListener('pointercancel', stopResize);
 })();
 </script>
 
