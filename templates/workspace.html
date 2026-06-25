@@ -6331,6 +6331,23 @@
          */
         function handleDrawSample(xImg, yImg) {
             if (!drawStrokeActive) return;
+            const magnetToggle = document.getElementById('magnetEditToggle');
+            if (magnetToggle && magnetToggle.checked && editCurveId) {
+                const targetTrack = findTrackByCurveId(editCurveId);
+                if (targetTrack) {
+                    const trackMode = (function() {
+                        try {
+                            const idx = targetTrack.index;
+                            const modeEl = document.getElementById(`mode${idx}`);
+                            if (modeEl && modeEl.value) return String(modeEl.value).toLowerCase();
+                        } catch (e) {}
+                        return (targetTrack.mode || 'green').toLowerCase();
+                    })();
+                    const snapped = snapToCurveColor(xImg, yImg, targetTrack.leftX, targetTrack.rightX, { mode: trackMode });
+                    xImg = snapped.x;
+                    yImg = snapped.y;
+                }
+            }
             const last = drawStrokePoints[drawStrokePoints.length - 1];
             // Skip duplicates and points too close together (≤2 px in y)
             if (last && Math.abs(yImg - last[1]) < 2 && Math.abs(xImg - last[0]) < 4) return;
@@ -6434,6 +6451,21 @@
             if (!Array.isArray(entry.values)) return;
             const targetTrack = findTrackByCurveId(editCurveId);
             if (!targetTrack) return;
+
+            const magnetToggle = document.getElementById('magnetEditToggle');
+            if (magnetToggle && magnetToggle.checked) {
+                const trackMode = (function() {
+                    try {
+                        const idx = targetTrack.index;
+                        const modeEl = document.getElementById(`mode${idx}`);
+                        if (modeEl && modeEl.value) return String(modeEl.value).toLowerCase();
+                    } catch (e) {}
+                    return (targetTrack.mode || 'green').toLowerCase();
+                })();
+                const snapped = snapToCurveColor(xImg, yImg, targetTrack.leftX, targetTrack.rightX, { mode: trackMode });
+                xImg = snapped.x;
+                yImg = snapped.y;
+            }
             const depthCfg = lastDepthConfig || getDepthConfigFromInputs();
             const depth = pixelToDepthFromConfig(yImg, depthCfg);
             if (!Number.isFinite(depth)) return;
@@ -7473,8 +7505,8 @@
                 return;
             }
             const state = editDragState;
-            const xImg = state.currentX;
-            const yImg = state.currentY;
+            let xImg = state.currentX;
+            let yImg = state.currentY;
             if (xImg == null || yImg == null) return;
             const curveKey = state.curveKey || state.curveId;
             if (!curveKey || !lastDigitizedCurves || !lastDigitizedCurves[curveKey]) return;
@@ -7485,6 +7517,21 @@
             const centerIndex = state.centerIndex;
             const activeValues = getActiveLayerValues(entry);
             if (!entry || !activeValues || !targetTrack || !neighbors) return;
+
+            const magnetToggle = document.getElementById('magnetEditToggle');
+            if (magnetToggle && magnetToggle.checked) {
+                const trackMode = (function() {
+                    try {
+                        const idx = targetTrack.index;
+                        const modeEl = document.getElementById(`mode${idx}`);
+                        if (modeEl && modeEl.value) return String(modeEl.value).toLowerCase();
+                    } catch (e) {}
+                    return (targetTrack.mode || 'green').toLowerCase();
+                })();
+                const snapped = snapToCurveColor(xImg, yImg, targetTrack.leftX, targetTrack.rightX, { mode: trackMode });
+                xImg = snapped.x;
+                yImg = snapped.y;
+            }
 
             const activeLayer = state.dragLayer || window.currentDragLayer || 'main';
             if (isLayerLocked(activeLayer, entry)) return;
@@ -7684,7 +7731,8 @@
                     const blueBoost = Math.max(0, (b - Math.max(r, g)) / 255);
 
                     // Hard rejects to avoid rails/annotations/white areas
-                    if (saturation < 0.18) continue;
+                    const isColorMode = mode !== 'black' && mode !== '';
+                    if (isColorMode && saturation < 0.18) continue;
                     if (brightness > 0.92 || brightness < 0.02) continue;
 
                     const distFromOriginal = Math.sqrt((x - localX) ** 2 + (y - localY) ** 2);
@@ -7724,7 +7772,10 @@
                     }
                     edgeBoost = Math.min(1, edgeBoost / (255 * 4)); // normalize 0..1
 
-                    const score = saturation * 2.2 + hueBoost + (1 - brightness) * 0.4 + proximityBonus * 1.2 + hotBias + edgeBoost * 0.6 - railPenalty;
+                    const score = (isColorMode
+                        ? (saturation * 2.2 + hueBoost + (1 - brightness) * 0.4)
+                        : ((1 - saturation) * 0.5 + (1 - brightness) * 2.2)
+                    ) + proximityBonus * 1.2 + hotBias + edgeBoost * 0.6 - railPenalty;
                     
                     if (score > bestScore) {
                         bestScore = score;
