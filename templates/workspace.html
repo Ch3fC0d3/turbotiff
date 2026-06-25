@@ -1619,6 +1619,7 @@
                                         <button class="tool-btn" id="toolDraw" title="Pen/Tablet Draw — Trace over curve freehand (pen or mouse)" onclick="setTool('draw')">✏️</button>
                                         <button class="tool-btn" id="toolAddPoint" title="Add Point" onclick="setTool('addPoint')">➕</button>
                                         <button class="tool-btn" id="toolEraser" title="Eraser (Box Delete)" onclick="setTool('eraser')">🧽</button>
+                                        <button class="tool-btn" id="toolSmoothBrush" title="Smooth Brush — Relax jagged manual edits" onclick="setTool('smoothBrush')">💧</button>
                                         <button class="tool-btn" id="toolCrosshair" title="Smart Crosshair" onclick="toggleCrosshair()">⌖</button>
                                         <button class="tool-btn" id="toolUndo" title="Undo Last Edit (Ctrl+Z)" onclick="undoLastCurveEdit()">↩️</button>
                                         <button class="tool-btn" id="toolCurveLock" title="Lock Selected Curve Overlay" onclick="toggleOverlayCurveLockFromToolbar()">🎚️🔒</button>
@@ -2819,6 +2820,11 @@
                 if (typeof paintLastProcessedPoint !== 'undefined') paintLastProcessedPoint = null;
                 if (typeof paintCursorRing !== 'undefined' && paintCursorRing) { paintCursorRing.remove(); paintCursorRing = null; }
             }
+            if (activeTool === 'smoothBrush' && tool !== 'smoothBrush') {
+                if (typeof smoothStrokeActive !== 'undefined') smoothStrokeActive = false;
+                if (typeof smoothLastProcessedIdx !== 'undefined') smoothLastProcessedIdx = null;
+                if (drawCursorRing) { drawCursorRing.remove(); drawCursorRing = null; }
+            }
             activeTool = tool;
             // Update buttons
             const activeButtonId = ({
@@ -2827,8 +2833,9 @@
                 draw:    'toolDraw',
                 addPoint: 'toolAddPoint',
                 eraser: 'toolEraser',
+                smoothBrush: 'toolSmoothBrush',
             })[tool] || null;
-            ['toolPointer', 'toolPaint', 'toolDraw', 'toolAddPoint', 'toolEraser'].forEach(id => {
+            ['toolPointer', 'toolPaint', 'toolDraw', 'toolAddPoint', 'toolEraser', 'toolSmoothBrush'].forEach(id => {
                 const btn = document.getElementById(id);
                 if (btn) {
                     if (id === activeButtonId) {
@@ -2849,7 +2856,7 @@
                 if (tool === 'eraser' || tool === 'addPoint' || tool === 'pointer') {
                     overlay.style.cursor = 'none';
                     overlay.classList.add('tool-gap-crosshair');
-                } else if (tool === 'draw' || tool === 'paint') {
+                } else if (tool === 'draw' || tool === 'paint' || tool === 'smoothBrush') {
                     overlay.style.cursor = 'none';
                 } else {
                     overlay.style.cursor = 'default';
@@ -6568,6 +6575,124 @@
         }
         // ─── END PAINT TRACE TOOL ───────────────────────────────────────────
 
+        // ─── SMOOTH BRUSH TOOL ────────────────────────────────────────────────
+        let smoothStrokeActive = false;
+        let smoothLastProcessedIdx = null;
+        let smoothUndoValuesBefore = [];
+
+        function handleSmoothSample(xImg, yImg, isFirstPoint = false) {
+            if (!smoothStrokeActive || !editMode || !editCurveId) return;
+            const curveKey = editCurveDataKey || editCurveId;
+            if (!lastDigitizedCurves || !lastDigitizedCurves[curveKey]) return;
+            const entry = lastDigitizedCurves[curveKey];
+            if (!Array.isArray(entry.values)) return;
+            const targetTrack = findTrackByCurveId(editCurveId);
+            if (!targetTrack) return;
+            
+            const depthCfg = lastDepthConfig || getDepthConfigFromInputs();
+            const depth = pixelToDepthFromConfig(yImg, depthCfg);
+            if (!Number.isFinite(depth)) return;
+            const idx = findNearestDepthIndex(depth, lastDigitizedDepth);
+            if (idx < 0) return;
+            
+            const activeValues = getActiveLayerValues(entry);
+            const brushSizeStr = document.getElementById('paintBrushSize')?.value || "1";
+            const brushSize = parseInt(brushSizeStr, 10);
+            const brushRadius = Math.max(0, brushSize - 1);
+            
+            // Local smoothing closure
+            const applySmooth = (targetIdx) => {
+                if (targetIdx < 0 || targetIdx >= activeValues.length) return;
+                if (isDepthIndexPinned(editCurveId, targetIdx)) return;
+                if (isPointLocked(activeValues[targetIdx], targetTrack, entry)) return;
+                
+                // Compute local average
+                const kernelRadius = Math.max(5, Math.round(brushSize * 2.5));
+                let sum = 0;
+                let count = 0;
+                for (let w = -kernelRadius; w <= kernelRadius; w++) {
+                    const wIdx = targetIdx + w;
+                    if (wIdx >= 0 && wIdx < activeValues.length) {
+                        const val = activeValues[wIdx];
+                        if (val !== null && val !== undefined) {
+                            sum += val;
+                            count++;
+                        }
+                    }
+                }
+                
+                if (count > 0) {
+                    const avg = sum / count;
+                    const currentVal = activeValues[targetIdx];
+                    if (currentVal !== null && currentVal !== undefined) {
+                        // Track undo state if not already tracked
+                        if (!smoothUndoValuesBefore.some(v => v.idx === targetIdx)) {
+                            smoothUndoValuesBefore.push({ idx: targetIdx, oldValue: currentVal });
+                        }
+                        
+                        const alpha = 0.25; // 25% smooth blend per frame
+                        activeValues[targetIdx] = currentVal * (1 - alpha) + avg * alpha;
+                    }
+                }
+            };
+            
+            // Interpolate smoothing between last index and current index to avoid gaps during fast drags
+            if (!isFirstPoint && smoothLastProcessedIdx !== null && Math.abs(idx - smoothLastProcessedIdx) > 1) {
+                const startIdx = smoothLastProcessedIdx;
+                const endIdx = idx;
+                const step = startIdx < endIdx ? 1 : -1;
+                for (let i = startIdx + step; i !== endIdx; i += step) {
+                    applySmooth(i);
+                    for (let b = 1; b <= brushRadius; b++) {
+                        applySmooth(i - b);
+                        applySmooth(i + b);
+                    }
+                }
+            }
+            
+            applySmooth(idx);
+            for (let b = 1; b <= brushRadius; b++) {
+                applySmooth(idx - b);
+                applySmooth(idx + b);
+            }
+            
+            smoothLastProcessedIdx = idx;
+            
+            // Live update the curve trace preview
+            rebuildCurveTraceFromDigitized(editCurveId);
+            renderCurveTraceOverlays(lastCurveTraces);
+        }
+
+        function commitSmoothStroke() {
+            smoothStrokeActive = false;
+            smoothLastProcessedIdx = null;
+            if (drawCursorRing) { drawCursorRing.remove(); drawCursorRing = null; }
+            if (!editMode || !editCurveId || !smoothUndoValuesBefore.length) {
+                smoothUndoValuesBefore = [];
+                return;
+            }
+            
+            const curveKey = editCurveDataKey || editCurveId;
+            const traceKey = getActiveCurveTraceKey(editCurveId) || editCurveId;
+            
+            editUndoStack.push({
+                type: 'bulk_transform',
+                label: 'smooth_brush',
+                curveKey,
+                curveId: editCurveId,
+                traceKey,
+                dragLayer: window.currentDragLayer || 'main',
+                undoPoints: [],
+                undoValues: smoothUndoValuesBefore
+            });
+            
+            smoothUndoValuesBefore = [];
+            rebuildCurveTraceFromDigitized(editCurveId);
+            renderCurveTraceOverlays(lastCurveTraces);
+            showStatus('Smooth brush applied.', 'info');
+        }
+        // ─── END SMOOTH BRUSH TOOL ───────────────────────────────────────────
+
         function handleCurveAddPoint(xImg, yImg) {
             if (!editMode || !editCurveId) return;
             if (!lastDigitizedDepth || !lastDigitizedCurves) {
@@ -9716,13 +9841,35 @@
                     paintStrokeActive = true;
                     const pressure = pe.pointerType === 'pen' ? pe.pressure : null;
                     handlePaintSample(coords.xImg, coords.yImg, true, pressure);
+                } else if (activeTool === 'smoothBrush') {
+                    const targetLayer = resolveActiveLayer(coords.xImg, coords.yImg, entry, clickedTrack);
+                    if (isLayerLocked(targetLayer, entry)) {
+                        showStatus(`Cannot edit: ${targetLayer === 'wrap' ? 'Wrap Line' : 'Main Line'} is locked.`, 'warning');
+                        pe.preventDefault();
+                        return;
+                    }
+                    window.currentDragLayer = targetLayer;
+                    smoothStrokeActive = true;
+                    smoothLastProcessedIdx = null;
+                    smoothUndoValuesBefore = [];
+                    handleSmoothSample(coords.xImg, coords.yImg, true);
+                    
+                    if (!drawCursorRing) {
+                        const ov = document.getElementById('overlay');
+                        if (ov) {
+                            drawCursorRing = document.createElement('div');
+                            drawCursorRing.className = 'draw-cursor-ring';
+                            ov.appendChild(drawCursorRing);
+                        }
+                    }
                 }
                 pe.preventDefault();
                 pe.stopPropagation();
             }, { passive: false });
 
             imageHitTarget.addEventListener('pointermove', (pe) => {
-                if ((!drawStrokeActive && !paintStrokeActive) || (activeTool !== 'draw' && activeTool !== 'paint')) return;
+                if ((!drawStrokeActive && !paintStrokeActive && !smoothStrokeActive) || 
+                    (activeTool !== 'draw' && activeTool !== 'paint' && activeTool !== 'smoothBrush')) return;
                 const coords = _getImgCoordsFromPointer(pe);
                 if (!coords) return;
                 
@@ -9735,18 +9882,27 @@
                 } else if (activeTool === 'paint' && paintStrokeActive) {
                     const pressure = pe.pointerType === 'pen' ? pe.pressure : null;
                     handlePaintSample(coords.xImg, coords.yImg, false, pressure);
+                } else if (activeTool === 'smoothBrush' && smoothStrokeActive) {
+                    handleSmoothSample(coords.xImg, coords.yImg, false);
+                    if (drawCursorRing && imageWidth && imageHeight) {
+                        drawCursorRing.style.left = `${(coords.xImg / (imageWidth  - 1)) * 100}%`;
+                        drawCursorRing.style.top  = `${(coords.yImg / (imageHeight - 1)) * 100}%`;
+                    }
                 }
                 pe.preventDefault();
                 pe.stopPropagation();
             }, { passive: false });
 
             imageHitTarget.addEventListener('pointerup', (pe) => {
-                if ((!drawStrokeActive && !paintStrokeActive) || (activeTool !== 'draw' && activeTool !== 'paint')) return;
+                if ((!drawStrokeActive && !paintStrokeActive && !smoothStrokeActive) || 
+                    (activeTool !== 'draw' && activeTool !== 'paint' && activeTool !== 'smoothBrush')) return;
                 try { pe.target.releasePointerCapture(pe.pointerId); } catch(_) {}
                 if (activeTool === 'draw' && drawStrokeActive) {
                     commitDrawStroke();
                 } else if (activeTool === 'paint' && paintStrokeActive) {
                     commitPaintStroke();
+                } else if (activeTool === 'smoothBrush' && smoothStrokeActive) {
+                    commitSmoothStroke();
                 }
                 pe.preventDefault();
                 pe.stopPropagation();
@@ -9764,6 +9920,12 @@
                     paintLastProcessedX = null;
                     paintUndoValuesBefore = [];
                     paintUndoPtsBefore = [];
+                }
+                if (smoothStrokeActive) {
+                    smoothStrokeActive = false;
+                    smoothLastProcessedIdx = null;
+                    smoothUndoValuesBefore = [];
+                    if (drawCursorRing) { drawCursorRing.remove(); drawCursorRing = null; }
                 }
             });
         }
