@@ -363,7 +363,7 @@
         #overlay {
             position: relative;
             display: inline-block;
-            margin: auto;
+            margin: 0;
         }
 
         #curveCanvas {
@@ -7285,7 +7285,16 @@
                 if (!activeValues) return false;
 
                 const neighbors = [];
-                let centerDepthIdx = -1;
+                // Use the depth index already stored in the trace point by
+                // buildDisplayTracePointsFromDigitized. Re-deriving it from the Y
+                // pixel via pixelToDepthFromConfig can return D±1 due to floating-point
+                // precision, which would silently bypass the isDepthIndexPinned check.
+                const storedCenterDepthIdx = (
+                    Array.isArray(pts[nearestIdx]) &&
+                    Number.isInteger(pts[nearestIdx][2]) &&
+                    pts[nearestIdx][2] >= 0
+                ) ? pts[nearestIdx][2] : -1;
+                let centerDepthIdx = storedCenterDepthIdx;
                 const smoothMode = document.getElementById('smoothEditToggle')?.checked;
                 const windowRadius = smoothMode ? 60 : 40;
                 for (let offset = -windowRadius; offset <= windowRadius; offset++) {
@@ -7300,18 +7309,23 @@
                     const dIdx = findNearestDepthIndex(depth, lastDigitizedDepth);
                     if (dIdx < 0 || dIdx >= activeValues.length) continue;
 
-                    pts[idx][2] = dIdx;
-
+                    let neighborDepthIdx = dIdx;
                     if (idx === nearestIdx) {
-                        centerDepthIdx = dIdx;
+                        // Prefer the stored depth index for the center point to keep
+                        // the pin check accurate; fall back to re-derived only if missing.
+                        neighborDepthIdx = storedCenterDepthIdx >= 0 ? storedCenterDepthIdx : dIdx;
+                        pts[idx][2] = neighborDepthIdx;
+                        centerDepthIdx = neighborDepthIdx;
+                    } else {
+                        pts[idx][2] = dIdx;
                     }
 
                     neighbors.push({
                         pointIndex: idx,
-                        depthIndex: dIdx,
+                        depthIndex: neighborDepthIdx,
                         originalX: ptX,
                         originalY: ptY,
-                        originalValue: activeValues[dIdx],
+                        originalValue: activeValues[neighborDepthIdx],
                     });
                 }
 
@@ -8580,6 +8594,12 @@
                     return;
                 }
                 if (event.button === 0) {
+                    // Skip the 2nd mousedown of a double-click; the dblclick handler
+                    // will call togglePinAtImageCoords on its own.
+                    if (event.detail >= 2) {
+                        event.preventDefault();
+                        return;
+                    }
                     // Left-click: behavior depends on active tool
                     if (activeTool === 'pointer') {
                         const curveKey = editCurveDataKey || editCurveId;
