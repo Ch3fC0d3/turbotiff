@@ -6269,24 +6269,20 @@
             const depth = pixelToDepthFromConfig(yImg, depthCfg);
             if (!Number.isFinite(depth)) return;
             const idx = findNearestDepthIndex(depth, lastDigitizedDepth);
-            if (!Number.isInteger(idx) || idx < 0) return;
-            const yImgUse = getPixelYForDepthIndex(idx, depthCfg) ?? yImg;
-            const yTrace = Number.isFinite(yImg) ? yImg : yImgUse;
-            if (isDepthIndexPinned(editCurveId, idx)) {
-                showStatus('Point is pinned; unpin before editing.', 'info');
+            const entry = lastDigitizedCurves[curveKey];
+            const activeValues = getActiveLayerValues(entry);
+            if (!entry || !activeValues || idx >= activeValues.length) return;
+            
+            window.currentDragLayer = resolveActiveLayer(xImg, yImg, entry, targetTrack);
+            if (isLayerLocked(window.currentDragLayer, entry)) {
+                showStatus(`Cannot edit: ${window.currentDragLayer === 'wrap' ? 'Wrap Line' : 'Main Line'} is locked.`, 'warning');
                 return;
             }
 
-            const entry = lastDigitizedCurves[curveKey];
-            if (!entry || !Array.isArray(entry.values) || idx >= entry.values.length) return;
-            
-            window.currentDragLayer = resolveActiveLayer(xImg, yImg, entry, targetTrack);
-
             const clampedX = Math.max(targetTrack.leftX, Math.min(targetTrack.rightX, xImg));
-            const newValue = pixelToTrackValue(clampedX, getActiveLayerTrackConfig(entry, targetTrack), { depthIndex: idx, values: getActiveLayerValues(entry) });
+            const newValue = pixelToTrackValue(clampedX, getActiveLayerTrackConfig(entry, targetTrack), { depthIndex: idx, values: activeValues });
             if (!Number.isFinite(newValue)) return;
 
-            const activeValues = getActiveLayerValues(entry);
             const oldValue = activeValues[idx];
 
             if (isPointLocked(oldValue, targetTrack, entry)) {
@@ -6294,61 +6290,20 @@
                 return;
             }
 
-            let oldTraceX = null;
-            let oldTraceY = yImgUse;
-            let pointIndex = null;
             const activeTrace = getActiveCurveTracePoints(editCurveId);
             const traceKey = activeTrace.traceKey || getActiveCurveTraceKey(editCurveId) || editCurveId;
-            const pts = activeTrace.points;
-            if (Array.isArray(pts) && pts.length) {
-                ensureTracePointsHaveDepthIndex(editCurveId);
-                const picked = findEditablePointIndex(pts, clampedX, yImgUse, editCurveId, { maxYDist: 14, maxDist: 24 });
-                const bestIdxPt = picked.pointIndex;
-                const bestDy = (bestIdxPt >= 0 && Array.isArray(pts[bestIdxPt])) ? Math.abs(pts[bestIdxPt][1] - yImgUse) : Infinity;
-                if (bestIdxPt >= 0 && bestDy <= 10) {
-                    oldTraceX = pts[bestIdxPt][0];
-                    oldTraceY = pts[bestIdxPt][1];
-                    pointIndex = bestIdxPt;
-                }
-            }
-            editUndoStack.push({ curveKey, curveId: editCurveId, traceKey, idx, oldValue, oldTraceX, oldTraceY, yImg: yImgUse, depthIndex: idx, pointIndex });
+            editUndoStack.push({
+                type: 'bulk_transform',
+                label: 'click_nudge',
+                curveKey,
+                curveId: editCurveId,
+                traceKey,
+                dragLayer: window.currentDragLayer,
+                undoPoints: [],
+                undoValues: [{ idx, oldValue }]
+            });
 
-            getActiveLayerValues(entry)[idx] = newValue;
-
-            if (!lastCurveTraces) {
-                lastCurveTraces = {};
-            }
-            let pts2 = Array.isArray(activeTrace.points) ? activeTrace.points : [];
-            if (!Array.isArray(pts2)) {
-                pts2 = [];
-            }
-            let editedPoint = null;
-
-            if (pts2.length) {
-                ensureTracePointsHaveDepthIndex(editCurveId);
-                const picked = findEditablePointIndex(pts2, clampedX, yImg, editCurveId, { maxYDist: 14, maxDist: 24 });
-                const bestIdxPt = picked.pointIndex;
-                const bestDy = (bestIdxPt >= 0 && Array.isArray(pts2[bestIdxPt])) ? Math.abs(pts2[bestIdxPt][1] - yImg) : Infinity;
-
-                if (bestIdxPt >= 0 && bestDy <= 10) {
-                    pts2[bestIdxPt][0] = clampedX;
-                    pts2[bestIdxPt][1] = yImgUse;
-                    pts2[bestIdxPt][2] = idx;
-                } else {
-                    const point = [clampedX, yImgUse, idx];
-                    point[5] = clampedX;
-                    pts2.push(point);
-                    editedPoint = point;
-                }
-            } else {
-                const point = [clampedX, yImgUse, idx];
-                point[5] = clampedX;
-                pts2.push(point);
-                editedPoint = point;
-            }
-
-            pts2.sort((a, b) => Number(a && a[1] || 0) - Number(b && b[1] || 0));
-            lastCurveTraces[traceKey] = pts2;
+            activeValues[idx] = newValue;
             rebuildCurveTraceFromDigitized(editCurveId);
             renderCurveTraceOverlays(lastCurveTraces);
         }
@@ -6383,30 +6338,33 @@
             const curveKey = editCurveDataKey || editCurveId;
             if (!curveKey || !lastDigitizedCurves || !lastDigitizedCurves[curveKey]) return;
             const entry = lastDigitizedCurves[curveKey];
-            if (!Array.isArray(entry.values)) return;
+            const activeValues = getActiveLayerValues(entry);
+            if (!activeValues) return;
 
             const targetTrack = findTrackByCurveId(editCurveId);
             if (!targetTrack) return;
             const depthCfg = lastDepthConfig || getDepthConfigFromInputs();
 
-            // ── Snapshot entire trace + values for a single bulk undo ──
+            const activeLayer = window.currentDragLayer || 'main';
+            if (isLayerLocked(activeLayer, entry)) {
+                showStatus(`Cannot edit: ${activeLayer === 'wrap' ? 'Wrap Line' : 'Main Line'} is locked.`, 'warning');
+                return;
+            }
+
             const traceKey = getActiveCurveTraceKey(editCurveId) || editCurveId;
             if (!lastCurveTraces) lastCurveTraces = {};
-            const ptsBefore = Array.isArray(lastCurveTraces[traceKey])
-                ? lastCurveTraces[traceKey].map((p, i) => ({ pointIndex: i, oldX: p[0], oldDepthIndex: p[2] }))
-                : [];
-            const valsBefore = entry.values.map((v, i) => ({ idx: i, oldValue: v }));
+            const valsBefore = activeValues.map((v, i) => ({ idx: i, oldValue: v }));
             editUndoStack.push({
                 type: 'bulk_transform',
                 label: 'pen_draw',
                 curveKey,
                 curveId: editCurveId,
                 traceKey,
-                undoPoints: ptsBefore,
+                dragLayer: activeLayer,
+                undoPoints: [],
                 undoValues: valsBefore,
             });
 
-            // ── Apply samples: one point per unique depth index ──
             const seenDepth = new Set();
             const wrapActive = isTrackWrapActive(targetTrack, curveKey);
             let prevRawX = null;
@@ -6415,11 +6373,11 @@
                 const depth = pixelToDepthFromConfig(yImg, depthCfg);
                 if (!Number.isFinite(depth)) continue;
                 const idx = findNearestDepthIndex(depth, lastDigitizedDepth);
-                if (idx < 0 || seenDepth.has(idx)) continue;
+                if (idx < 0 || idx >= activeValues.length || seenDepth.has(idx)) continue;
                 seenDepth.add(idx);
-                // Skip pinned depths
+                
                 if (isDepthIndexPinned(editCurveId, idx)) continue;
-                const yImgUse = getPixelYForDepthIndex(idx, depthCfg) ?? yImg;
+                if (isPointLocked(activeValues[idx], targetTrack, entry)) continue;
 
                 let currentRawX = xImg;
                 if (wrapActive) {
@@ -6428,27 +6386,14 @@
                     }
                     prevRawX = currentRawX;
                     const val = pixelToTrackValue(currentRawX, targetTrack, { rawX: true });
-                    if (Number.isFinite(val) && idx < entry.values.length) {
-                        getActiveLayerValues(entry)[idx] = val;
+                    if (Number.isFinite(val)) {
+                        activeValues[idx] = val;
                     }
                 } else {
-                    const newValue = pixelToTrackValue(xImg, getActiveLayerTrackConfig(entry, targetTrack), { depthIndex: idx, values: getActiveLayerValues(entry) });
-                    if (Number.isFinite(newValue) && idx < entry.values.length) {
-                        getActiveLayerValues(entry)[idx] = newValue;
+                    const newValue = pixelToTrackValue(xImg, getActiveLayerTrackConfig(entry, targetTrack), { depthIndex: idx, values: activeValues });
+                    if (Number.isFinite(newValue)) {
+                        activeValues[idx] = newValue;
                     }
-                }
-
-                // Update / insert trace point
-                const activeTrace = getActiveCurveTracePoints(editCurveId);
-                const pts2 = activeTrace.points || [];
-                const tKey2 = activeTrace.traceKey || traceKey;
-                if (!lastCurveTraces[tKey2]) lastCurveTraces[tKey2] = pts2;
-                const exist = pts2.findIndex(p => p[2] === idx);
-                if (exist >= 0) {
-                    pts2[exist][0] = xImg;
-                    pts2[exist][1] = yImgUse;
-                } else {
-                    pts2.push([xImg, yImgUse, idx]);
                 }
             }
 
@@ -6813,24 +6758,26 @@
             if (found && found.entry && track && Number.isFinite(lastMouseImgX) && Number.isFinite(lastMouseImgY)) {
                 window.currentDragLayer = resolveActiveLayer(lastMouseImgX, lastMouseImgY, found.entry, track);
             }
+            const activeLayer = window.currentDragLayer || 'main';
+            if (found && found.entry && isLayerLocked(activeLayer, found.entry)) {
+                showStatus(`Cannot smooth: ${activeLayer === 'wrap' ? 'Wrap Line' : 'Main Line'} is locked.`, 'warning');
+                return;
+            }
 
-            // Radius: how many neighbours on each side to include
+            const activeValues = found && found.entry ? getActiveLayerValues(found.entry) : null;
             const radiusEl = document.getElementById('toolSmoothRadius');
             const radius = radiusEl ? Math.max(1, parseInt(radiusEl.value) || 8) : 8;
 
-            // Build Gaussian weights w[k] = exp(-k²/(2σ²)), σ = radius/2
             const sigma = radius / 2;
             const weights = [];
             for (let k = -radius; k <= radius; k++) {
                 weights.push(Math.exp(-(k * k) / (2 * sigma * sigma)));
             }
-            const wSum = weights.reduce((s, w) => s + w, 0);
 
-            // Push undo snapshot
             const undoPoints = pts.map((p, i) => ({ pointIndex: i, oldX: p[0], oldDepthIndex: p[2] }));
             const undoValues = [];
-            if (found && Array.isArray(found.entry && getActiveLayerValues(found.entry))) {
-                getActiveLayerValues(found.entry).forEach((v, i) => undoValues.push({ idx: i, oldValue: v }));
+            if (activeValues) {
+                activeValues.forEach((v, i) => undoValues.push({ idx: i, oldValue: v }));
             }
             editUndoStack.push({
                 type: 'bulk_transform',
@@ -6838,28 +6785,28 @@
                 curveKey: found ? found.key : traceKey,
                 curveId: editCurveId,
                 traceKey,
+                dragLayer: activeLayer,
                 undoPoints,
                 undoValues,
             });
 
-            const applyRadiusY = 250; // pixels
+            const applyRadiusY = 250;
             const falloffZone = 100;
             let targetY = lastMouseImgY;
 
-            // Apply Gaussian weighted average to X coords
             const newXs = new Array(pts.length);
             for (let i = 0; i < pts.length; i++) {
-                newXs[i] = pts[i][0]; // default unchanged
+                newXs[i] = pts[i][0];
                 
                 const depthIdx = Number.isInteger(pts[i][2]) ? pts[i][2] : -1;
                 if (depthIdx >= 0 && typeof isDepthIndexPinned === 'function' && isDepthIndexPinned(editCurveId, depthIdx)) {
-                    continue; // keep pinned
+                    continue;
                 }
 
                 let applyRatio = 1.0;
                 if (Number.isFinite(targetY)) {
                     const dist = Math.abs(pts[i][1] - targetY);
-                    if (dist > applyRadiusY) continue; // outside local window
+                    if (dist > applyRadiusY) continue;
                     if (dist > applyRadiusY - falloffZone) {
                         applyRatio = (applyRadiusY - dist) / falloffZone;
                     }
@@ -6880,19 +6827,21 @@
                 }
             }
 
-            // Write smoothed Xs back
             for (let i = 0; i < pts.length; i++) {
-                pts[i][0] = newXs[i];
-                if (track && found && found.entry) {
-                    const dIdx = Number.isInteger(pts[i][2]) ? pts[i][2] : -1;
-                    const val = pixelToTrackValue(newXs[i], getActiveLayerTrackConfig(found.entry, track), { depthIndex: dIdx, values: getActiveLayerValues(found.entry) });
-                    if (Number.isFinite(val) && dIdx >= 0 && dIdx < getActiveLayerValues(found.entry).length) {
-                        getActiveLayerValues(found.entry)[dIdx] = val;
+                const depthIdx = Number.isInteger(pts[i][2]) ? pts[i][2] : -1;
+                if (depthIdx >= 0 && typeof isDepthIndexPinned === 'function' && isDepthIndexPinned(editCurveId, depthIdx)) continue;
+                if (activeValues && depthIdx >= 0 && depthIdx < activeValues.length) {
+                    if (isPointLocked(activeValues[depthIdx], track, found?.entry)) continue;
+                }
+                if (track && found && found.entry && activeValues) {
+                    const val = pixelToTrackValue(newXs[i], getActiveLayerTrackConfig(found.entry, track), { depthIndex: depthIdx, values: activeValues });
+                    if (Number.isFinite(val) && depthIdx >= 0 && depthIdx < activeValues.length) {
+                        activeValues[depthIdx] = val;
                     }
                 }
             }
 
-            lastCurveTraces[traceKey] = pts;
+            rebuildCurveTraceFromDigitized(editCurveId);
             renderCurveTraceOverlays(lastCurveTraces);
             showStatus(`Smoothed curve "${editCurveId}" locally (radius ${radius}). Ctrl+Z to undo.`, 'success');
         }
@@ -6924,8 +6873,14 @@
             if (found && found.entry && track && Number.isFinite(lastMouseImgX) && Number.isFinite(lastMouseImgY)) {
                 window.currentDragLayer = resolveActiveLayer(lastMouseImgX, lastMouseImgY, found.entry, track);
             }
+            const activeLayer = window.currentDragLayer || 'main';
+            if (found && found.entry && isLayerLocked(activeLayer, found.entry)) {
+                showStatus(`Cannot center: ${activeLayer === 'wrap' ? 'Wrap Line' : 'Main Line'} is locked.`, 'warning');
+                return;
+            }
 
-            const applyRadiusY = 250; // pixels
+            const activeValues = found && found.entry ? getActiveLayerValues(found.entry) : null;
+            const applyRadiusY = 250;
             const falloffZone = 100;
             let targetY = lastMouseImgY;
 
@@ -6935,7 +6890,6 @@
             }
             if (!localPts.length) { showStatus('No points near cursor to center.', 'info'); return; }
 
-            // Compute median X
             const xs = localPts.map(p => p[0]).filter(Number.isFinite).sort((a, b) => a - b);
             if (!xs.length) { showStatus('No valid X values.', 'info'); return; }
             const medianX = xs[Math.floor(xs.length / 2)];
@@ -6947,11 +6901,10 @@
                 return;
             }
 
-            // Push undo snapshot
             const undoPoints = pts.map((p, i) => ({ pointIndex: i, oldX: p[0], oldDepthIndex: p[2] }));
             const undoValues = [];
-            if (found && Array.isArray(found.entry && getActiveLayerValues(found.entry))) {
-                getActiveLayerValues(found.entry).forEach((v, i) => undoValues.push({ idx: i, oldValue: v }));
+            if (activeValues) {
+                activeValues.forEach((v, i) => undoValues.push({ idx: i, oldValue: v }));
             }
             editUndoStack.push({
                 type: 'bulk_transform',
@@ -6959,42 +6912,42 @@
                 curveKey: found ? found.key : traceKey,
                 curveId: editCurveId,
                 traceKey,
+                dragLayer: activeLayer,
                 undoPoints,
                 undoValues,
             });
 
-            // Apply shift, clamped to track bounds
             const lo = Math.min(track.leftX, track.rightX);
             const hi = Math.max(track.leftX, track.rightX);
             for (let i = 0; i < pts.length; i++) {
                 let applyRatio = 1.0;
                 if (Number.isFinite(targetY)) {
                     const dist = Math.abs(pts[i][1] - targetY);
-                    if (dist > applyRadiusY) continue; // outside local window
+                    if (dist > applyRadiusY) continue;
                     if (dist > applyRadiusY - falloffZone) {
                         applyRatio = (applyRadiusY - dist) / falloffZone;
                     }
                 }
 
-                // skip pinned points for centering as well
                 const depthIdx = Number.isInteger(pts[i][2]) ? pts[i][2] : -1;
                 if (depthIdx >= 0 && typeof isDepthIndexPinned === 'function' && isDepthIndexPinned(editCurveId, depthIdx)) {
                     continue; 
                 }
+                if (activeValues && depthIdx >= 0 && depthIdx < activeValues.length) {
+                    if (isPointLocked(activeValues[depthIdx], track, found?.entry)) continue;
+                }
 
                 const shiftedX = pts[i][0] + (deltaX * applyRatio);
                 const newX = Math.max(lo, Math.min(hi, shiftedX));
-                pts[i][0] = newX;
-                if (track && found && found.entry) {
-                    const dIdx = Number.isInteger(pts[i][2]) ? pts[i][2] : -1;
-                    const val = pixelToTrackValue(newX, getActiveLayerTrackConfig(found.entry, track), { depthIndex: dIdx, values: getActiveLayerValues(found.entry) });
-                    if (Number.isFinite(val) && dIdx >= 0 && dIdx < getActiveLayerValues(found.entry).length) {
-                        getActiveLayerValues(found.entry)[dIdx] = val;
+                if (track && found && found.entry && activeValues) {
+                    const val = pixelToTrackValue(newX, getActiveLayerTrackConfig(found.entry, track), { depthIndex: depthIdx, values: activeValues });
+                    if (Number.isFinite(val) && depthIdx >= 0 && depthIdx < activeValues.length) {
+                        activeValues[depthIdx] = val;
                     }
                 }
             }
 
-            lastCurveTraces[traceKey] = pts;
+            rebuildCurveTraceFromDigitized(editCurveId);
             renderCurveTraceOverlays(lastCurveTraces);
             showStatus(`Centered curve "${editCurveId}" locally (shifted ${deltaX > 0 ? '+' : ''}${deltaX.toFixed(1)} px). Ctrl+Z to undo.`, 'success');
         }
@@ -7033,18 +6986,10 @@
 
             if (last.type === 'bulk_transform') {
                 const { curveKey, curveId, traceKey, undoPoints, undoValues } = last;
-                // Restore trace X coords
-                if (lastCurveTraces && Array.isArray(lastCurveTraces[traceKey]) && Array.isArray(undoPoints)) {
-                    const pts = lastCurveTraces[traceKey];
-                    undoPoints.forEach(p => {
-                        const i = p.pointIndex;
-                        if (i >= 0 && i < pts.length) pts[i][0] = p.oldX;
-                    });
-                }
-                // Restore digitized values
                 if (lastDigitizedCurves && lastDigitizedCurves[curveKey] && Array.isArray(undoValues)) {
-                    const vals = lastDigitizedCurves[curveKey].values;
-                    undoValues.forEach(v => { if (v.idx >= 0 && v.idx < vals.length) vals[v.idx] = v.oldValue; });
+                    const entry = lastDigitizedCurves[curveKey];
+                    const vals = (last.dragLayer === 'wrap' && entry.wrapLayer && Array.isArray(entry.wrapLayer.values)) ? entry.wrapLayer.values : entry.values;
+                    undoValues.forEach(v => { if (v && Number.isInteger(v.idx) && v.idx >= 0 && v.idx < vals.length) vals[v.idx] = v.oldValue; });
                 }
                 rebuildCurveTraceFromDigitized(curveId);
                 renderCurveTraceOverlays(lastCurveTraces);
@@ -7054,44 +6999,17 @@
 
             if (last.type === 'drag_group_v2') {
                 const { curveKey, curveId, points, values } = last;
-                const traceKey = last.traceKey || curveId;
-
-                if (lastDigitizedCurves && lastDigitizedCurves[curveKey] && Array.isArray(lastDigitizedCurves[curveKey].values)) {
-                    const arr = lastDigitizedCurves[curveKey].values;
-                    if (Array.isArray(values)) {
-                        values.forEach(v => {
-                            if (v && Number.isInteger(v.idx) && v.idx >= 0 && v.idx < arr.length) {
-                                arr[v.idx] = v.oldValue;
-                            }
-                        });
-                    }
-                }
-
-                if (lastCurveTraces && lastCurveTraces[traceKey] && Array.isArray(points)) {
-                    const pts = lastCurveTraces[traceKey];
-                    ensureTracePointsHaveDepthIndex(curveId);
-                    points.forEach(p => {
-                        if (!p || !Number.isInteger(p.oldDepthIndex)) return;
-
-                        let i = findPointIndexByDepthIndex(pts, p.oldDepthIndex);
-                        if (i < 0 && Number.isInteger(p.pointIndex)) {
-                            const candidate = p.pointIndex;
-                            if (candidate >= 0 && candidate < pts.length) i = candidate;
-                        }
-
-                        if (i >= 0 && i < pts.length) {
-                            pts[i][0] = p.oldX;
-                            pts[i][1] = p.oldY;
-                            pts[i][2] = p.oldDepthIndex;
-                        } else {
-                            pts.push([p.oldX, p.oldY, p.oldDepthIndex]);
+                if (lastDigitizedCurves && lastDigitizedCurves[curveKey] && Array.isArray(values)) {
+                    const entry = lastDigitizedCurves[curveKey];
+                    const arr = (last.dragLayer === 'wrap' && entry.wrapLayer && Array.isArray(entry.wrapLayer.values)) ? entry.wrapLayer.values : entry.values;
+                    values.forEach(v => {
+                        if (v && Number.isInteger(v.idx) && v.idx >= 0 && v.idx < arr.length) {
+                            arr[v.idx] = v.oldValue;
                         }
                     });
-                    pts.sort((a, b) => a[1] - b[1]);
-                    rebuildCurveTraceFromDigitized(curveId);
-                    renderCurveTraceOverlays(lastCurveTraces);
                 }
-
+                rebuildCurveTraceFromDigitized(curveId);
+                renderCurveTraceOverlays(lastCurveTraces);
                 showStatus('Undo: restored drag.', 'info');
                 return;
             }
@@ -7353,14 +7271,13 @@
             // If close to an existing point, start a drag with minimal rubber-band (±1 neighbor)
             if (nearestIdx >= 0) {
                 const depthCfg = lastDepthConfig || getDepthConfigFromInputs();
+                const activeValues = getActiveLayerValues(entry);
+                if (!activeValues) return false;
 
-                // Cache the target track
-                // Build neighbor set with wider window for rubberband falloff
-                // We need enough points to match the maxRadius in _doDragUpdate (~15-20 ft)
                 const neighbors = [];
                 let centerDepthIdx = -1;
                 const smoothMode = document.getElementById('smoothEditToggle')?.checked;
-                const windowRadius = smoothMode ? 60 : 40; // Greatly increased for wide angle / rubberband effect
+                const windowRadius = smoothMode ? 60 : 40;
                 for (let offset = -windowRadius; offset <= windowRadius; offset++) {
                     const idx = nearestIdx + offset;
                     if (idx < 0 || idx >= pts.length) continue;
@@ -7371,7 +7288,7 @@
                     if (!Number.isFinite(depth)) continue;
 
                     const dIdx = findNearestDepthIndex(depth, lastDigitizedDepth);
-                    if (dIdx < 0 || dIdx >= entry.values.length) continue;
+                    if (dIdx < 0 || dIdx >= activeValues.length) continue;
 
                     pts[idx][2] = dIdx;
 
@@ -7384,12 +7301,12 @@
                         depthIndex: dIdx,
                         originalX: ptX,
                         originalY: ptY,
-                        originalValue: entry.values[dIdx],
+                        originalValue: activeValues[dIdx],
                     });
                 }
 
                 if (!neighbors.length) return false;
-                if (centerDepthIdx < 0 || centerDepthIdx >= entry.values.length) return false;
+                if (centerDepthIdx < 0 || centerDepthIdx >= activeValues.length) return false;
 
                 if (isDepthIndexPinned(editCurveId, centerDepthIdx)) {
                     showStatus('That point is pinned and cannot be moved.', 'info');
@@ -7401,6 +7318,7 @@
                     curveId: editCurveId,
                     curveKey: curveKey,
                     traceKey: traceKey,
+                    dragLayer: window.currentDragLayer || 'main',
                     centerIndex: nearestIdx,
                     pointIndex: nearestIdx,
                     depthIndex: centerDepthIdx,
@@ -7487,6 +7405,11 @@
         // Light local smoothing after a drag to remove kinks while preserving spikes
         function _applyPostDragSmooth(centerIndex, pts, entry, targetTrack) {
             if (!Array.isArray(pts) || !entry || !Array.isArray(entry.values)) return;
+            const activeLayer = window.currentDragLayer || 'main';
+            if (isLayerLocked(activeLayer, entry)) return;
+            const activeValues = getActiveLayerValues(entry);
+            if (!activeValues) return;
+
             const windowRadius = 3; // total window size = 7
             const curveId = editCurveId;
             const smoothed = new Map();
@@ -7500,62 +7423,51 @@
                 const prevX = idx > 0 ? pts[idx - 1][0] : pts[idx][0];
                 const currX = pts[idx][0];
                 const nextX = idx + 1 < pts.length ? pts[idx + 1][0] : pts[idx][0];
-                // simple triangular kernel (0.25, 0.5, 0.25)
                 const newX = prevX * 0.25 + currX * 0.5 + nextX * 0.25;
                 smoothed.set(idx, newX);
             }
             smoothed.forEach((newX, idx) => {
                 const depthIdx = (Array.isArray(pts[idx]) && Number.isInteger(pts[idx][2])) ? pts[idx][2] : -1;
                 if (curveId && isDepthIndexPinned(curveId, depthIdx)) return;
-                pts[idx][0] = newX;
-                const newVal = pixelToTrackValue(newX, getActiveLayerTrackConfig(entry, targetTrack), { depthIndex: depthIdx, values: getActiveLayerValues(entry) });
+                if (depthIdx >= 0 && depthIdx < activeValues.length) {
+                    if (isPointLocked(activeValues[depthIdx], targetTrack, entry)) return;
+                }
+                const newVal = pixelToTrackValue(newX, getActiveLayerTrackConfig(entry, targetTrack), { depthIndex: depthIdx, values: activeValues });
                 if (Number.isFinite(newVal)) {
-                    const depthIdx = (Array.isArray(pts[idx]) && Number.isInteger(pts[idx][2])) ? pts[idx][2] : -1;
-                    if (depthIdx >= 0 && depthIdx < getActiveLayerValues(entry).length) getActiveLayerValues(entry)[depthIdx] = newVal;
+                    if (depthIdx >= 0 && depthIdx < activeValues.length) activeValues[depthIdx] = newVal;
                 }
             });
         }
 
         function _doDragUpdate() {
             if (!editMode || !editDragState) {
-                // console.log('_doDragUpdate: early return - editMode:', editMode, 'editDragState:', !!editDragState);
                 return;
             }
             const state = editDragState;
             const xImg = state.currentX;
             const yImg = state.currentY;
-            // console.log('_doDragUpdate: xImg=', xImg, 'yImg=', yImg);
             if (xImg == null || yImg == null) return;
             const curveKey = state.curveKey || state.curveId;
             if (!curveKey || !lastDigitizedCurves || !lastDigitizedCurves[curveKey]) return;
             
             const entry = state.entry;
-            const pts = state.pts;
             const targetTrack = state.targetTrack;
             const neighbors = state.neighbors;
             const centerIndex = state.centerIndex;
-            if (!entry || !Array.isArray(entry.values)) return;
-            if (!Array.isArray(pts) || !targetTrack || !neighbors) return;
+            const activeValues = getActiveLayerValues(entry);
+            if (!entry || !activeValues || !targetTrack || !neighbors) return;
 
-            // Clamp to image bounds
-            const img = document.getElementById('imagePreview');
-            const imgW = imageWidth || (img && (img.naturalWidth || img.width)) || 1;
-            const imgH = imageHeight || (img && (img.naturalHeight || img.height)) || 1;
-            const leftBound = Math.min(targetTrack.leftX, targetTrack.rightX);
-            const rightBound = Math.max(targetTrack.leftX, targetTrack.rightX);
+            const activeLayer = state.dragLayer || window.currentDragLayer || 'main';
+            if (isLayerLocked(activeLayer, entry)) return;
 
-            // Find the center neighbor to compute deltas
             const centerN = neighbors.find(n => n.pointIndex === centerIndex);
             if (!centerN) return;
 
-            if (isDepthIndexPinned(state.curveId, centerN.depthIndex)) {
-                return;
-            }
+            if (isDepthIndexPinned(state.curveId, centerN.depthIndex)) return;
 
             const deltaX = xImg - centerN.originalX;
             const deltaY = yImg - centerN.originalY;
             
-            // Calculate track value mathematically using delta to avoid cycle-inference positive feedback loops
             const trackWidth = targetTrack.rightX - targetTrack.leftX;
             const trackRange = targetTrack.scaleMax - targetTrack.scaleMin;
             let targetValue = centerN.originalValue;
@@ -7563,46 +7475,43 @@
                 const deltaValue = (deltaX / trackWidth) * trackRange;
                 targetValue = centerN.originalValue + deltaValue;
             } else {
-                targetValue = pixelToTrackValue(xImg, getActiveLayerTrackConfig(entry, targetTrack), { depthIndex: centerN.depthIndex, values: getActiveLayerValues(entry) });
+                targetValue = pixelToTrackValue(xImg, getActiveLayerTrackConfig(entry, targetTrack), { depthIndex: centerN.depthIndex, values: activeValues });
             }
 
-            // Check smoothing toggle
             const smoothMode = document.getElementById('smoothEditToggle')?.checked;
-            
-            // Linear falloff: cover roughly ±15 ft to separate lines and create a V-shape
             const centerDepth = Number.isFinite(centerN.depthIndex) && Array.isArray(lastDigitizedDepth)
                 ? lastDigitizedDepth[centerN.depthIndex]
                 : null;
             const localSpacing = Array.isArray(lastDigitizedDepth)
                 ? _computeLocalDepthSpacing(lastDigitizedDepth, neighbors.map(n => n.depthIndex))
                 : 1.0;
-            // Radius in depth units (ft). Wider to separate lines out and back.
             const maxRadius = smoothMode ? Math.max(20.0, localSpacing * 25.0) : Math.max(15.0, localSpacing * 15.0);
-            // Reduce Y motion when smoothing is enabled to avoid stair-steps; keep X dominant.
             const yWeight = smoothMode ? 0.8 : 1.0;
-
             const depthCfg = lastDepthConfig || getDepthConfigFromInputs();
+
+            // Closure to check locks safely (Paint Tool technique)
+            const isLockedOrPinned = (dIdx, val) => {
+                if (dIdx == null || dIdx < 0 || dIdx >= activeValues.length) return true;
+                if (isDepthIndexPinned(state.curveId, dIdx)) return true;
+                if (isLayerLocked(activeLayer, entry)) return true;
+                if (isPointLocked(val, targetTrack, entry)) return true;
+                return false;
+            };
 
             // Pass 1: Clear old indices to prevent values overwriting each other when shifting up/down
             neighbors.forEach(n => {
-                if (isDepthIndexPinned(state.curveId, n.depthIndex) && n.pointIndex !== centerIndex) return;
-                if (isPointLocked(n.originalValue, targetTrack, entry)) return;
-                if (n.depthIndex >= 0 && n.depthIndex < getActiveLayerValues(entry).length) {
-                    entry.values[n.depthIndex] = null;
+                if (isLockedOrPinned(n.depthIndex, n.originalValue)) return;
+                if (n.depthIndex >= 0 && n.depthIndex < activeValues.length) {
+                    activeValues[n.depthIndex] = null;
                 }
             });
 
             // Pass 2: Calculate new positions and write to new depth indices
             neighbors.forEach(n => {
-                if (isDepthIndexPinned(state.curveId, n.depthIndex) && n.pointIndex !== centerIndex) return;
-                if (isPointLocked(n.originalValue, targetTrack, entry)) {
-                    // Perfectly restore unmodified points
-                    if (n.depthIndex >= 0 && n.depthIndex < getActiveLayerValues(entry).length) {
-                        entry.values[n.depthIndex] = n.originalValue;
+                if (isLockedOrPinned(n.depthIndex, n.originalValue)) {
+                    if (n.depthIndex >= 0 && n.depthIndex < activeValues.length) {
+                        activeValues[n.depthIndex] = n.originalValue;
                     }
-                    pts[n.pointIndex][0] = n.originalX;
-                    pts[n.pointIndex][1] = n.originalY;
-                    pts[n.pointIndex][2] = n.depthIndex;
                     return;
                 }
 
@@ -7611,85 +7520,60 @@
                     : null;
                 const depthDelta = (centerDepth != null && depth != null) ? Math.abs(depth - centerDepth) : Math.abs(n.pointIndex - centerIndex) * localSpacing;
                 
-                // Linear weight for a V-shape profile instead of a sharp spike
-                // For the exact center point, always use weight=1.0 so it follows the mouse exactly
                 let weight = 1.0;
                 if (n.pointIndex !== centerIndex) {
                     weight = 1.0 - (depthDelta / maxRadius);
                     if (weight <= 0) {
-                        // Perfectly restore unmodified points
-                        if (n.depthIndex >= 0 && n.depthIndex < getActiveLayerValues(entry).length) {
-                            entry.values[n.depthIndex] = n.originalValue;
+                        if (n.depthIndex >= 0 && n.depthIndex < activeValues.length) {
+                            activeValues[n.depthIndex] = n.originalValue;
                         }
-                        pts[n.pointIndex][0] = n.originalX;
-                        pts[n.pointIndex][1] = n.originalY;
-                        pts[n.pointIndex][2] = n.depthIndex;
                         return;
                     }
                 }
 
                 let newRawX;
                 if (n.pointIndex === centerIndex) {
-                    // Center point computes its X strictly from the mathematical track value to ensure wrap/clamp limits are respected
                     if (Number.isFinite(targetValue)) {
-                        newRawX = trackValueToPixelX(targetValue, targetTrack, { rawValue: true });
+                        newRawX = trackValueToPixelX(targetValue, getActiveLayerTrackConfig(entry, targetTrack), { rawValue: true });
                         if (!Number.isFinite(newRawX)) newRawX = xImg;
                     } else {
                         newRawX = xImg;
                     }
                 } else {
-                    // Neighbors get weighted interpolation in TRACK VALUE space to support wrap crossovers!
                     if (Number.isFinite(n.originalValue) && Number.isFinite(targetValue)) {
                         const interpolatedValue = n.originalValue * (1 - weight) + targetValue * weight;
-                        newRawX = trackValueToPixelX(interpolatedValue, targetTrack, { rawValue: true });
+                        newRawX = trackValueToPixelX(interpolatedValue, getActiveLayerTrackConfig(entry, targetTrack), { rawValue: true });
                         if (!Number.isFinite(newRawX)) {
-                            newRawX = n.originalX + deltaX * weight; // fallback
+                            newRawX = n.originalX + deltaX * weight;
                         }
                     } else {
-                        newRawX = n.originalX + deltaX * weight; // fallback
+                        newRawX = n.originalX + deltaX * weight;
                     }
                 }
-                
-                let newY;
-                if (n.pointIndex === centerIndex) {
-                    // Center point follows mouse exactly
-                    newY = yImg;
-                } else {
-                    // Neighbors get weighted Y motion
-                    newY = n.originalY + deltaY * weight * yWeight;
-                }
 
-                if (imgH > 1) newY = Math.max(0, Math.min(imgH - 1, newY));
-
-                const wrappedDisplayX = targetTrack.wrapped ? wrapRawXToTrack(newRawX, targetTrack) : newRawX;
-                let clampedDisplayX = wrappedDisplayX;
-                if (imgW > 1) clampedDisplayX = Math.max(0, Math.min(imgW - 1, clampedDisplayX));
-                if (Number.isFinite(leftBound) && Number.isFinite(rightBound)) {
-                    clampedDisplayX = Math.max(leftBound, Math.min(rightBound, clampedDisplayX));
-                }
-
-                pts[n.pointIndex][0] = clampedDisplayX;
-                pts[n.pointIndex][1] = newY;
-
-                // Map new Y position to depth index
+                const newY = n.originalY + deltaY * weight * yWeight;
                 const newDepth = pixelToDepthFromConfig(newY, depthCfg);
                 let newDepthIndex = n.depthIndex;
                 if (Number.isFinite(newDepth)) {
                     const idx = findNearestDepthIndex(newDepth, lastDigitizedDepth);
-                    if (idx >= 0 && idx < getActiveLayerValues(entry).length) {
+                    if (idx >= 0 && idx < activeValues.length) {
                         newDepthIndex = idx;
                     }
                 }
-                
-                pts[n.pointIndex][2] = newDepthIndex;
-                pts[n.pointIndex][5] = newRawX; // Emulate rawX storage for rendering!
-                n.depthIndex = newDepthIndex; // Update neighbor state for future iterations in this drag
+                n.depthIndex = newDepthIndex;
 
-                const newVal = pixelToTrackValue(newRawX, targetTrack, { rawX: true });
+                if (newDepthIndex !== n.depthIndex && isDepthIndexPinned(state.curveId, newDepthIndex)) {
+                    return;
+                }
+
+                const newVal = pixelToTrackValue(newRawX, getActiveLayerTrackConfig(entry, targetTrack), { rawX: true });
                 if (Number.isFinite(newVal)) {
-                    getActiveLayerValues(entry)[newDepthIndex] = newVal;
+                    activeValues[newDepthIndex] = newVal;
                 }
             });
+
+            // Paint Tool technique: regenerate trace cleanly from digitized values!
+            rebuildCurveTraceFromDigitized(state.curveId);
         }
 
         // Snap-to-curve: find the curve color in a small region around the point
@@ -9129,6 +9013,7 @@
                             curveKey,
                             curveId,
                             traceKey,
+                            dragLayer: state.dragLayer || 'main',
                             points: pointsUndo,
                             values: valuesUndo,
                         });
