@@ -4613,10 +4613,7 @@
                 // If both are far away (>30px), treat as empty space click
                 if (distMain > 30 && distWrap > 30) {
                     return getAmbiguousLayer();
-                }
-                
-                // If both are nearby, prefer the UNLOCKED one if one is locked
-                if (distMain <= 30 && distWrap <= 30) {
+            if (distMain <= 30 && distWrap <= 30) {
                     if (window.lineLockMain && !window.lineLockWrap) return 'wrap';
                     if (window.lineLockWrap && !window.lineLockMain) return 'main';
                 }
@@ -4629,9 +4626,42 @@
             return getAmbiguousLayer();
         }
 
-        function isLayerLocked(layer) {
+        function isLayerLocked(layer, entry = null) {
+            if (entry && entry.wrapLayer && Array.isArray(entry.wrapLayer.values)) {
+                if (layer === 'wrap') return !!window.lineLockWrap;
+                if (layer === 'main') return !!window.lineLockMain;
+            }
             if (layer === 'wrap') return !!window.lineLockWrap;
-            return !!window.lineLockMain;
+            return false; // Point-level locks apply to 'main'
+        }
+
+        function isPointLocked(val, track, entry = null) {
+            if (entry && entry.wrapLayer && Array.isArray(entry.wrapLayer.values)) {
+                if (window.currentDragLayer === 'wrap') return !!window.lineLockWrap;
+                if (window.currentDragLayer === 'main') return !!window.lineLockMain;
+            }
+            if (val == null || !track) return false;
+            const minV = Math.min(track.scaleMin, track.scaleMax);
+            const maxV = Math.max(track.scaleMin, track.scaleMax);
+            // Consider a point wrapped if it is outside the track scale bounds by more than a tiny epsilon
+            const isWrapPoint = (val > maxV + 1e-4) || (val < minV - 1e-4);
+            if (isWrapPoint && window.lineLockWrap) return true;
+            if (!isWrapPoint && window.lineLockMain) return true;
+            return false;
+        }
+
+        function isPointLockedByRawX(rawX, track, entry = null) {
+            if (entry && entry.wrapLayer && Array.isArray(entry.wrapLayer.values)) {
+                if (window.currentDragLayer === 'wrap') return !!window.lineLockWrap;
+                if (window.currentDragLayer === 'main') return !!window.lineLockMain;
+            }
+            if (rawX == null || !track) return false;
+            const minX = Math.min(track.leftX, track.rightX);
+            const maxX = Math.max(track.leftX, track.rightX);
+            const isWrapPoint = (rawX > maxX + 1e-4) || (rawX < minX - 1e-4);
+            if (isWrapPoint && window.lineLockWrap) return true;
+            if (!isWrapPoint && window.lineLockMain) return true;
+            return false;
         }
 
         function getActiveLayerValues(entry) {
@@ -4861,7 +4891,7 @@
             return Number.isFinite(nullSentinel) && value === nullSentinel;
         }
 
-        function fillDeletedDepthSpan(values, startIdx, endIdx, nullSentinel = lastNullValue) {
+        function fillDeletedDepthSpan(values, startIdx, endIdx, nullSentinel = lastNullValue, track = null) {
             if (!Array.isArray(values) || !values.length) return false;
             let start = Number.isInteger(startIdx) ? startIdx : -1;
             let end = Number.isInteger(endIdx) ? endIdx : -1;
@@ -4883,6 +4913,14 @@
             const hasLeft = left >= 0 && !isMissingDigitizedValue(values[left], nullSentinel);
             const hasRight = right < values.length && !isMissingDigitizedValue(values[right], nullSentinel);
             if (!hasLeft && !hasRight) return false;
+
+            if (hasLeft && hasRight && track) {
+                const trackRange = Math.abs(track.scaleMax - track.scaleMin);
+                if (trackRange > 0 && Math.abs(values[right] - values[left]) >= trackRange * 0.8) {
+                    // This is a wrap jump. Do not fill it.
+                    return false;
+                }
+            }
 
             for (let idx = start; idx <= end; idx++) {
                 if (hasLeft && hasRight) {
@@ -4960,7 +4998,17 @@
                     
                     // Do not interpolate if it spans across the track (wrap jump), otherwise it defeats wrap detection
                     // and makes the eraser tool appear to not work because the gap instantly fills back in.
-                    const isWrapJump = tWidth > 0 && ((oppositeEdges && dx >= tWidth * 0.40) || dx >= tWidth * 0.80);
+                    let isWrapJump = tWidth > 0 && ((oppositeEdges && dx >= tWidth * 0.40) || dx >= tWidth * 0.80);
+
+                    // Also do not interpolate if the wrap layer has data in this gap
+                    if (!isWrapJump && found.entry.wrapLayer && Array.isArray(found.entry.wrapLayer.values)) {
+                        for (let fillIdx = prevValid + 1; fillIdx < depthIndex; fillIdx++) {
+                            if (!isMissingDigitizedValue(found.entry.wrapLayer.values[fillIdx])) {
+                                isWrapJump = true;
+                                break;
+                            }
+                        }
+                    }
 
                     if (!isWrapJump) {
                         for (let fillIdx = prevValid + 1; fillIdx < depthIndex; fillIdx++) {
@@ -5905,19 +5953,21 @@
             return -1;
         }
 
-        function findBestPointIndexForDepth(points, depthIndex, preferredY = null, preferredX = null) {
-            if (!Array.isArray(points) || !points.length || !Number.isInteger(depthIndex)) return -1;
+        function findBestPointIndexForDepth(points, depthIdx, yImg, xImg, track = null, entry = null) {
+            if (!Array.isArray(points) || depthIdx < 0) return -1;
             let bestIdx = -1;
-            let bestScore = Infinity;
+            let bestDistX = Infinity;
+            
             for (let i = 0; i < points.length; i++) {
                 const pt = points[i];
-                if (!Array.isArray(pt) || pt.length < 3 || pt[2] !== depthIndex) continue;
-                let score = 0;
-                if (Number.isFinite(preferredY)) score += Math.abs(pt[1] - preferredY) * 4;
-                if (Number.isFinite(preferredX)) score += Math.abs(pt[0] - preferredX);
-                if (score < bestScore) {
-                    bestScore = score;
-                    bestIdx = i;
+                if (!Array.isArray(pt) || pt.length < 3) continue;
+                if (pt[2] === depthIdx) {
+                    if (track && isPointLockedByRawX(pt[5], track, entry)) continue;
+                    const dx = Math.abs(pt[0] - xImg);
+                    if (dx < bestDistX) {
+                        bestDistX = dx;
+                        bestIdx = i;
+                    }
                 }
             }
             return bestIdx;
@@ -5929,10 +5979,12 @@
             }
 
             ensureTracePointsHaveDepthIndex(curveId);
+            const track = findTrackByCurveId(curveId);
+            const entry = lastDigitizedCurves && curveId ? lastDigitizedCurves[curveId] : null;
 
             const targetDepthIdx = getDepthIndexAtImageY(yImg);
             if (targetDepthIdx >= 0) {
-                const exactIdx = findBestPointIndexForDepth(points, targetDepthIdx, yImg, xImg);
+                const exactIdx = findBestPointIndexForDepth(points, targetDepthIdx, yImg, xImg, track, entry);
                 if (exactIdx >= 0) {
                     return { pointIndex: exactIdx, depthIndex: targetDepthIdx };
                 }
@@ -5947,6 +5999,7 @@
             for (let i = 0; i < points.length; i++) {
                 const pt = points[i];
                 if (!Array.isArray(pt) || pt.length < 2) continue;
+                if (track && isPointLockedByRawX(pt[5], track, entry)) continue;
                 const dx = Number.isFinite(xImg) ? (pt[0] - xImg) : 0;
                 const dy = Number.isFinite(yImg) ? (pt[1] - yImg) : 0;
                 const d2 = dx * dx + dy * dy;
@@ -5957,7 +6010,6 @@
                     bestIdx = i;
                 }
             }
-
             if (bestIdx < 0) {
                 return { pointIndex: -1, depthIndex: targetDepthIdx };
             }
@@ -6322,6 +6374,7 @@
             const applyVal = (targetIdx, targetVal) => {
                 if (targetIdx < 0 || targetIdx >= activeValues.length) return;
                 if (isDepthIndexPinned(editCurveId, targetIdx)) return;
+                if (isPointLocked(activeValues[targetIdx], targetTrack, entry)) return;
                 
                 // Track undo state if not already tracked
                 if (!paintUndoValuesBefore.some(v => v.idx === targetIdx)) {
@@ -6476,6 +6529,7 @@
                 if (isDepthIndexPinned(editCurveId, dIdx)) continue;
                 
                 const originalValue = entry.values[dIdx];
+                if (isPointLocked(originalValue, targetTrack, entry)) continue;
                 const dist = Math.abs(dIdx - idx);
                 const normalizedDist = dist / (crestRadius + 1);
                 const weight = (Math.cos(normalizedDist * Math.PI) + 1) / 2;
@@ -6505,7 +6559,7 @@
                 getActiveLayerValues(entry)[dIdx] = pointValue;
                 touchedDepths.push(dIdx);
 
-                let existingIdx = findBestPointIndexForDepth(pts, dIdx, pointY, newDisplayX);
+                let existingIdx = findBestPointIndexForDepth(pts, dIdx, pointY, newDisplayX, targetTrack, entry);
                 if (existingIdx < 0) {
                     const picked = findEditablePointIndex(pts, newDisplayX, pointY, editCurveId, { maxYDist: 6, maxDist: 18 });
                     existingIdx = picked.pointIndex;
@@ -6593,7 +6647,8 @@
             });
 
             getActiveLayerValues(entry)[depthIdx] = null;
-            fillDeletedDepthSpan(entry.values, depthIdx, depthIdx, lastNullValue);
+            const track = findTrackByCurveId(editCurveId);
+            fillDeletedDepthSpan(getActiveLayerValues(entry), depthIdx, depthIdx, lastNullValue, track);
 
             // Remove the point from the trace array
             pts.splice(nearestIndex, 1);
@@ -7401,6 +7456,7 @@
             // Pass 1: Clear old indices to prevent values overwriting each other when shifting up/down
             neighbors.forEach(n => {
                 if (isDepthIndexPinned(state.curveId, n.depthIndex) && n.pointIndex !== centerIndex) return;
+                if (isPointLocked(n.originalValue, targetTrack, entry)) return;
                 if (n.depthIndex >= 0 && n.depthIndex < getActiveLayerValues(entry).length) {
                     entry.values[n.depthIndex] = null;
                 }
@@ -7409,6 +7465,16 @@
             // Pass 2: Calculate new positions and write to new depth indices
             neighbors.forEach(n => {
                 if (isDepthIndexPinned(state.curveId, n.depthIndex) && n.pointIndex !== centerIndex) return;
+                if (isPointLocked(n.originalValue, targetTrack, entry)) {
+                    // Perfectly restore unmodified points
+                    if (n.depthIndex >= 0 && n.depthIndex < getActiveLayerValues(entry).length) {
+                        entry.values[n.depthIndex] = n.originalValue;
+                    }
+                    pts[n.pointIndex][0] = n.originalX;
+                    pts[n.pointIndex][1] = n.originalY;
+                    pts[n.pointIndex][2] = n.depthIndex;
+                    return;
+                }
 
                 const depth = (Array.isArray(lastDigitizedDepth) && n.depthIndex >= 0 && n.depthIndex < lastDigitizedDepth.length)
                     ? lastDigitizedDepth[n.depthIndex]
@@ -8471,11 +8537,19 @@
                     const curveKey = editCurveDataKey || editCurveId;
                     const entry = lastDigitizedCurves && curveKey ? lastDigitizedCurves[curveKey] : null;
                     const targetLayer = resolveActiveLayer(xImg, yImg, entry, clickedTrack);
-                    if (isLayerLocked(targetLayer)) {
-                        showStatus(`Cannot edit: ${targetLayer === 'wrap' ? 'Wrap Line' : 'Main Line'} is locked.`, 'warning');
+                    
+                    // Check point-level locks for draw tool (since draw only creates main points)
+                    if (targetLayer === 'main' && window.lineLockMain) {
+                        showStatus('Cannot edit: Main Line is locked.', 'warning');
                         event.preventDefault();
                         return;
                     }
+                    if (targetLayer === 'wrap' && window.lineLockWrap) {
+                        showStatus('Cannot edit: Wrap Line is locked.', 'warning');
+                        event.preventDefault();
+                        return;
+                    }
+
                     window.currentDragLayer = targetLayer;
                     
                     drawStrokeActive = true;
@@ -8494,8 +8568,13 @@
                     const curveKey = editCurveDataKey || editCurveId;
                     const entry = lastDigitizedCurves && curveKey ? lastDigitizedCurves[curveKey] : null;
                     const targetLayer = resolveActiveLayer(xImg, yImg, entry, clickedTrack);
-                    if (isLayerLocked(targetLayer)) {
-                        showStatus(`Cannot edit: ${targetLayer === 'wrap' ? 'Wrap Line' : 'Main Line'} is locked.`, 'warning');
+                    if (targetLayer === 'main' && window.lineLockMain) {
+                        showStatus('Cannot edit: Main Line is locked.', 'warning');
+                        event.preventDefault();
+                        return;
+                    }
+                    if (targetLayer === 'wrap' && window.lineLockWrap) {
+                        showStatus('Cannot edit: Wrap Line is locked.', 'warning');
                         event.preventDefault();
                         return;
                     }
@@ -8511,11 +8590,7 @@
                     const curveKey = editCurveDataKey || editCurveId;
                     const entry = lastDigitizedCurves && curveKey ? lastDigitizedCurves[curveKey] : null;
                     const targetLayer = resolveActiveLayer(xImg, yImg, entry, clickedTrack);
-                    if (isLayerLocked(targetLayer)) {
-                        showStatus(`Cannot edit: ${targetLayer === 'wrap' ? 'Wrap Line' : 'Main Line'} is locked.`, 'warning');
-                        event.preventDefault();
-                        return;
-                    }
+                    // Eraser does not abort on mousedown; it filters points on mouseup based on isPointLocked
                     window.currentDragLayer = targetLayer;
                     
                     eraserStart = { x: xImg, y: yImg, clientX: event.clientX, clientY: event.clientY };
@@ -8540,7 +8615,7 @@
                         const curveKey = editCurveDataKey || editCurveId;
                         const entry = lastDigitizedCurves && curveKey ? lastDigitizedCurves[curveKey] : null;
                         const targetLayer = resolveActiveLayer(xImg, yImg, entry, clickedTrack);
-                        if (isLayerLocked(targetLayer)) {
+                        if (isLayerLocked(targetLayer, entry)) {
                             showStatus(`Cannot edit: ${targetLayer === 'wrap' ? 'Wrap Line' : 'Main Line'} is locked.`, 'warning');
                             event.preventDefault();
                             return;
@@ -8553,7 +8628,7 @@
                         const curveKey = editCurveDataKey || editCurveId;
                         const entry = lastDigitizedCurves && curveKey ? lastDigitizedCurves[curveKey] : null;
                         const targetLayer = resolveActiveLayer(xImg, yImg, entry, clickedTrack);
-                        if (isLayerLocked(targetLayer)) {
+                        if (isLayerLocked(targetLayer, entry)) {
                             showStatus(`Cannot edit: ${targetLayer === 'wrap' ? 'Wrap Line' : 'Main Line'} is locked.`, 'warning');
                             event.preventDefault();
                             return;
@@ -8869,6 +8944,13 @@
                                 }
 
                                 if (idx >= 0 && idx < getActiveLayerValues(entry).length) {
+                                    const rawX = Array.isArray(pt) && pt.length > 5 ? pt[5] : null;
+                                    const track = findTrackByCurveId(editCurveId);
+                                    if (track && isPointLockedByRawX(rawX, track, entry)) {
+                                        // Ignore locked point
+                                        newPts.push(pt);
+                                        return;
+                                    }
                                     setDepthIndexPinned(editCurveId, idx, false);
                                     // Save for undo
                                     deletedItems.push({
@@ -8899,7 +8981,8 @@
                                         spanEnd = nextIdx;
                                         continue;
                                     }
-                                    fillDeletedDepthSpan(entry.values, spanStart, spanEnd, lastNullValue);
+                                    const track = findTrackByCurveId(editCurveId);
+                                    fillDeletedDepthSpan(getActiveLayerValues(entry), spanStart, spanEnd, lastNullValue, track);
                                     if (nextIdx != null) {
                                         spanStart = nextIdx;
                                         spanEnd = nextIdx;

@@ -1,0 +1,34 @@
+C:\Users\gabep\AppData\Roaming\Python\Python312\site-packages\lasio\las_version.py:2: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+  from pkg_resources import get_distribution, DistributionNotFound
+[WARN] flask_talisman not installed. Security headers will not be applied.
+[OK] EasyOCR available for local OCR fallback.
+[OK] AI Model loaded from curve_trace_model.pt (Device: cuda)
+[WARN] Google Vision API: No credentials found
+[OK] lasio imported; LAS validation enabled.
+Open: http://localhost:5001
+ * Serving Flask app 'web_app'
+ * Debug mode: off
+WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5001
+ * Running on http://192.168.1.161:5001
+Press CTRL+C to quit
+127.0.0.1 - - [23/Apr/2026 12:10:09] "GET / HTTP/1.1" 302 -
+127.0.0.1 - - [23/Apr/2026 12:10:09] "GET /dashboard HTTP/1.1" 200 -
+127.0.0.1 - - [23/Apr/2026 12:10:10] "GET /static/home_backdrop.css HTTP/1.1" 200 -
+127.0.0.1 - - [23/Apr/2026 12:10:10] "GET /static/images/logo.svg HTTP/1.1" 200 -
+127.0.0.1 - - [23/Apr/2026 12:10:10] "GET /favicon.ico HTTP/1.1" 204 -
+127.0.0.1 - - [23/Apr/2026 12:10:16] "GET /workspace HTTP/1.1" 200 -
+127.0.0.1 - - [23/Apr/2026 12:10:16] "GET /static/home_backdrop.css HTTP/1.1" 304 -
+127.0.0.1 - - [23/Apr/2026 12:10:16] "GET /static/images/logo.svg HTTP/1.1" 304 -
+127.0.0.1 - - [23/Apr/2026 12:10:16] "GET /favicon.ico HTTP/1.1" 204 -
+[ WARN:0@1959.849] global grfmt_tiff.cpp:122 cv::TIFF_Warning TIFFFetchNormalTag: ASCII value for tag "ImageDescription" contains null byte in value; value incorrectly truncated during reading due to implementation limitations
+127.0.0.1 - - [23/Apr/2026 12:10:28] "POST /upload HTTP/1.1" 200 -
+127.0.0.1 - - [23/Apr/2026 12:10:52] "POST /reanalyze_panel HTTP/1.1" 200 -
+127.0.0.1 - - [23/Apr/2026 12:11:06] "POST /reanalyze_panel HTTP/1.1" 200 -
+127.0.0.1 - - [23/Apr/2026 12:11:19] "POST /crop_to_panel HTTP/1.1" 200 -
+127.0.0.1 - - [23/Apr/2026 12:13:53] "POST /digitize HTTP/1.1" 200 -
+127.0.0.1 - - [23/Apr/2026 12:13:53] "POST /api/managed-jobs/upload-url HTTP/1.1" 500 -
+127.0.0.1 - - [23/Apr/2026 12:13:53] "POST /api/save_bad_black_segment HTTP/1.1" 200 -
+127.0.0.1 - - [23/Apr/2026 12:13:53] "POST /api/logs HTTP/1.1" 200 -
+127.0.0.1 - - [23/Apr/2026 12:13:54] "POST /api/save_bad_black_segment HTTP/1.1" 200 -
