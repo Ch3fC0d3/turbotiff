@@ -15489,10 +15489,14 @@ function autoScrollStep() {
     }
     
     const scroller = document.querySelector('.overlay-scroll');
-    if (scroller) {
-        const speedInput = document.getElementById('scrollSpeed');
-        const speed = speedInput ? parseInt(speedInput.value, 10) : 3;
-        scroller.scrollTop += speed * autoScrollDirection;
+    const speedInput = document.getElementById('scrollSpeed');
+    const speed = speedInput ? parseInt(speedInput.value, 10) : 3;
+    const dy = speed * autoScrollDirection;
+
+    if (scroller && scroller.scrollHeight > scroller.clientHeight) {
+        scroller.scrollTop += dy;
+    } else {
+        window.scrollBy(0, dy);
     }
     
     autoScrollRafId = requestAnimationFrame(autoScrollStep);
