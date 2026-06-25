@@ -3208,7 +3208,7 @@ def trace_curve_with_dp(
     def _morphological_skeleton(bin_img):
         """Simple morphological skeletonization (Zhang-Suen style via erode-open)."""
         size = np.size(bin_img)
-        skel = np.zeros_like(bin_img, dtype=np.uint8)
+        skel_img = np.zeros_like(bin_img, dtype=np.uint8)
         element = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
         prev = None
         iteration = 0
@@ -3217,7 +3217,7 @@ def trace_curve_with_dp(
             eroded = cv2.erode(bin_img, element)
             temp = cv2.dilate(eroded, element)
             temp = cv2.subtract(bin_img, temp)
-            skel = cv2.bitwise_or(skel, temp)
+            skel_img = cv2.bitwise_or(skel_img, temp)
             bin_img = eroded.copy()
             iteration += 1
             if cv2.countNonZero(bin_img) == 0 or iteration >= max_iter:
@@ -3225,7 +3225,27 @@ def trace_curve_with_dp(
             if prev is not None and np.array_equal(bin_img, prev):
                 break
             prev = bin_img
-        return skel
+        return skel_img
+
+    # Pre-skeletonize/thin the candidate mask to 1px centerlines first
+    bin_mask_for_skel = prob > 0.10
+    skel = None
+    if np.any(bin_mask_for_skel):
+        try:
+            if hasattr(cv2, 'ximgproc'):
+                skel = cv2.ximgproc.thinning(
+                    bin_mask_for_skel.astype(np.uint8) * 255,
+                    thinningType=cv2.ximgproc.THINNING_ZHANGSUEN
+                )
+            else:
+                skel = _morphological_skeleton((bin_mask_for_skel.astype(np.uint8) * 255))
+        except Exception as e:
+            print(f"Pre-skeletonization failed: {e}")
+            skel = None
+
+    # Restrict candidate probability map to strictly the 1px centerline
+    if skel is not None and cv2.countNonZero(skel) > 0:
+        prob = np.where(skel > 0, prob, 0.0)
 
     # Live-wire style node score combining probability and centerline distance
     bin_mask = prob > 0.10
@@ -3233,14 +3253,14 @@ def trace_curve_with_dp(
     if np.any(bin_mask):
         try:
             if hasattr(cv2, 'ximgproc'):
-                skel = cv2.ximgproc.thinning(
+                skel_new = cv2.ximgproc.thinning(
                     bin_mask.astype(np.uint8) * 255,
                     thinningType=cv2.ximgproc.THINNING_ZHANGSUEN
                 )
             else:
-                skel = _morphological_skeleton((bin_mask.astype(np.uint8) * 255))
-            if skel is not None and skel.size == prob.size:
-                skel_f = skel.astype(np.float32) / 255.0
+                skel_new = _morphological_skeleton((bin_mask.astype(np.uint8) * 255))
+            if skel_new is not None and skel_new.size == prob.size:
+                skel_f = skel_new.astype(np.float32) / 255.0
                 # Feather skeleton to nearby pixels so DP can stay on the ridge
                 skel_f = cv2.GaussianBlur(skel_f, (3, 3), 0)
                 skel_max = float(skel_f.max())
@@ -3277,6 +3297,10 @@ def trace_curve_with_dp(
             _dist_norm = (_dist / _d_max).astype(np.float32)
             live_score = live_score * (0.7 + 0.3 * _dist_norm)
             live_score = np.clip(live_score, eps, 1.0)
+
+    # Strictly enforce thinned 1px centerline candidates (all other pixels are set to eps)
+    if skel is not None and cv2.countNonZero(skel) > 0:
+        live_score = np.where(skel > 0, live_score, eps)
 
     cost = -np.log(live_score)
 
