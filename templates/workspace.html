@@ -569,9 +569,9 @@
             grid-template-columns: repeat(2, minmax(0, 1fr));
         }
         .viewer-frame-toolbar {
-            position: absolute;
-            top: 10px;
-            right: 10px;
+            position: fixed;
+            top: 20px;
+            right: 20px;
             width: 90px;
             background: rgba(255, 255, 255, 0.96);
             color: #334155;
@@ -580,9 +580,13 @@
             box-shadow: 0 10px 24px rgba(15, 23, 42, 0.12);
             overflow-x: hidden;
             overflow-y: auto;
-            max-height: calc(100vh - 140px);
+            max-height: calc(100vh - 40px);
             backdrop-filter: blur(10px);
-            z-index: 110;
+            z-index: 9999;
+            cursor: grab;
+        }
+        .viewer-frame-toolbar:active {
+            cursor: grabbing;
         }
         .viewer-frame-toolbar .control-section {
             display: flex;
@@ -1851,11 +1855,11 @@
                                             <div class="grid" style="grid-template-columns:1fr 1fr; gap:8px;">
                                                 <div class="field">
                                                     <label>Wrap Left Value</label>
-                                                    <input type="number" id="wrapLeftValue" step="any" onchange="s5UpdateWrapConfig()" style="min-width:0;">
+                                                    <input type="number" id="wrapLeftValue" step="any" onchange="s5UpdateWrapConfig()" style="min-width:0; width:100%; padding:4px; border-radius:4px; border:1px solid #475569; background:#1e293b; color:#f8fafc;">
                                                 </div>
                                                 <div class="field">
                                                     <label>Wrap Right Value</label>
-                                                    <input type="number" id="wrapRightValue" step="any" onchange="s5UpdateWrapConfig()" style="min-width:0;">
+                                                    <input type="number" id="wrapRightValue" step="any" onchange="s5UpdateWrapConfig()" style="min-width:0; width:100%; padding:4px; border-radius:4px; border:1px solid #475569; background:#1e293b; color:#f8fafc;">
                                                 </div>
                                                 <div class="field" style="grid-column:1/-1;">
                                                     <label style="display:flex; justify-content:space-between; align-items:center;">
@@ -1869,38 +1873,38 @@
                                     <div class="grid" style="grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;">
                                         <div class="field">
                                             <label>X offset</label>
-                                            <input type="number" id="s5xOffset" placeholder="0" step="0.1" value="0" oninput="s5SyncToCurve('xOffset')" style="min-width:0;">
+                                            <input type="number" id="s5xOffset" placeholder="0" step="0.1" value="0" oninput="s5SyncToCurve('xOffset')" style="min-width:0; width:100%; padding:4px; border-radius:4px; border:1px solid #475569; background:#1e293b; color:#f8fafc;">
                                         </div>
                                         <div class="field">
                                             <label>X shift</label>
                                             <div style="display:flex;gap:4px;align-items:center;">
-                                                <input type="number" id="s5curveShift" placeholder="0" step="0.1" value="0" style="flex:1; min-width:0;">
+                                                <input type="number" id="s5curveShift" placeholder="0" step="0.1" value="0" style="flex:1; min-width:0; width:100%; padding:4px; border-radius:4px; border:1px solid #475569; background:#1e293b; color:#f8fafc;">
                                                 <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em; flex-shrink:0;" onclick="s5ApplyXShift()">Apply</button>
                                             </div>
                                         </div>
                                         <div class="field">
                                             <label>Y shift</label>
                                             <div style="display:flex;gap:4px;align-items:center;">
-                                                <input type="number" id="s5curveShiftY" placeholder="0" step="0.1" value="0" style="flex:1; min-width:0;">
+                                                <input type="number" id="s5curveShiftY" placeholder="0" step="0.1" value="0" style="flex:1; min-width:0; width:100%; padding:4px; border-radius:4px; border:1px solid #475569; background:#1e293b; color:#f8fafc;">
                                                 <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em; flex-shrink:0;" onclick="s5ApplyYShift()">Apply</button>
                                             </div>
                                         </div>
                                         <div class="field" style="grid-column:1/-1;">
                                             <label>Scale Wrap Assist</label>
-                                            <div class="scale-wrap-controls">
+                                            <div class="scale-wrap-controls" style="display:flex; gap:4px;">
                                                 <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5AddWrapMarkerDelta(1)">+ cycle</button>
                                                 <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5AddWrapMarkerDelta(-1)">- cycle</button>
-                                                <input type="number" id="s5wrapCycleManual" step="1" value="1" title="Absolute wrap cycle">
+                                                <input type="number" id="s5wrapCycleManual" step="1" value="1" title="Absolute wrap cycle" style="width:40px; padding:4px; border-radius:4px; border:1px solid #475569; background:#1e293b; color:#f8fafc;">
                                                 <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5AddWrapMarkerFromInput()">Set</button>
                                                 <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5ClearWrapMarkerNearMouse()">Clear marker</button>
                                             </div>
                                             <div id="s5WrapStatus" class="scale-wrap-status">No wrap markers.</div>
                                         </div>
-                                        <div class="field">
+                                        <div class="field" style="grid-column:1/-1;">
                                             <label>LAS mnemonic / unit</label>
                                             <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;">
-                                                <input type="text" id="s5lasMnemonic" placeholder="e.g. GR" oninput="s5SyncToCurve('lasMnemonic')">
-                                                <input type="text" id="s5lasUnit" placeholder="e.g. API" oninput="s5SyncToCurve('lasUnit')">
+                                                <input type="text" id="s5lasMnemonic" placeholder="e.g. GR" oninput="s5SyncToCurve('lasMnemonic')" style="width:100%; padding:4px; border-radius:4px; border:1px solid #475569; background:#1e293b; color:#f8fafc;">
+                                                <input type="text" id="s5lasUnit" placeholder="e.g. API" oninput="s5SyncToCurve('lasUnit')" style="width:100%; padding:4px; border-radius:4px; border:1px solid #475569; background:#1e293b; color:#f8fafc;">
                                             </div>
                                         </div>
                                         <div class="field" style="grid-column:1/-1;">
@@ -4575,13 +4579,6 @@
             return topPx + frac * (bottomPx - topPx);
         }
 
-        function valueToPixel(val, track) {
-            if (!track || val == null) return null;
-            const denom = track.scaleMax - track.scaleMin;
-            if (Math.abs(denom) < 1e-6) return null;
-            return track.leftX + (val - track.scaleMin) / denom * (track.rightX - track.leftX);
-        }
-
         function resolveActiveLayer(xImg, yImg, entry, track) {
             if (!entry || !entry.wrapLayer || !Array.isArray(entry.wrapLayer.values)) return 'main';
             
@@ -4604,8 +4601,8 @@
                 if (Number.isFinite(entry.wrapLayer.left_value)) wrapTrack.scaleMin = entry.wrapLayer.left_value;
                 if (Number.isFinite(entry.wrapLayer.right_value)) wrapTrack.scaleMax = entry.wrapLayer.right_value;
                 
-                const mainX = mainVal != null ? valueToPixel(mainVal, track) : null;
-                const wrapX = wrapVal != null ? valueToPixel(wrapVal, wrapTrack) : null;
+                const mainX = mainVal != null ? trackValueToPixelX(mainVal, track) : null;
+                const wrapX = wrapVal != null ? trackValueToPixelX(wrapVal, wrapTrack) : null;
                 
                 let distMain = mainX != null ? Math.abs(mainX - xImg) : Infinity;
                 let distWrap = wrapX != null ? Math.abs(wrapX - xImg) : Infinity;
@@ -4613,7 +4610,9 @@
                 // If both are far away (>30px), treat as empty space click
                 if (distMain > 30 && distWrap > 30) {
                     return getAmbiguousLayer();
-            if (distMain <= 30 && distWrap <= 30) {
+                }
+                
+                if (distMain <= 30 && distWrap <= 30) {
                     if (window.lineLockMain && !window.lineLockWrap) return 'wrap';
                     if (window.lineLockWrap && !window.lineLockMain) return 'main';
                 }
@@ -4632,7 +4631,7 @@
                 if (layer === 'main') return !!window.lineLockMain;
             }
             if (layer === 'wrap') return !!window.lineLockWrap;
-            return false; // Point-level locks apply to 'main'
+            return !!window.lineLockMain; // Point-level locks apply to 'main'
         }
 
         function isPointLocked(val, track, entry = null) {
@@ -4640,14 +4639,13 @@
                 if (window.currentDragLayer === 'wrap') return !!window.lineLockWrap;
                 if (window.currentDragLayer === 'main') return !!window.lineLockMain;
             }
-            if (val == null || !track) return false;
+            if (!track) return false;
+            if (val == null) return !!window.lineLockMain; // New points are main points
             const minV = Math.min(track.scaleMin, track.scaleMax);
             const maxV = Math.max(track.scaleMin, track.scaleMax);
             // Consider a point wrapped if it is outside the track scale bounds by more than a tiny epsilon
-            const isWrapPoint = (val > maxV + 1e-4) || (val < minV - 1e-4);
-            if (isWrapPoint && window.lineLockWrap) return true;
-            if (!isWrapPoint && window.lineLockMain) return true;
-            return false;
+            const isWrapPoint = (val < minV - 1e-5) || (val > maxV + 1e-5);
+            return isWrapPoint ? !!window.lineLockWrap : !!window.lineLockMain;
         }
 
         function isPointLockedByRawX(rawX, track, entry = null) {
@@ -4655,7 +4653,8 @@
                 if (window.currentDragLayer === 'wrap') return !!window.lineLockWrap;
                 if (window.currentDragLayer === 'main') return !!window.lineLockMain;
             }
-            if (rawX == null || !track) return false;
+            if (!track) return false;
+            if (rawX == null) return !!window.lineLockMain; // New points are main points
             const minX = Math.min(track.leftX, track.rightX);
             const maxX = Math.max(track.leftX, track.rightX);
             const isWrapPoint = (rawX > maxX + 1e-4) || (rawX < minX - 1e-4);
@@ -6169,8 +6168,14 @@
             const newValue = pixelToTrackValue(clampedX, getActiveLayerTrackConfig(entry, targetTrack), { depthIndex: idx, values: getActiveLayerValues(entry) });
             if (!Number.isFinite(newValue)) return;
 
-            // Save old value for undo
-            const oldValue = entry.values[idx];
+            const activeValues = getActiveLayerValues(entry);
+            const oldValue = activeValues[idx];
+
+            if (isPointLocked(oldValue, targetTrack, entry)) {
+                showStatus('Point is locked; unlock before editing.', 'info');
+                return;
+            }
+
             let oldTraceX = null;
             let oldTraceY = yImgUse;
             let pointIndex = null;
@@ -15491,6 +15496,53 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 <!-- Drive Trace engine (loaded after workspace globals are defined) -->
 <script src="{{ url_for('static', filename='drive_trace.js') }}"></script>
+
+<script>
+(function initToolbarDrag() {
+    const tb = document.getElementById('digitizerToolbar');
+    if (!tb) return;
+    let isDragging = false;
+    let startX, startY, initialLeft, initialTop;
+
+    tb.addEventListener('mousedown', (e) => {
+        // Don't drag if clicking on a button, input, select, or inside one
+        if (e.target.tagName === 'BUTTON' || e.target.tagName === 'INPUT' || 
+            e.target.tagName === 'SELECT' || e.target.closest('button') || 
+            e.target.closest('label') || e.target.closest('select')) {
+            return;
+        }
+        isDragging = true;
+        startX = e.clientX;
+        startY = e.clientY;
+        const rect = tb.getBoundingClientRect();
+        initialLeft = rect.left;
+        initialTop = rect.top;
+        
+        // Reset right/bottom so left/top can take over
+        tb.style.right = 'auto';
+        tb.style.bottom = 'auto';
+        tb.style.left = initialLeft + 'px';
+        tb.style.top = initialTop + 'px';
+        
+        document.body.style.userSelect = 'none';
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (!isDragging) return;
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
+        tb.style.left = (initialLeft + dx) + 'px';
+        tb.style.top = (initialTop + dy) + 'px';
+    });
+
+    document.addEventListener('mouseup', () => {
+        if (isDragging) {
+            isDragging = false;
+            document.body.style.userSelect = '';
+        }
+    });
+})();
+</script>
 
 </body>
 </html>
