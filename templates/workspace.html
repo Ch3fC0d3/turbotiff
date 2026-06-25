@@ -4584,9 +4584,6 @@
 
         function resolveActiveLayer(xImg, yImg, entry, track) {
             if (!entry || !entry.wrapLayer || !Array.isArray(entry.wrapLayer.values)) return 'main';
-            if (window.lineLockMain && !window.lineLockWrap) return 'wrap';
-            if (window.lineLockWrap && !window.lineLockMain) return 'main';
-            if (window.lineLockMain && window.lineLockWrap) return 'main'; // Default if both locked
             
             const depthCfg = lastDepthConfig || (typeof getDepthConfigFromInputs === 'function' ? getDepthConfigFromInputs() : null);
             if (!depthCfg) return 'main';
