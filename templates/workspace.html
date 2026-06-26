@@ -4779,33 +4779,31 @@
 
         function isPointLocked(val, track, entry = null) {
             const activeLayer = _getEffectiveActiveLayer();
+            if (entry && entry.wrapLayer && Array.isArray(entry.wrapLayer.values)) {
+                if (activeLayer === 'wrap') return !!window.lineLockWrap;
+                if (activeLayer === 'main') return !!window.lineLockMain;
+            }
             if (track && val != null) {
                 const minV = Math.min(track.scaleMin, track.scaleMax);
                 const maxV = Math.max(track.scaleMin, track.scaleMax);
                 // Consider a point wrapped if it is outside the track scale bounds by more than a tiny epsilon
                 const isWrapPoint = (val < minV - 1e-5) || (val > maxV + 1e-5);
-                if (isWrapPoint) return !!window.lineLockWrap;
-                return !!window.lineLockMain;
-            }
-            if (entry && entry.wrapLayer && Array.isArray(entry.wrapLayer.values)) {
-                if (activeLayer === 'wrap') return !!window.lineLockWrap;
-                if (activeLayer === 'main') return !!window.lineLockMain;
+                return isWrapPoint ? !!window.lineLockWrap : !!window.lineLockMain;
             }
             return activeLayer === 'wrap' ? !!window.lineLockWrap : !!window.lineLockMain;
         }
 
         function isPointLockedByRawX(rawX, track, entry = null) {
             const activeLayer = _getEffectiveActiveLayer();
+            if (entry && entry.wrapLayer && Array.isArray(entry.wrapLayer.values)) {
+                if (activeLayer === 'wrap') return !!window.lineLockWrap;
+                if (activeLayer === 'main') return !!window.lineLockMain;
+            }
             if (track && rawX != null) {
                 const minX = Math.min(track.leftX, track.rightX);
                 const maxX = Math.max(track.leftX, track.rightX);
                 const isWrapPoint = (rawX > maxX + 1e-4) || (rawX < minX - 1e-4);
-                if (isWrapPoint) return !!window.lineLockWrap;
-                return !!window.lineLockMain;
-            }
-            if (entry && entry.wrapLayer && Array.isArray(entry.wrapLayer.values)) {
-                if (activeLayer === 'wrap') return !!window.lineLockWrap;
-                if (activeLayer === 'main') return !!window.lineLockMain;
+                return isWrapPoint ? !!window.lineLockWrap : !!window.lineLockMain;
             }
             return activeLayer === 'wrap' ? !!window.lineLockWrap : !!window.lineLockMain;
         }
