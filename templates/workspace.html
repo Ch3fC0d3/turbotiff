@@ -1391,6 +1391,10 @@
         .font-semibold { font-weight: 600; }
         .font-normal { font-weight: 400; }
         .cursor-pointer { cursor: pointer; }
+        .line-lock-active {
+            color: #fbbf24;
+            font-weight: 700;
+        }
         .select-none { user-select: none; }
         .text-slate-200 { color: #e2e8f0; }
         .text-slate-300 { color: #cbd5e1; }
@@ -1904,10 +1908,10 @@
                                     </div>
                                     <div class="trace-layer-controls mb-2" id="traceLayerControls" style="display:none; background:#1e293b; padding:8px; border-radius:6px; border:1px solid #334155;">
                                         <div class="flex-wrap-center gap-2" style="justify-content: space-between; margin-bottom: 8px;">
-                                            <label class="cursor-pointer text-sm flex-center gap-1" title="Prevent edits to the main line">
+                                            <label id="lockMainLineLabel" class="cursor-pointer text-sm flex-center gap-1" title="Prevent edits to the main line">
                                                 <input type="checkbox" id="lockMainLine" onchange="s5UpdateLineLocks()"> Lock Main Line
                                             </label>
-                                            <label class="cursor-pointer text-sm flex-center gap-1" title="Prevent edits to the wrap line">
+                                            <label id="lockWrapLineLabel" class="cursor-pointer text-sm flex-center gap-1" title="Prevent edits to the wrap line">
                                                 <input type="checkbox" id="lockWrapLine" onchange="s5UpdateLineLocks()"> Lock Wrapped Line
                                             </label>
                                             <button type="button" class="btn btn-xs" id="clearWrapTraceBtn" style="color:#f87171; border-color:#ef4444;" onclick="s5ClearWrapTrace()">Clear Wrap Line</button>
@@ -4198,14 +4202,48 @@
             }
         }
 
+        function s5SwitchLayer(layer) {
+            const nextLayer = layer === 'wrap' ? 'wrap' : 'main';
+            window.currentDragLayer = nextLayer;
+            window.lastActiveLayer = nextLayer;
+            if (typeof paintTargetLayer !== 'undefined') {
+                paintTargetLayer = nextLayer;
+            }
+            if (typeof editDragState !== 'undefined' && editDragState) {
+                editDragState.dragLayer = nextLayer;
+            }
+            return nextLayer;
+        }
+
+        function isMainLineLocked() {
+            const el = document.getElementById('lockMainLine');
+            return el ? !!el.checked : !!window.lineLockMain;
+        }
+
+        function isWrapLineLocked() {
+            const el = document.getElementById('lockWrapLine');
+            return el ? !!el.checked : !!window.lineLockWrap;
+        }
+
         function s5UpdateLineLocks() {
             // Read checkboxes
-            const lockMain = document.getElementById('lockMainLine').checked;
-            const lockWrap = document.getElementById('lockWrapLine').checked;
+            const lockMain = isMainLineLocked();
+            const lockWrap = isWrapLineLocked();
             
             // We just store these state variables for the tools to check
             window.lineLockMain = lockMain;
             window.lineLockWrap = lockWrap;
+
+            if (lockMain && !lockWrap) {
+                s5SwitchLayer('wrap');
+            } else if (lockWrap && !lockMain) {
+                s5SwitchLayer('main');
+            }
+
+            const mainLabel = document.getElementById('lockMainLineLabel');
+            const wrapLabel = document.getElementById('lockWrapLineLabel');
+            if (mainLabel) mainLabel.classList.toggle('line-lock-active', lockMain);
+            if (wrapLabel) wrapLabel.classList.toggle('line-lock-active', lockWrap);
             
             // Provide a visual cue
             const sel = document.getElementById('editCurveSelect');
@@ -4678,90 +4716,101 @@
         }
 
         function resolveActiveLayer(xImg, yImg, entry, track) {
-            if (!entry || !entry.wrapLayer || !Array.isArray(entry.wrapLayer.values)) return 'main';
-            
-            const depthCfg = lastDepthConfig || (typeof getDepthConfigFromInputs === 'function' ? getDepthConfigFromInputs() : null);
-            if (!depthCfg) return 'main';
-            const depth = typeof pixelToDepthFromConfig === 'function' ? pixelToDepthFromConfig(yImg, depthCfg) : null;
-            if (!Number.isFinite(depth)) return 'main';
-            const dIdx = typeof findNearestDepthIndex === 'function' ? findNearestDepthIndex(depth, lastDigitizedDepth) : -1;
-            
-            const getAmbiguousLayer = () => {
-                if (window.lineLockMain && !window.lineLockWrap) return 'wrap';
-                if (window.lineLockWrap && !window.lineLockMain) return 'main';
+            if (!entry || !track) return 'main';
+
+            const hasWrapLayer = entry.wrapLayer && Array.isArray(entry.wrapLayer.values);
+            const getFallbackLayer = () => {
+                const lockMain = isMainLineLocked();
+                const lockWrap = isWrapLineLocked();
+                if (hasWrapLayer && lockMain && !lockWrap) return 'wrap';
+                if (lockWrap && !lockMain) return 'main';
                 return window.lastActiveLayer || 'main';
             };
-            
-            if (dIdx >= 0 && dIdx < lastDigitizedDepth.length) {
-                const mainVal = entry.values[dIdx];
-                const wrapVal = entry.wrapLayer.values[dIdx];
-                
-                const wrapTrack = { ...track };
-                if (Number.isFinite(entry.wrapLayer.left_value)) wrapTrack.scaleMin = entry.wrapLayer.left_value;
-                if (Number.isFinite(entry.wrapLayer.right_value)) wrapTrack.scaleMax = entry.wrapLayer.right_value;
-                
-                const mainX = mainVal != null ? trackValueToPixelX(mainVal, track) : null;
-                const wrapX = wrapVal != null ? trackValueToPixelX(wrapVal, wrapTrack) : null;
-                
-                let distMain = mainX != null ? Math.abs(mainX - xImg) : Infinity;
-                let distWrap = wrapX != null ? Math.abs(wrapX - xImg) : Infinity;
-                
-                const left = Math.min(Number(track.leftX), Number(track.rightX));
-                const right = Math.max(Number(track.leftX), Number(track.rightX));
-                const width = right - left;
-                const threshold = Number.isFinite(width) && width > 0 ? Math.max(10, width * 0.04) : 10;
-                const minDiff = 5;
-                
-                // If both are far away, treat as empty space click
-                if (distMain > threshold && distWrap > threshold) {
-                    return getAmbiguousLayer();
-                }
-                
-                // If only one layer is within range, pick it
-                if (distWrap <= threshold && distMain > threshold) {
-                    window.lastActiveLayer = 'wrap';
-                    return 'wrap';
-                }
-                if (distMain <= threshold && distWrap > threshold) {
-                    window.lastActiveLayer = 'main';
-                    return 'main';
-                }
-                
-                // Both are within range: prefer the closer one, but only switch if the
-                // difference is clear. Otherwise stick to the last active layer to avoid
-                // the wrap line jumping across to the main line on small mouse wiggles.
-                if (distWrap < distMain - minDiff) {
-                    window.lastActiveLayer = 'wrap';
-                    return 'wrap';
-                }
-                if (distMain < distWrap - minDiff) {
-                    window.lastActiveLayer = 'main';
-                    return 'main';
-                }
-                
-                // Ambiguous: respect lock state, then prefer the closer layer.
-                // Only use lastActiveLayer as a tie-breaker if it is within range;
-                // otherwise the first click near the wrap line will correctly pick wrap.
-                if (window.lineLockMain && !window.lineLockWrap) {
-                    window.lastActiveLayer = 'wrap';
-                    return 'wrap';
-                }
-                if (window.lineLockWrap && !window.lineLockMain) {
-                    window.lastActiveLayer = 'main';
-                    return 'main';
-                }
-                if (window.lastActiveLayer === 'wrap' && distWrap <= threshold) {
-                    return 'wrap';
-                }
-                if (window.lastActiveLayer === 'main' && distMain <= threshold) {
-                    return 'main';
-                }
-                const chosen = distWrap < distMain ? 'wrap' : 'main';
-                window.lastActiveLayer = chosen;
-                return chosen;
+
+            if ((typeof _dragHasMoved !== 'undefined' && _dragHasMoved) &&
+                (window.currentDragLayer === 'wrap' || window.currentDragLayer === 'main')) {
+                return window.currentDragLayer;
             }
+
+            if (!hasWrapLayer) return 'main';
             
-            return getAmbiguousLayer();
+            const depthCfg = lastDepthConfig || (typeof getDepthConfigFromInputs === 'function' ? getDepthConfigFromInputs() : null);
+            if (!depthCfg || !Array.isArray(lastDigitizedDepth)) return getFallbackLayer();
+            const depth = typeof pixelToDepthFromConfig === 'function' ? pixelToDepthFromConfig(yImg, depthCfg) : null;
+            if (!Number.isFinite(depth)) return getFallbackLayer();
+            const dIdx = typeof findNearestDepthIndex === 'function' ? findNearestDepthIndex(depth, lastDigitizedDepth) : -1;
+            if (dIdx < 0 || dIdx >= lastDigitizedDepth.length) return getFallbackLayer();
+            
+            const isUsableValue = (value) => {
+                if (value == null || !Number.isFinite(Number(value))) return false;
+                return !(typeof isMissingDigitizedValue === 'function' && isMissingDigitizedValue(value));
+            };
+            const mainVal = Array.isArray(entry.values) ? entry.values[dIdx] : null;
+            const wrapVal = entry.wrapLayer.values[dIdx];
+
+            const minV = Math.min(Number(track.scaleMin), Number(track.scaleMax));
+            const maxV = Math.max(Number(track.scaleMin), Number(track.scaleMax));
+            const isMainValWrapped = isUsableValue(mainVal) && (mainVal < minV - 1e-5 || mainVal > maxV + 1e-5);
+
+            if (isUsableValue(wrapVal) && !isUsableValue(mainVal)) {
+                window.lastActiveLayer = 'wrap';
+                return 'wrap';
+            }
+            if (!isUsableValue(wrapVal)) {
+                const res = isMainValWrapped ? 'wrap' : 'main';
+                window.lastActiveLayer = res;
+                return res;
+            }
+
+            const wrapTrack = { ...track };
+            if (Number.isFinite(entry.wrapLayer.left_value)) wrapTrack.scaleMin = entry.wrapLayer.left_value;
+            if (Number.isFinite(entry.wrapLayer.right_value)) wrapTrack.scaleMax = entry.wrapLayer.right_value;
+
+            const mainX = isUsableValue(mainVal) ? trackValueToPixelX(mainVal, track) : null;
+            const wrapX = isUsableValue(wrapVal) ? trackValueToPixelX(wrapVal, wrapTrack) : null;
+
+            const distMain = mainX != null ? Math.abs(mainX - xImg) : Infinity;
+            const distWrap = wrapX != null ? Math.abs(wrapX - xImg) : Infinity;
+
+            const left = Math.min(Number(track.leftX), Number(track.rightX));
+            const right = Math.max(Number(track.leftX), Number(track.rightX));
+            const width = right - left;
+            const threshold = Number.isFinite(width) && width > 0 ? Math.max(10, width * 0.04) : 10;
+            const minDiff = 5;
+
+            if (distMain > threshold && distWrap > threshold) {
+                const fallback = getFallbackLayer();
+                window.lastActiveLayer = fallback;
+                return fallback;
+            }
+
+            if (distWrap <= threshold && distMain > threshold) {
+                window.lastActiveLayer = 'wrap';
+                return 'wrap';
+            }
+            if (distMain <= threshold && distWrap > threshold) {
+                window.lastActiveLayer = 'main';
+                return 'main';
+            }
+
+            if (distWrap < distMain - minDiff) {
+                window.lastActiveLayer = 'wrap';
+                return 'wrap';
+            }
+            if (distMain < distWrap - minDiff) {
+                window.lastActiveLayer = 'main';
+                return 'main';
+            }
+
+            const fallback = getFallbackLayer();
+            if ((fallback === 'wrap' && distWrap <= threshold) || (fallback === 'main' && distMain <= threshold)) {
+                window.lastActiveLayer = fallback;
+                return fallback;
+            }
+
+            const chosen = distWrap < distMain ? 'wrap' : 'main';
+            window.lastActiveLayer = chosen;
+            return chosen;
         }
 
         function _getEffectiveActiveLayer() {
@@ -4769,43 +4818,39 @@
         }
 
         function isLayerLocked(layer, entry = null) {
-            if (entry && entry.wrapLayer && Array.isArray(entry.wrapLayer.values)) {
-                if (layer === 'wrap') return !!window.lineLockWrap;
-                if (layer === 'main') return !!window.lineLockMain;
-            }
-            if (layer === 'wrap') return !!window.lineLockWrap;
-            return !!window.lineLockMain; // Point-level locks apply to 'main'
+            if (layer === 'wrap') return isWrapLineLocked();
+            if (layer === 'main') return isMainLineLocked();
+            return false;
         }
 
         function isPointLocked(val, track, entry = null) {
             const activeLayer = _getEffectiveActiveLayer();
             if (entry && entry.wrapLayer && Array.isArray(entry.wrapLayer.values)) {
-                if (activeLayer === 'wrap') return !!window.lineLockWrap;
-                if (activeLayer === 'main') return !!window.lineLockMain;
+                if (activeLayer === 'wrap') return isWrapLineLocked();
+                if (activeLayer === 'main') return isMainLineLocked();
             }
-            if (!track) return false;
-            if (val == null) return activeLayer === 'wrap' ? !!window.lineLockWrap : !!window.lineLockMain;
-            const minV = Math.min(track.scaleMin, track.scaleMax);
-            const maxV = Math.max(track.scaleMin, track.scaleMax);
-            // Consider a point wrapped if it is outside the track scale bounds by more than a tiny epsilon
-            const isWrapPoint = (val < minV - 1e-5) || (val > maxV + 1e-5);
-            return isWrapPoint ? !!window.lineLockWrap : !!window.lineLockMain;
+            if (track && val != null && Number.isFinite(val)) {
+                const minV = Math.min(track.scaleMin, track.scaleMax);
+                const maxV = Math.max(track.scaleMin, track.scaleMax);
+                const isWrapPoint = (val < minV - 1e-5) || (val > maxV + 1e-5);
+                return isWrapPoint ? isWrapLineLocked() : isMainLineLocked();
+            }
+            return activeLayer === 'wrap' ? isWrapLineLocked() : isMainLineLocked();
         }
 
         function isPointLockedByRawX(rawX, track, entry = null) {
             const activeLayer = _getEffectiveActiveLayer();
             if (entry && entry.wrapLayer && Array.isArray(entry.wrapLayer.values)) {
-                if (activeLayer === 'wrap') return !!window.lineLockWrap;
-                if (activeLayer === 'main') return !!window.lineLockMain;
+                if (activeLayer === 'wrap') return isWrapLineLocked();
+                if (activeLayer === 'main') return isMainLineLocked();
             }
-            if (!track) return false;
-            if (rawX == null) return activeLayer === 'wrap' ? !!window.lineLockWrap : !!window.lineLockMain;
-            const minX = Math.min(track.leftX, track.rightX);
-            const maxX = Math.max(track.leftX, track.rightX);
-            const isWrapPoint = (rawX > maxX + 1e-4) || (rawX < minX - 1e-4);
-            if (isWrapPoint && window.lineLockWrap) return true;
-            if (!isWrapPoint && window.lineLockMain) return true;
-            return false;
+            if (track && rawX != null && Number.isFinite(rawX)) {
+                const minX = Math.min(track.leftX, track.rightX);
+                const maxX = Math.max(track.leftX, track.rightX);
+                const isWrapPoint = (rawX > maxX + 1e-4) || (rawX < minX - 1e-4);
+                return isWrapPoint ? isWrapLineLocked() : isMainLineLocked();
+            }
+            return activeLayer === 'wrap' ? isWrapLineLocked() : isMainLineLocked();
         }
 
         function perturbIfEqual(values, idx, track = null) {
@@ -7358,8 +7403,14 @@
                 
                 // Restore LAS values
                 if (lastDigitizedCurves && lastDigitizedCurves[curveKey] && Array.isArray(lastDigitizedCurves[curveKey].values)) {
+                    const entry = lastDigitizedCurves[curveKey];
+                    const restoreValues = (last.dragLayer === 'wrap' && entry.wrapLayer && Array.isArray(entry.wrapLayer.values))
+                        ? entry.wrapLayer.values
+                        : entry.values;
                     items.forEach(item => {
-                        lastDigitizedCurves[curveKey].values[item.idx] = item.oldValue;
+                        if (item && Number.isInteger(item.idx) && item.idx >= 0 && item.idx < restoreValues.length) {
+                            restoreValues[item.idx] = item.oldValue;
+                        }
                     });
                 }
                 
@@ -9537,8 +9588,10 @@
                     const pts = activeTrace.points;
                     const curveKey = editCurveDataKey || editCurveId;
                     const entry = curveKey && lastDigitizedCurves ? lastDigitizedCurves[curveKey] : null; // LAS data
+                    const deleteLayer = _getEffectiveActiveLayer();
+                    const activeDeleteValues = entry ? getActiveLayerValues(entry) : null;
                     
-                    if (pts && Array.isArray(pts) && entry && Array.isArray(entry.values)) {
+                    if (pts && Array.isArray(pts) && entry && Array.isArray(activeDeleteValues)) {
                         const pointsToDelete = [];
                         // Identify points to remove
                         // We iterate backwards to remove safely, or filter
@@ -9578,7 +9631,7 @@
                                     }
                                 }
 
-                                if (idx >= 0 && idx < getActiveLayerValues(entry).length) {
+                                if (idx >= 0 && idx < activeDeleteValues.length) {
                                     const rawX = Array.isArray(pt) && pt.length > 5 ? pt[5] : null;
                                     const track = findTrackByCurveId(editCurveId);
                                     if (track && isPointLockedByRawX(rawX, track, entry)) {
@@ -9590,11 +9643,11 @@
                                     // Save for undo
                                     deletedItems.push({
                                         idx: idx,
-                                        oldValue: entry.values[idx],
+                                        oldValue: activeDeleteValues[idx],
                                         pt: [px, py, idx]
                                     });
                                     // Nullify
-                                    getActiveLayerValues(entry)[idx] = null;
+                                    activeDeleteValues[idx] = null;
                                     return;
                                 }
                             }
@@ -9617,7 +9670,7 @@
                                         continue;
                                     }
                                     const track = findTrackByCurveId(editCurveId);
-                                    fillDeletedDepthSpan(getActiveLayerValues(entry), spanStart, spanEnd, lastNullValue, track);
+                                    fillDeletedDepthSpan(activeDeleteValues, spanStart, spanEnd, lastNullValue, track);
                                     if (nextIdx != null) {
                                         spanStart = nextIdx;
                                         spanEnd = nextIdx;
@@ -9634,6 +9687,7 @@
                                 curveId: editCurveId,
                                 traceKey: traceKey,
                                 curveKey: curveKey,
+                                dragLayer: deleteLayer,
                                 items: deletedItems
                             });
 
@@ -11210,7 +11264,7 @@
 
                     if (editMode && editCurveId) {
                         let targetLayer = 'main';
-                        if (window.lineLockMain && !window.lineLockWrap) targetLayer = 'wrap';
+                        if (isMainLineLocked() && !isWrapLineLocked()) targetLayer = 'wrap';
                         window.currentDragLayer = targetLayer;
                         
                         const targetName = targetLayer === 'wrap' ? 'Wrap Line' : 'Main Line';
