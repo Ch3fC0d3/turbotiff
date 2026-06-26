@@ -4774,7 +4774,7 @@
                 if (layer === 'main') return !!window.lineLockMain;
             }
             if (layer === 'wrap') return !!window.lineLockWrap;
-            return !!window.lineLockMain; // Point-level locks apply to 'main'
+            return !!(window.lineLockMain && window.lineLockWrap);
         }
 
         function isPointLocked(val, track, entry = null) {
@@ -6152,7 +6152,6 @@
                 const pt = points[i];
                 if (!Array.isArray(pt) || pt.length < 3) continue;
                 if (pt[2] === depthIdx) {
-                    if (track && isPointLockedByRawX(pt[5], track, entry)) continue;
                     const dx = Math.abs(pt[0] - xImg);
                     if (dx < bestDistX) {
                         bestDistX = dx;
@@ -6189,7 +6188,6 @@
             for (let i = 0; i < points.length; i++) {
                 const pt = points[i];
                 if (!Array.isArray(pt) || pt.length < 2) continue;
-                if (track && isPointLockedByRawX(pt[5], track, entry)) continue;
                 const dx = Number.isFinite(xImg) ? (pt[0] - xImg) : 0;
                 const dy = Number.isFinite(yImg) ? (pt[1] - yImg) : 0;
                 const d2 = dx * dx + dy * dy;
@@ -6590,7 +6588,7 @@
                 }
             }
             const val = pixelToTrackValue(currentRawX, targetTrack, { rawX: wrapActive });
-            if (!Number.isFinite(val)) return;
+            if (!Number.isFinite(val) || isPointLocked(val, targetTrack, entry)) return;
 
             const brushSizeStr = document.getElementById('paintBrushSize')?.value || "1";
             const baseBrushSize = parseInt(brushSizeStr, 10);
@@ -6604,7 +6602,7 @@
             const applyVal = (targetIdx, targetVal) => {
                 if (targetIdx < 0 || targetIdx >= activeValues.length) return;
                 if (isDepthIndexPinned(editCurveId, targetIdx)) return;
-                if (isPointLocked(activeValues[targetIdx], targetTrack, entry)) return;
+                if (isPointLocked(activeValues[targetIdx], targetTrack, entry) || isPointLocked(targetVal, targetTrack, entry)) return;
                 
                 // Track undo state if not already tracked
                 if (!paintUndoValuesBefore.some(v => v.idx === targetIdx)) {
@@ -6713,7 +6711,8 @@
             const applySmooth = (targetIdx) => {
                 if (targetIdx < 0 || targetIdx >= activeValues.length) return;
                 if (isDepthIndexPinned(editCurveId, targetIdx)) return;
-                if (isPointLocked(activeValues[targetIdx], targetTrack, entry)) return;
+                const currVal = activeValues[targetIdx];
+                if (isMissingDigitizedValue(currVal) || isPointLocked(currVal, targetTrack, entry)) return;
                 
                 let wSum = 0;
                 let weighted = 0;
@@ -6838,6 +6837,10 @@
 
             const entry = lastDigitizedCurves[curveKey];
             if (!entry || !Array.isArray(entry.values) || idx >= entry.values.length) return;
+            if (!isMissingDigitizedValue(entry.values[idx]) && isPointLocked(entry.values[idx], targetTrack, entry)) {
+                showStatus('Point is locked; unlock before editing.', 'info');
+                return;
+            }
 
             const wrapActive = isTrackWrapActive(targetTrack, curveKey);
 
@@ -6855,7 +6858,7 @@
                 ? pixelToTrackValue(rawEditX, targetTrack, { rawX: true })
                 : pixelToTrackValue(Math.max(targetTrack.leftX, Math.min(targetTrack.rightX, xImg)), targetTrack, { depthIndex: idx, values: getActiveLayerValues(entry) });
 
-            if (!Number.isFinite(clickedTrackValue)) return;
+            if (!Number.isFinite(clickedTrackValue) || isPointLocked(clickedTrackValue, targetTrack, entry)) return;
 
             if (!lastCurveTraces) lastCurveTraces = {};
 
@@ -6885,7 +6888,7 @@
                 if (isDepthIndexPinned(editCurveId, dIdx)) continue;
                 
                 const originalValue = entry.values[dIdx];
-                if (isPointLocked(originalValue, targetTrack, entry)) continue;
+                if (!isMissingDigitizedValue(originalValue) && isPointLocked(originalValue, targetTrack, entry)) continue;
                 const dist = Math.abs(dIdx - idx);
                 const normalizedDist = dist / (crestRadius + 1);
                 const weight = (Math.cos(normalizedDist * Math.PI) + 1) / 2;
@@ -7880,7 +7883,7 @@
             const centerN = neighbors.find(n => n.pointIndex === centerIndex);
             if (!centerN) return;
 
-            if (isDepthIndexPinned(state.curveId, centerN.depthIndex)) return;
+            if (isDepthIndexPinned(state.curveId, centerN.depthIndex) || isPointLocked(centerN.originalValue, targetTrack, entry)) return;
 
             const trackLeft = Math.min(Number(targetTrack.leftX), Number(targetTrack.rightX));
             const trackRight = Math.max(Number(targetTrack.leftX), Number(targetTrack.rightX));
