@@ -4725,96 +4725,55 @@
         function resolveActiveLayer(xImg, yImg, entry, track) {
             if (!entry || !track) return 'main';
 
-            const hasWrapLayer = entry.wrapLayer && Array.isArray(entry.wrapLayer.values);
-            const getFallbackLayer = () => {
-                const lockMain = isMainLineLocked();
-                const lockWrap = isWrapLineLocked();
-                if (hasWrapLayer && lockMain && !lockWrap) return 'wrap';
-                if (lockWrap && !lockMain) return 'main';
-                return window.lastActiveLayer || 'main';
-            };
-
-            if (hasWrapLayer) {
-                const lockMain = isMainLineLocked();
-                const lockWrap = isWrapLineLocked();
-                if (lockMain && !lockWrap) {
-                    window.currentDragLayer = 'wrap';
-                    window.lastActiveLayer = 'wrap';
-                    return 'wrap';
-                }
-                if (lockWrap && !lockMain) {
-                    window.currentDragLayer = 'main';
-                    window.lastActiveLayer = 'main';
-                    return 'main';
-                }
-            }
-
             if ((typeof _dragHasMoved !== 'undefined' && _dragHasMoved) &&
                 (window.currentDragLayer === 'wrap' || window.currentDragLayer === 'main')) {
                 return window.currentDragLayer;
             }
 
-            if (!hasWrapLayer) return 'main';
-            
+            const hasWrapLayer = entry.wrapLayer && Array.isArray(entry.wrapLayer.values);
             const depthCfg = lastDepthConfig || (typeof getDepthConfigFromInputs === 'function' ? getDepthConfigFromInputs() : null);
-            if (!depthCfg || !Array.isArray(lastDigitizedDepth)) return getFallbackLayer();
-            const depth = typeof pixelToDepthFromConfig === 'function' ? pixelToDepthFromConfig(yImg, depthCfg) : null;
-            if (!Number.isFinite(depth)) return getFallbackLayer();
-            const dIdx = typeof findNearestDepthIndex === 'function' ? findNearestDepthIndex(depth, lastDigitizedDepth) : -1;
-            if (dIdx < 0 || dIdx >= lastDigitizedDepth.length) return getFallbackLayer();
-            
+            let dIdx = -1;
+            if (depthCfg && Array.isArray(lastDigitizedDepth)) {
+                const depth = typeof pixelToDepthFromConfig === 'function' ? pixelToDepthFromConfig(yImg, depthCfg) : null;
+                if (Number.isFinite(depth)) {
+                    dIdx = typeof findNearestDepthIndex === 'function' ? findNearestDepthIndex(depth, lastDigitizedDepth) : -1;
+                }
+            }
+
             const isUsableValue = (value) => {
                 if (value == null || !Number.isFinite(Number(value))) return false;
                 return !(typeof isMissingDigitizedValue === 'function' && isMissingDigitizedValue(value));
             };
-            const mainVal = Array.isArray(entry.values) ? entry.values[dIdx] : null;
-            const wrapVal = entry.wrapLayer.values[dIdx];
+
+            const mainVal = (dIdx >= 0 && Array.isArray(entry.values)) ? entry.values[dIdx] : null;
+            const wrapVal = (hasWrapLayer && dIdx >= 0) ? entry.wrapLayer.values[dIdx] : null;
 
             const minV = Math.min(Number(track.scaleMin), Number(track.scaleMax));
             const maxV = Math.max(Number(track.scaleMin), Number(track.scaleMax));
             const isMainValWrapped = isUsableValue(mainVal) && (mainVal < minV - 1e-5 || mainVal > maxV + 1e-5);
 
-            if (isUsableValue(wrapVal) && !isUsableValue(mainVal)) {
-                window.lastActiveLayer = 'wrap';
-                return 'wrap';
-            }
-            if (!isUsableValue(wrapVal)) {
+            if (!hasWrapLayer || !isUsableValue(wrapVal)) {
                 const res = isMainValWrapped ? 'wrap' : 'main';
                 window.lastActiveLayer = res;
                 return res;
+            }
+
+            if (!isUsableValue(mainVal)) {
+                window.lastActiveLayer = 'wrap';
+                return 'wrap';
             }
 
             const wrapTrack = { ...track };
             if (Number.isFinite(entry.wrapLayer.left_value)) wrapTrack.scaleMin = entry.wrapLayer.left_value;
             if (Number.isFinite(entry.wrapLayer.right_value)) wrapTrack.scaleMax = entry.wrapLayer.right_value;
 
-            const mainX = isUsableValue(mainVal) ? trackValueToPixelX(mainVal, track) : null;
-            const wrapX = isUsableValue(wrapVal) ? trackValueToPixelX(wrapVal, wrapTrack) : null;
+            const mainX = trackValueToPixelX(mainVal, track);
+            const wrapX = trackValueToPixelX(wrapVal, wrapTrack);
 
             const distMain = mainX != null ? Math.abs(mainX - xImg) : Infinity;
             const distWrap = wrapX != null ? Math.abs(wrapX - xImg) : Infinity;
 
-            const left = Math.min(Number(track.leftX), Number(track.rightX));
-            const right = Math.max(Number(track.leftX), Number(track.rightX));
-            const width = right - left;
-            const threshold = Number.isFinite(width) && width > 0 ? Math.max(10, width * 0.04) : 10;
             const minDiff = 5;
-
-            if (distMain > threshold && distWrap > threshold) {
-                const fallback = getFallbackLayer();
-                window.lastActiveLayer = fallback;
-                return fallback;
-            }
-
-            if (distWrap <= threshold && distMain > threshold) {
-                window.lastActiveLayer = 'wrap';
-                return 'wrap';
-            }
-            if (distMain <= threshold && distWrap > threshold) {
-                window.lastActiveLayer = 'main';
-                return 'main';
-            }
-
             if (distWrap < distMain - minDiff) {
                 window.lastActiveLayer = 'wrap';
                 return 'wrap';
@@ -4824,10 +4783,15 @@
                 return 'main';
             }
 
-            const fallback = getFallbackLayer();
-            if ((fallback === 'wrap' && distWrap <= threshold) || (fallback === 'main' && distMain <= threshold)) {
-                window.lastActiveLayer = fallback;
-                return fallback;
+            const lockMain = isMainLineLocked();
+            const lockWrap = isWrapLineLocked();
+            if (lockMain && !lockWrap) {
+                window.lastActiveLayer = 'wrap';
+                return 'wrap';
+            }
+            if (lockWrap && !lockMain) {
+                window.lastActiveLayer = 'main';
+                return 'main';
             }
 
             const chosen = distWrap < distMain ? 'wrap' : 'main';
@@ -4836,12 +4800,6 @@
         }
 
         function _getEffectiveActiveLayer() {
-            if (typeof isMainLineLocked === 'function' && typeof isWrapLineLocked === 'function') {
-                const lockMain = isMainLineLocked();
-                const lockWrap = isWrapLineLocked();
-                if (lockMain && !lockWrap) return 'wrap';
-                if (lockWrap && !lockMain) return 'main';
-            }
             return window.currentDragLayer || window.paintTargetLayer || (typeof editDragState !== 'undefined' && editDragState ? editDragState.dragLayer : null) || 'main';
         }
 
@@ -4854,8 +4812,7 @@
         function isPointLocked(val, track, entry = null) {
             const activeLayer = _getEffectiveActiveLayer();
             if (entry && entry.wrapLayer && Array.isArray(entry.wrapLayer.values)) {
-                if (activeLayer === 'wrap') return isWrapLineLocked();
-                if (activeLayer === 'main') return isMainLineLocked();
+                return activeLayer === 'wrap' ? isWrapLineLocked() : isMainLineLocked();
             }
             if (track && val != null && Number.isFinite(val)) {
                 const minV = Math.min(track.scaleMin, track.scaleMax);
@@ -4869,8 +4826,7 @@
         function isPointLockedByRawX(rawX, track, entry = null) {
             const activeLayer = _getEffectiveActiveLayer();
             if (entry && entry.wrapLayer && Array.isArray(entry.wrapLayer.values)) {
-                if (activeLayer === 'wrap') return isWrapLineLocked();
-                if (activeLayer === 'main') return isMainLineLocked();
+                return activeLayer === 'wrap' ? isWrapLineLocked() : isMainLineLocked();
             }
             if (track && rawX != null && Number.isFinite(rawX)) {
                 const minX = Math.min(track.leftX, track.rightX);
