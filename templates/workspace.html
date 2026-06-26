@@ -4206,6 +4206,9 @@
             const nextLayer = layer === 'wrap' ? 'wrap' : 'main';
             window.currentDragLayer = nextLayer;
             window.lastActiveLayer = nextLayer;
+            if (typeof _dragHasMoved !== 'undefined') {
+                _dragHasMoved = false;
+            }
             if (typeof paintTargetLayer !== 'undefined') {
                 paintTargetLayer = nextLayer;
             }
@@ -4727,23 +4730,27 @@
                 return window.lastActiveLayer || 'main';
             };
 
+            if (hasWrapLayer) {
+                const lockMain = isMainLineLocked();
+                const lockWrap = isWrapLineLocked();
+                if (lockMain && !lockWrap) {
+                    window.currentDragLayer = 'wrap';
+                    window.lastActiveLayer = 'wrap';
+                    return 'wrap';
+                }
+                if (lockWrap && !lockMain) {
+                    window.currentDragLayer = 'main';
+                    window.lastActiveLayer = 'main';
+                    return 'main';
+                }
+            }
+
             if ((typeof _dragHasMoved !== 'undefined' && _dragHasMoved) &&
                 (window.currentDragLayer === 'wrap' || window.currentDragLayer === 'main')) {
                 return window.currentDragLayer;
             }
 
             if (!hasWrapLayer) return 'main';
-
-            const lockMain = isMainLineLocked();
-            const lockWrap = isWrapLineLocked();
-            if (lockMain && !lockWrap) {
-                window.lastActiveLayer = 'wrap';
-                return 'wrap';
-            }
-            if (lockWrap && !lockMain) {
-                window.lastActiveLayer = 'main';
-                return 'main';
-            }
             
             const depthCfg = lastDepthConfig || (typeof getDepthConfigFromInputs === 'function' ? getDepthConfigFromInputs() : null);
             if (!depthCfg || !Array.isArray(lastDigitizedDepth)) return getFallbackLayer();
