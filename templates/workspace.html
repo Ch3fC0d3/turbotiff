@@ -4948,6 +4948,16 @@
             }));
         }
 
+        function activateTrackWrapForEdit(track) {
+            if (!track) return false;
+            track.wrapped = true;
+            if (Number.isInteger(track.index)) {
+                const wrappedEl = document.getElementById(`wrapped${track.index}`);
+                if (wrappedEl) wrappedEl.checked = true;
+            }
+            return true;
+        }
+
         function positiveModulo(value, width) {
             if (!Number.isFinite(value) || !Number.isFinite(width) || width <= 0) return value;
             return ((value % width) + width) % width;
@@ -6501,6 +6511,11 @@
                 if (wrapActive) {
                     if (prevRawX !== null) {
                         currentRawX = unwrapDisplayXNearReference(xImg, prevRawX, targetTrack);
+                    } else if (!isMissingDigitizedValue(activeValues[idx])) {
+                        const refRawX = trackValueToPixelX(activeValues[idx], targetTrack, { rawValue: true });
+                        if (Number.isFinite(refRawX)) {
+                            currentRawX = unwrapDisplayXNearReference(xImg, refRawX, targetTrack);
+                        }
                     }
                     prevRawX = currentRawX;
                     const val = pixelToTrackValue(currentRawX, targetTrack, { rawX: true });
@@ -6564,8 +6579,15 @@
             const activeValues = getActiveLayerValues(entry);
 
             let currentRawX = xImg;
-            if (wrapActive && paintLastProcessedX !== null) {
-                currentRawX = unwrapDisplayXNearReference(xImg, paintLastProcessedX, targetTrack);
+            if (wrapActive) {
+                if (paintLastProcessedX !== null) {
+                    currentRawX = unwrapDisplayXNearReference(xImg, paintLastProcessedX, targetTrack);
+                } else if (!isMissingDigitizedValue(activeValues[idx])) {
+                    const refRawX = trackValueToPixelX(activeValues[idx], targetTrack, { rawValue: true });
+                    if (Number.isFinite(refRawX)) {
+                        currentRawX = unwrapDisplayXNearReference(xImg, refRawX, targetTrack);
+                    }
+                }
             }
             const val = pixelToTrackValue(currentRawX, targetTrack, { rawX: wrapActive });
             if (!Number.isFinite(val)) return;
@@ -7559,6 +7581,7 @@
             }
 
             ensureTracePointsHaveDepthIndex(editCurveId);
+            targetTrack.wrapped = isTrackWrapActive(targetTrack, curveKey, pts);
 
             // Sort by Y for sequential access (important for line drawing)
             pts.sort((a, b) => a[1] - b[1]);
@@ -7656,6 +7679,7 @@
                         originalX: ptX,
                         originalY: ptY,
                         originalValue: activeValues[neighborDepthIdx],
+                        originalRawX: getTracePointRawX(pts[idx], targetTrack, curveKey),
                     });
                 }
 
@@ -7858,6 +7882,14 @@
 
             if (isDepthIndexPinned(state.curveId, centerN.depthIndex)) return;
 
+            const trackLeft = Math.min(Number(targetTrack.leftX), Number(targetTrack.rightX));
+            const trackRight = Math.max(Number(targetTrack.leftX), Number(targetTrack.rightX));
+            const crossedTrackRail = Number.isFinite(trackLeft) && Number.isFinite(trackRight) &&
+                (Number(xImg) < trackLeft - 1 || Number(xImg) > trackRight + 1);
+            if (!targetTrack.wrapped && crossedTrackRail) {
+                activateTrackWrapForEdit(targetTrack);
+            }
+
             const deltaX = xImg - centerN.originalX;
             const deltaY = yImg - centerN.originalY;
             
@@ -7937,10 +7969,12 @@
                         const interpolatedValue = n.originalValue * (1 - weight) + targetValue * weight;
                         newRawX = trackValueToPixelX(interpolatedValue, getActiveLayerTrackConfig(entry, targetTrack), { rawValue: true });
                         if (!Number.isFinite(newRawX)) {
-                            newRawX = n.originalX + deltaX * weight;
+                            const refX = Number.isFinite(n.originalRawX) ? n.originalRawX : n.originalX;
+                            newRawX = refX + deltaX * weight;
                         }
                     } else {
-                        newRawX = n.originalX + deltaX * weight;
+                        const refX = Number.isFinite(n.originalRawX) ? n.originalRawX : n.originalX;
+                        newRawX = refX + deltaX * weight;
                     }
                 }
 
