@@ -4688,7 +4688,8 @@
             
             const getAmbiguousLayer = () => {
                 if (window.lineLockMain && !window.lineLockWrap) return 'wrap';
-                return 'main';
+                if (window.lineLockWrap && !window.lineLockMain) return 'main';
+                return window.lastActiveLayer || 'main';
             };
             
             if (dIdx >= 0 && dIdx < lastDigitizedDepth.length) {
@@ -4705,19 +4706,44 @@
                 let distMain = mainX != null ? Math.abs(mainX - xImg) : Infinity;
                 let distWrap = wrapX != null ? Math.abs(wrapX - xImg) : Infinity;
                 
-                // If both are far away (>30px), treat as empty space click
-                if (distMain > 30 && distWrap > 30) {
+                const left = Math.min(Number(track.leftX), Number(track.rightX));
+                const right = Math.max(Number(track.leftX), Number(track.rightX));
+                const width = right - left;
+                const threshold = Number.isFinite(width) && width > 0 ? Math.max(10, width * 0.04) : 10;
+                const minDiff = 5;
+                
+                // If both are far away, treat as empty space click
+                if (distMain > threshold && distWrap > threshold) {
                     return getAmbiguousLayer();
                 }
                 
-                if (distMain <= 30 && distWrap <= 30) {
-                    if (window.lineLockMain && !window.lineLockWrap) return 'wrap';
-                    if (window.lineLockWrap && !window.lineLockMain) return 'main';
+                // If only one layer is within range, pick it
+                if (distWrap <= threshold && distMain > threshold) {
+                    window.lastActiveLayer = 'wrap';
+                    return 'wrap';
+                }
+                if (distMain <= threshold && distWrap > threshold) {
+                    window.lastActiveLayer = 'main';
+                    return 'main';
                 }
                 
-                // Otherwise, return the closest one
-                if (distWrap < distMain) return 'wrap';
-                return 'main';
+                // Both are within range: prefer the closer one, but only switch if the
+                // difference is clear. Otherwise stick to the last active layer to avoid
+                // the wrap line jumping across to the main line on small mouse wiggles.
+                if (distWrap < distMain - minDiff) {
+                    window.lastActiveLayer = 'wrap';
+                    return 'wrap';
+                }
+                if (distMain < distWrap - minDiff) {
+                    window.lastActiveLayer = 'main';
+                    return 'main';
+                }
+                
+                // Ambiguous: respect lock state, then last active layer
+                if (window.lineLockMain && !window.lineLockWrap) return 'wrap';
+                if (window.lineLockWrap && !window.lineLockMain) return 'main';
+                const ambiguous = window.lastActiveLayer || 'main';
+                return ambiguous;
             }
             
             return getAmbiguousLayer();
