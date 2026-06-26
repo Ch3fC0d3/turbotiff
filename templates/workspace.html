@@ -4733,6 +4733,17 @@
             }
 
             if (!hasWrapLayer) return 'main';
+
+            const lockMain = isMainLineLocked();
+            const lockWrap = isWrapLineLocked();
+            if (lockMain && !lockWrap) {
+                window.lastActiveLayer = 'wrap';
+                return 'wrap';
+            }
+            if (lockWrap && !lockMain) {
+                window.lastActiveLayer = 'main';
+                return 'main';
+            }
             
             const depthCfg = lastDepthConfig || (typeof getDepthConfigFromInputs === 'function' ? getDepthConfigFromInputs() : null);
             if (!depthCfg || !Array.isArray(lastDigitizedDepth)) return getFallbackLayer();
