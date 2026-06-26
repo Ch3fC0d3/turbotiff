@@ -9798,7 +9798,7 @@
 
         if (imageHitTarget) {
             imageHitTarget.addEventListener('pointerdown', (pe) => {
-                if (activeTool !== 'draw' && activeTool !== 'paint') return;
+                if (activeTool !== 'draw' && activeTool !== 'paint' && activeTool !== 'smoothBrush') return;
                 if (!editMode || !editCurveId) return;
                 // Only handle primary button (pen tip = 0, left mouse = 0)
                 if (pe.button !== 0 && pe.button !== -1) return;
