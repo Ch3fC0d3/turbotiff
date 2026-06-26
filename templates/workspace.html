@@ -4739,11 +4739,26 @@
                     return 'main';
                 }
                 
-                // Ambiguous: respect lock state, then last active layer
-                if (window.lineLockMain && !window.lineLockWrap) return 'wrap';
-                if (window.lineLockWrap && !window.lineLockMain) return 'main';
-                const ambiguous = window.lastActiveLayer || 'main';
-                return ambiguous;
+                // Ambiguous: respect lock state, then prefer the closer layer.
+                // Only use lastActiveLayer as a tie-breaker if it is within range;
+                // otherwise the first click near the wrap line will correctly pick wrap.
+                if (window.lineLockMain && !window.lineLockWrap) {
+                    window.lastActiveLayer = 'wrap';
+                    return 'wrap';
+                }
+                if (window.lineLockWrap && !window.lineLockMain) {
+                    window.lastActiveLayer = 'main';
+                    return 'main';
+                }
+                if (window.lastActiveLayer === 'wrap' && distWrap <= threshold) {
+                    return 'wrap';
+                }
+                if (window.lastActiveLayer === 'main' && distMain <= threshold) {
+                    return 'main';
+                }
+                const chosen = distWrap < distMain ? 'wrap' : 'main';
+                window.lastActiveLayer = chosen;
+                return chosen;
             }
             
             return getAmbiguousLayer();
