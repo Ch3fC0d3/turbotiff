@@ -4693,15 +4693,6 @@
                 return window.currentDragLayer;
             }
 
-            if (window.lineLockMain && !window.lineLockWrap) {
-                window.lastActiveLayer = 'wrap';
-                return 'wrap';
-            }
-            if (window.lineLockWrap && !window.lineLockMain) {
-                window.lastActiveLayer = 'main';
-                return 'main';
-            }
-
             const depthCfg = lastDepthConfig || (typeof getDepthConfigFromInputs === 'function' ? getDepthConfigFromInputs() : null);
             if (!depthCfg || !Array.isArray(lastDigitizedDepth)) return 'main';
             const depth = typeof pixelToDepthFromConfig === 'function' ? pixelToDepthFromConfig(yImg, depthCfg) : null;
@@ -4795,31 +4786,31 @@
         }
 
         function isPointLocked(val, track, entry = null) {
-            if (track && val != null) {
-                const minV = Math.min(track.scaleMin, track.scaleMax);
-                const maxV = Math.max(track.scaleMin, track.scaleMax);
-                const isWrapPoint = (val < minV - 1e-5) || (val > maxV + 1e-5);
-                if (isWrapPoint) return !!window.lineLockWrap;
-            }
             const activeLayer = _getEffectiveActiveLayer();
             if (entry && entry.wrapLayer && Array.isArray(entry.wrapLayer.values)) {
                 if (activeLayer === 'wrap') return !!window.lineLockWrap;
                 if (activeLayer === 'main') return !!window.lineLockMain;
+            }
+            if (track && val != null && Number.isFinite(val)) {
+                const minV = Math.min(track.scaleMin, track.scaleMax);
+                const maxV = Math.max(track.scaleMin, track.scaleMax);
+                const isWrapPoint = (val < minV - 1e-5) || (val > maxV + 1e-5);
+                return isWrapPoint ? !!window.lineLockWrap : !!window.lineLockMain;
             }
             return activeLayer === 'wrap' ? !!window.lineLockWrap : !!window.lineLockMain;
         }
 
         function isPointLockedByRawX(rawX, track, entry = null) {
-            if (track && rawX != null) {
-                const minX = Math.min(track.leftX, track.rightX);
-                const maxX = Math.max(track.leftX, track.rightX);
-                const isWrapPoint = (rawX > maxX + 1e-4) || (rawX < minX - 1e-4);
-                if (isWrapPoint) return !!window.lineLockWrap;
-            }
             const activeLayer = _getEffectiveActiveLayer();
             if (entry && entry.wrapLayer && Array.isArray(entry.wrapLayer.values)) {
                 if (activeLayer === 'wrap') return !!window.lineLockWrap;
                 if (activeLayer === 'main') return !!window.lineLockMain;
+            }
+            if (track && rawX != null && Number.isFinite(rawX)) {
+                const minX = Math.min(track.leftX, track.rightX);
+                const maxX = Math.max(track.leftX, track.rightX);
+                const isWrapPoint = (rawX > maxX + 1e-4) || (rawX < minX - 1e-4);
+                return isWrapPoint ? !!window.lineLockWrap : !!window.lineLockMain;
             }
             return activeLayer === 'wrap' ? !!window.lineLockWrap : !!window.lineLockMain;
         }
