@@ -4808,13 +4808,39 @@
             return false;
         }
 
-        function perturbIfEqual(values, idx) {
+        function perturbIfEqual(values, idx, track = null) {
             if (idx <= 0 || idx >= values.length) return;
-            const prev = values[idx - 1];
             const curr = values[idx];
-            if (prev !== null && prev !== undefined && curr !== null && curr !== undefined && Math.abs(curr - prev) < 1e-6) {
-                values[idx] = curr + 1e-4;
+            if (curr === null || curr === undefined) return;
+
+            // Only perturb if the value is essentially equal to the previous one
+            const prev = values[idx - 1];
+            if (prev === null || prev === undefined || Math.abs(curr - prev) >= 1e-6) return;
+
+            // Compute a perturbation large enough to be visible (1 px in track space)
+            let delta = 1e-4;
+            if (track) {
+                const currentX = trackValueToPixelX(curr, track, { rawValue: true });
+                if (Number.isFinite(currentX)) {
+                    const newX = currentX + 1;
+                    const newVal = pixelToTrackValue(newX, track, { rawX: true });
+                    if (Number.isFinite(newVal)) {
+                        values[idx] = newVal;
+                        return;
+                    }
+                }
+                const leftX = Number(track.leftX);
+                const rightX = Number(track.rightX);
+                const scaleMin = Number(track.scaleMin);
+                const scaleMax = Number(track.scaleMax);
+                const widthPx = Math.abs(rightX - leftX);
+                const valueRange = Math.abs(scaleMax - scaleMin);
+                if (Number.isFinite(widthPx) && widthPx > 0 && Number.isFinite(valueRange) && valueRange > 0) {
+                    delta = Math.max(1e-4, valueRange / widthPx);
+                }
             }
+
+            values[idx] = curr + delta;
         }
 
         function getActiveLayerValues(entry) {
@@ -6480,13 +6506,13 @@
                     const val = pixelToTrackValue(currentRawX, targetTrack, { rawX: true });
                     if (Number.isFinite(val)) {
                         activeValues[idx] = val;
-                        perturbIfEqual(activeValues, idx);
+                        perturbIfEqual(activeValues, idx, targetTrack);
                     }
                 } else {
                     const newValue = pixelToTrackValue(xImg, getActiveLayerTrackConfig(entry, targetTrack), { depthIndex: idx, values: activeValues });
                     if (Number.isFinite(newValue)) {
                         activeValues[idx] = newValue;
-                        perturbIfEqual(activeValues, idx);
+                        perturbIfEqual(activeValues, idx, targetTrack);
                     }
                 }
             }
@@ -6563,7 +6589,7 @@
                     paintUndoValuesBefore.push({ idx: targetIdx, oldValue: activeValues[targetIdx] });
                 }
                 activeValues[targetIdx] = targetVal;
-                perturbIfEqual(activeValues, targetIdx);
+                perturbIfEqual(activeValues, targetIdx, targetTrack);
             };
 
             // Interpolate if we skipped indices
@@ -6690,11 +6716,8 @@
                         
                         const alpha = 0.5; // 50% smooth blend per frame so it is visible
                         let smoothed = currentVal * (1 - alpha) + avg * alpha;
-                        // Prevent the brush from flattening a run into a perfectly horizontal line
-                        if (targetIdx > 0 && Math.abs(smoothed - activeValues[targetIdx - 1]) < 1e-6) {
-                            smoothed += 1e-4;
-                        }
                         activeValues[targetIdx] = smoothed;
+                        perturbIfEqual(activeValues, targetIdx, targetTrack);
                     }
                 }
             };
@@ -7075,7 +7098,7 @@
                     const val = pixelToTrackValue(newXs[i], getActiveLayerTrackConfig(found.entry, track), { depthIndex: depthIdx, values: activeValues });
                     if (Number.isFinite(val) && depthIdx >= 0 && depthIdx < activeValues.length) {
                         activeValues[depthIdx] = val;
-                        perturbIfEqual(activeValues, depthIdx);
+                        perturbIfEqual(activeValues, depthIdx, track);
                     }
                 }
             }
@@ -7182,6 +7205,7 @@
                     const val = pixelToTrackValue(newX, getActiveLayerTrackConfig(found.entry, track), { depthIndex: depthIdx, values: activeValues });
                     if (Number.isFinite(val) && depthIdx >= 0 && depthIdx < activeValues.length) {
                         activeValues[depthIdx] = val;
+                        perturbIfEqual(activeValues, depthIdx, track);
                     }
                 }
             }
@@ -7764,7 +7788,10 @@
                 }
                 const newVal = pixelToTrackValue(newX, getActiveLayerTrackConfig(entry, targetTrack), { depthIndex: depthIdx, values: activeValues });
                 if (Number.isFinite(newVal)) {
-                    if (depthIdx >= 0 && depthIdx < activeValues.length) activeValues[depthIdx] = newVal;
+                    if (depthIdx >= 0 && depthIdx < activeValues.length) {
+                        activeValues[depthIdx] = newVal;
+                        perturbIfEqual(activeValues, depthIdx, targetTrack);
+                    }
                 }
             });
         }
@@ -7935,6 +7962,7 @@
                 const newVal = pixelToTrackValue(newRawX, getActiveLayerTrackConfig(entry, targetTrack), { rawX: true });
                 if (Number.isFinite(newVal)) {
                     activeValues[newDepthIndex] = newVal;
+                    perturbIfEqual(activeValues, newDepthIndex, targetTrack);
                 }
             });
 
@@ -8121,6 +8149,7 @@
                 const val = pixelToTrackValue(rawX, getActiveLayerTrackConfig(entry, targetTrack), { rawX: true });
                 if (Number.isFinite(val)) {
                     activeValues[depthIdx] = val;
+                    perturbIfEqual(activeValues, depthIdx, targetTrack);
                 }
             }
         }
@@ -11190,11 +11219,13 @@
                                             const val = pixelToTrackValue(currentRawX, track, { rawX: true });
                                             if (Number.isFinite(val)) {
                                                 activeValues[dIdx] = val;
+                                                perturbIfEqual(activeValues, dIdx, track);
                                             }
                                         } else {
                                             const val = pixelToTrackValue(displayX, activeTrack, { depthIndex: dIdx, values: activeValues });
                                             if (Number.isFinite(val)) {
                                                 activeValues[dIdx] = val;
+                                                perturbIfEqual(activeValues, dIdx, activeTrack);
                                             }
                                         }
                                     }
