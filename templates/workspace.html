@@ -4767,6 +4767,15 @@
             return false;
         }
 
+        function perturbIfEqual(values, idx) {
+            if (idx <= 0 || idx >= values.length) return;
+            const prev = values[idx - 1];
+            const curr = values[idx];
+            if (prev !== null && prev !== undefined && curr !== null && curr !== undefined && Math.abs(curr - prev) < 1e-6) {
+                values[idx] = curr + 1e-4;
+            }
+        }
+
         function getActiveLayerValues(entry) {
             if (!entry) return null;
             const activeLayer = _getEffectiveActiveLayer();
@@ -6430,11 +6439,13 @@
                     const val = pixelToTrackValue(currentRawX, targetTrack, { rawX: true });
                     if (Number.isFinite(val)) {
                         activeValues[idx] = val;
+                        perturbIfEqual(activeValues, idx);
                     }
                 } else {
                     const newValue = pixelToTrackValue(xImg, getActiveLayerTrackConfig(entry, targetTrack), { depthIndex: idx, values: activeValues });
                     if (Number.isFinite(newValue)) {
                         activeValues[idx] = newValue;
+                        perturbIfEqual(activeValues, idx);
                     }
                 }
             }
@@ -6511,6 +6522,7 @@
                     paintUndoValuesBefore.push({ idx: targetIdx, oldValue: activeValues[targetIdx] });
                 }
                 activeValues[targetIdx] = targetVal;
+                perturbIfEqual(activeValues, targetIdx);
             };
 
             // Interpolate if we skipped indices
@@ -6600,29 +6612,34 @@
             const brushSize = parseInt(brushSizeStr, 10);
             const brushRadius = Math.max(0, brushSize - 1);
             
+            // Gaussian kernel for local smoothing, stronger at the center
+            const kernelRadius = Math.max(5, Math.round(brushSize * 3));
+            const sigma = Math.max(1, kernelRadius / 2);
+            const weights = [];
+            for (let k = -kernelRadius; k <= kernelRadius; k++) {
+                weights.push(Math.exp(-(k * k) / (2 * sigma * sigma)));
+            }
+            
             // Local smoothing closure
             const applySmooth = (targetIdx) => {
                 if (targetIdx < 0 || targetIdx >= activeValues.length) return;
                 if (isDepthIndexPinned(editCurveId, targetIdx)) return;
                 if (isPointLocked(activeValues[targetIdx], targetTrack, entry)) return;
                 
-                // Compute local average
-                const kernelRadius = Math.max(5, Math.round(brushSize * 2.5));
-                let sum = 0;
-                let count = 0;
+                let wSum = 0;
+                let weighted = 0;
                 for (let w = -kernelRadius; w <= kernelRadius; w++) {
                     const wIdx = targetIdx + w;
-                    if (wIdx >= 0 && wIdx < activeValues.length) {
-                        const val = activeValues[wIdx];
-                        if (val !== null && val !== undefined) {
-                            sum += val;
-                            count++;
-                        }
-                    }
+                    if (wIdx < 0 || wIdx >= activeValues.length) continue;
+                    const val = activeValues[wIdx];
+                    if (val === null || val === undefined) continue;
+                    const weight = weights[w + kernelRadius];
+                    weighted += val * weight;
+                    wSum += weight;
                 }
                 
-                if (count > 0) {
-                    const avg = sum / count;
+                if (wSum > 0) {
+                    const avg = weighted / wSum;
                     const currentVal = activeValues[targetIdx];
                     if (currentVal !== null && currentVal !== undefined) {
                         // Track undo state if not already tracked
@@ -6630,8 +6647,13 @@
                             smoothUndoValuesBefore.push({ idx: targetIdx, oldValue: currentVal });
                         }
                         
-                        const alpha = 0.25; // 25% smooth blend per frame
-                        activeValues[targetIdx] = currentVal * (1 - alpha) + avg * alpha;
+                        const alpha = 0.5; // 50% smooth blend per frame so it is visible
+                        let smoothed = currentVal * (1 - alpha) + avg * alpha;
+                        // Prevent the brush from flattening a run into a perfectly horizontal line
+                        if (targetIdx > 0 && Math.abs(smoothed - activeValues[targetIdx - 1]) < 1e-6) {
+                            smoothed += 1e-4;
+                        }
+                        activeValues[targetIdx] = smoothed;
                     }
                 }
             };
@@ -7012,6 +7034,7 @@
                     const val = pixelToTrackValue(newXs[i], getActiveLayerTrackConfig(found.entry, track), { depthIndex: depthIdx, values: activeValues });
                     if (Number.isFinite(val) && depthIdx >= 0 && depthIdx < activeValues.length) {
                         activeValues[depthIdx] = val;
+                        perturbIfEqual(activeValues, depthIdx);
                     }
                 }
             }
