@@ -197,6 +197,7 @@ APP_VERSION = os.environ.get("APP_VERSION", "wrap-repair-tool-20260618")
 APP_BUILD_TIME = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
 
 app = Flask(__name__)
+app.config['TEMPLATES_AUTO_RELOAD'] = True
 
 from directional_app import directional_bp
 
