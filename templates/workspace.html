@@ -6836,6 +6836,11 @@
             }
 
             const entry = lastDigitizedCurves[curveKey];
+            window.currentDragLayer = resolveActiveLayer(xImg, yTrace, entry, targetTrack);
+            if (isLayerLocked(window.currentDragLayer, entry)) {
+                showStatus(`Cannot edit: ${window.currentDragLayer === 'wrap' ? 'Wrap Line' : 'Main Line'} is locked.`, 'warning');
+                return;
+            }
             const activeValues = getActiveLayerValues(entry);
             if (!entry || !activeValues || idx >= activeValues.length) return;
             if (!isMissingDigitizedValue(activeValues[idx]) && isPointLocked(activeValues[idx], targetTrack, entry)) {
@@ -6985,13 +6990,18 @@
                     }
                     return findNearestDepthIndex(depth, lastDigitizedDepth);
                 })();
+            window.currentDragLayer = resolveActiveLayer(xImg, yPoint, entry, targetTrack);
+            if (isLayerLocked(window.currentDragLayer, entry)) {
+                showStatus(`Cannot delete: ${window.currentDragLayer === 'wrap' ? 'Wrap Line' : 'Main Line'} is locked.`, 'warning');
+                return;
+            }
             const activeValues = getActiveLayerValues(entry);
             if (!activeValues || depthIdx < 0 || depthIdx >= activeValues.length) {
                 return;
             }
 
             const oldValue = activeValues[depthIdx];
-            if (isPointLocked(oldValue, targetTrack, entry) || isLayerLocked(_getEffectiveActiveLayer(), entry)) {
+            if (isPointLocked(oldValue, targetTrack, entry)) {
                 showStatus('Cannot delete: point is locked.', 'warning');
                 return;
             }
@@ -7503,6 +7513,13 @@
                 return false;
             }
             // Removed tight bounds check to allow edits outside track
+
+            const entryInit = lastDigitizedCurves[curveKey];
+            window.currentDragLayer = resolveActiveLayer(xImg, yImg, entryInit, targetTrack);
+            if (isLayerLocked(window.currentDragLayer, entryInit)) {
+                showStatus(`Cannot edit: ${window.currentDragLayer === 'wrap' ? 'Wrap Line' : 'Main Line'} is locked.`, 'warning');
+                return false;
+            }
 
             const bezierToggle = document.getElementById('bezierEditToggle');
             if (bezierToggle && bezierToggle.checked) {
