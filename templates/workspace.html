@@ -2203,8 +2203,12 @@
                 return { traceKey: null, points: null };
             }
             
-            // Redirect to wrap layer if active
-            if (window.currentDragLayer === 'wrap') {
+            // Redirect to wrap layer if active. Use the effective layer so lock
+            // buttons override stale drag/paint state.
+            const activeLayer = (typeof _getEffectiveActiveLayer === 'function')
+                ? _getEffectiveActiveLayer()
+                : window.currentDragLayer;
+            if (activeLayer === 'wrap') {
                 traceKey = traceKey + '_wrap';
             }
             
@@ -4832,6 +4836,12 @@
         }
 
         function _getEffectiveActiveLayer() {
+            if (typeof isMainLineLocked === 'function' && typeof isWrapLineLocked === 'function') {
+                const lockMain = isMainLineLocked();
+                const lockWrap = isWrapLineLocked();
+                if (lockMain && !lockWrap) return 'wrap';
+                if (lockWrap && !lockMain) return 'main';
+            }
             return window.currentDragLayer || window.paintTargetLayer || (typeof editDragState !== 'undefined' && editDragState ? editDragState.dragLayer : null) || 'main';
         }
 
