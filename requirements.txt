@@ -1,6 +1,6 @@
 --extra-index-url https://download.pytorch.org/whl/cpu
 flask==3.0.0
-opencv-contrib-python-headless==4.8.1.78
+opencv-contrib-python==4.10.0.84
 numpy==1.26.2
 pandas==2.1.4
 gunicorn==21.2.0
@@ -8,7 +8,10 @@ google-cloud-vision==3.5.0
 google-cloud-storage==2.14.0
 lasio==0.30.0
 setuptools>=65.0.0
-requests>=2.31.0
+requests==2.32.5
+urllib3>=2.2.0,<3.0.0
+charset-normalizer>=3.4.0,<4.0.0
+chardet>=5.2.0,<6.0.0
 huggingface-hub>=0.25.0
 openai>=0.28.0,<1.0.0
 python-dotenv==1.0.0
@@ -17,6 +20,8 @@ scipy>=1.11.0
 Pillow>=10.0.0
 torch>=2.0.0
 torchvision>=0.15.0
+paddlepaddle==3.3.1
+paddleocr==3.7.0
 easyocr==1.7.2
 
 stripe==15.0.0

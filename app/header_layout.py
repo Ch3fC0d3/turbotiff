@@ -142,7 +142,7 @@ def infer_tracks_from_ocr(
     if width is None or width < 4:
         return []
 
-    candidates: Dict[str, Dict[str, Any]] = {}
+    prepared_items: List[Dict[str, Any]] = []
     for item in items or []:
         if not isinstance(item, dict):
             continue
@@ -150,10 +150,32 @@ def infer_tracks_from_ocr(
         x = _finite(item.get("x"))
         if not text or x is None or not 0 <= x <= width:
             continue
+        prepared_items.append({"text": text, "x": x})
+
+    calibration_context = any(
+        re.search(r"\bCALIBR(?:ATION|ATE|ATED)?\b", item["text"])
+        for item in prepared_items
+    )
+    explicit_caliper_context = any(
+        re.search(r"\b(?:CALIPER|BOREHOLE|INCH(?:ES)?)\b", item["text"])
+        for item in prepared_items
+    )
+
+    candidates: Dict[str, Dict[str, Any]] = {}
+    for item in prepared_items:
+        text = item["text"]
+        x = item["x"]
         match = _best_curve_match(text)
         if match is None:
             continue
         definition, score = match
+        if (
+            definition["name"] == "CALI"
+            and text == "CALI"
+            and calibration_context
+            and not explicit_caliper_context
+        ):
+            continue
         if score < 3:
             continue
         current = candidates.get(definition["name"])

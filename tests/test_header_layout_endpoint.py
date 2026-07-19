@@ -67,14 +67,16 @@ class HeaderLayoutEndpointTests(unittest.TestCase):
         )
         self.assertEqual(payload['raw_layout']['fallback'], 'local_ocr_layout')
 
-    def test_easyocr_is_not_used_as_header_metadata(self):
+    def test_easyocr_populates_safe_metadata_and_rejects_noise(self):
         detected = {
             'raw': [
                 _ocr_entry('GAMMA RAY', 180, 20, 300, 50, 0.9),
                 _ocr_entry('WELL', 100, 70, 180, 90, 0.95),
-                _ocr_entry('WLQLL_LIIaVE_WJ6_NILL', 200, 70, 480, 90, 0.5),
-                _ocr_entry('COUNTY', 500, 70, 600, 90, 0.99),
-                _ocr_entry('~STATE', 620, 70, 720, 90, 0.99),
+                _ocr_entry('MENDEL ESTATE NO 1', 200, 70, 480, 90, 0.95),
+                _ocr_entry('COUNTY', 100, 95, 200, 115, 0.99),
+                _ocr_entry('~STATE', 220, 95, 320, 115, 0.99),
+                _ocr_entry('API', 500, 70, 560, 90, 0.99),
+                _ocr_entry('UNITS', 580, 70, 660, 90, 0.99),
             ],
             'full_text': '',
             'numbers': [],
@@ -97,7 +99,8 @@ class HeaderLayoutEndpointTests(unittest.TestCase):
                 })
 
         self.assertEqual(response.status_code, 200)
-        self.assertIsNone(response.get_json()['header_metadata'])
+        metadata = response.get_json()['header_metadata']
+        self.assertEqual(metadata, {'well': 'MENDEL ESTATE NO 1'})
 
 
 if __name__ == '__main__':

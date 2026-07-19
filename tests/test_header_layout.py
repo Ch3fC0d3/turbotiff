@@ -44,6 +44,15 @@ class HeaderLayoutInferenceTests(unittest.TestCase):
         self.assertEqual(tracks[0]['name'], 'GR')
         self.assertGreater(tracks[0]['left_x'], 200)
 
+    def test_rejects_split_calibration_text_as_caliper_track(self):
+        tracks = infer_tracks_from_ocr([
+            {'text': 'CALIBRATION', 'x': 180, 'y': 120},
+            {'text': 'CALI', 'x': 210, 'y': 140},
+            {'text': 'INTERVAL TRANSIT TIME', 'x': 720, 'y': 220},
+        ], 1000)
+
+        self.assertEqual([track['name'] for track in tracks], ['DT'])
+
     def test_returns_no_tracks_without_curve_labels(self):
         tracks = infer_tracks_from_ocr([
             {'text': 'COMPANY SKELLY OIL COMPANY', 'x': 500, 'y': 40},

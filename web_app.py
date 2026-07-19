@@ -17,6 +17,9 @@ vision_client = None
 LOCAL_OCR_AVAILABLE = False
 easyocr = None
 _easyocr_reader = None
+PADDLE_OCR_AVAILABLE = False
+PaddleOCR = None
+_paddle_ocr_reader = None
 
 # Load environment variables from .env and .env.local
 from dotenv import load_dotenv
@@ -87,6 +90,37 @@ except Exception:
     torch = None
     nn = None
 
+# Paddle and Torch load overlapping Windows runtime libraries. Importing Torch
+# first avoids a Paddle/torch DLL collision, while these cache paths keep model
+# files inside the app's ignored data directory.
+_paddle_cache_root = Path(__file__).parent / 'data' / 'paddle_runtime'
+_paddlex_cache_root = Path(__file__).parent / 'data' / 'paddlex'
+os.environ.setdefault('PADDLE_PDX_CACHE_HOME', str(_paddlex_cache_root))
+os.environ.setdefault('PADDLE_PDX_MODEL_SOURCE', 'bos')
+os.environ.setdefault('PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK', 'True')
+_original_home = os.environ.get('HOME')
+_original_userprofile = os.environ.get('USERPROFILE')
+try:
+    os.environ['HOME'] = str(_paddle_cache_root)
+    os.environ['USERPROFILE'] = str(_paddle_cache_root)
+    from paddleocr import PaddleOCR as _PaddleOCR
+    PaddleOCR = _PaddleOCR
+    PADDLE_OCR_AVAILABLE = True
+    print("[OK] PaddleOCR available as the primary local OCR engine.")
+except Exception as e:
+    PaddleOCR = None
+    PADDLE_OCR_AVAILABLE = False
+    print(f"[INFO] PaddleOCR unavailable; EasyOCR fallback remains active: {e}")
+finally:
+    if _original_home is None:
+        os.environ.pop('HOME', None)
+    else:
+        os.environ['HOME'] = _original_home
+    if _original_userprofile is None:
+        os.environ.pop('USERPROFILE', None)
+    else:
+        os.environ['USERPROFILE'] = _original_userprofile
+
 try:
     import easyocr as _easyocr_mod
     easyocr = _easyocr_mod
@@ -129,9 +163,17 @@ try:
         VISION_API_AVAILABLE = True
         print("[OK] Google Vision API: Loaded from file")
     else:
-        # Auto-detect key file in project directory
-        _local_key = Path(__file__).parent / 'GOOGLE_APPLICATION_CREDENTIALS.json'
-        if _local_key.exists():
+        # Auto-detect the credential filenames documented and ignored by this repo.
+        _local_key = next((
+            Path(__file__).parent / name
+            for name in (
+                'GOOGLE_APPLICATION_CREDENTIALS.json',
+                'GOOGLE_VISION_CREDENTIALS.json',
+                'google-vision-key.json',
+            )
+            if (Path(__file__).parent / name).exists()
+        ), None)
+        if _local_key is not None:
             credentials = service_account.Credentials.from_service_account_file(str(_local_key))
             vision_client = vision.ImageAnnotatorClient(credentials=credentials)
             VISION_API_AVAILABLE = True
@@ -6938,6 +6980,176 @@ def downsample_for_ocr(image_bytes, max_height=2000):
     return buffer.tobytes()
 
 
+_paddle_ocr_init_lock = threading.Lock()
+_paddle_ocr_predict_lock = threading.Lock()
+
+
+def _get_paddle_ocr_reader():
+    global _paddle_ocr_reader
+    if not PADDLE_OCR_AVAILABLE or PaddleOCR is None:
+        return None
+    if _paddle_ocr_reader is None:
+        with _paddle_ocr_init_lock:
+            if _paddle_ocr_reader is None:
+                original_home = os.environ.get('HOME')
+                original_userprofile = os.environ.get('USERPROFILE')
+                try:
+                    os.environ['HOME'] = str(_paddle_cache_root)
+                    os.environ['USERPROFILE'] = str(_paddle_cache_root)
+                    _paddle_ocr_reader = PaddleOCR(
+                        text_detection_model_name='PP-OCRv6_small_det',
+                        text_recognition_model_name='PP-OCRv6_small_rec',
+                        use_doc_orientation_classify=False,
+                        use_doc_unwarping=False,
+                        use_textline_orientation=True,
+                        text_recognition_batch_size=8,
+                        device='cpu',
+                        enable_mkldnn=False,
+                    )
+                    print("[OK] PaddleOCR reader initialized (CPU, PP-OCRv6 small).")
+                except Exception as exc:
+                    print(f"[WARN] PaddleOCR initialization failed: {exc}")
+                    _paddle_ocr_reader = False
+                finally:
+                    if original_home is None:
+                        os.environ.pop('HOME', None)
+                    else:
+                        os.environ['HOME'] = original_home
+                    if original_userprofile is None:
+                        os.environ.pop('USERPROFILE', None)
+                    else:
+                        os.environ['USERPROFILE'] = original_userprofile
+    return _paddle_ocr_reader if _paddle_ocr_reader is not False else None
+
+
+def _detect_text_paddleocr(image_bytes, preserve_detail=False):
+    reader = _get_paddle_ocr_reader()
+    if reader is None:
+        return {'raw': [], 'numbers': [], 'suggestions': {}, 'engine': 'paddleocr'}
+
+    try:
+        source_arr = np.frombuffer(image_bytes, np.uint8)
+        source_img = cv2.imdecode(source_arr, cv2.IMREAD_COLOR)
+        if source_img is None or source_img.size == 0:
+            return {'raw': [], 'numbers': [], 'suggestions': {}, 'engine': 'paddleocr'}
+
+        max_height = 3600 if preserve_detail else 2200
+        prepared_bytes = downsample_for_ocr(image_bytes, max_height=max_height)
+        prepared_arr = np.frombuffer(prepared_bytes, np.uint8)
+        prepared_img = cv2.imdecode(prepared_arr, cv2.IMREAD_COLOR)
+        if prepared_img is None or prepared_img.size == 0:
+            return {'raw': [], 'numbers': [], 'suggestions': {}, 'engine': 'paddleocr'}
+
+        scale_x = source_img.shape[1] / float(prepared_img.shape[1])
+        scale_y = source_img.shape[0] / float(prepared_img.shape[0])
+        with _paddle_ocr_predict_lock:
+            pages = list(reader.predict(
+                prepared_img,
+                text_rec_score_thresh=0.2,
+                use_textline_orientation=True,
+            ))
+
+        raw_text = []
+        numeric_entries = []
+        line_items = []
+        for page in pages:
+            page_json = getattr(page, 'json', {})
+            if callable(page_json):
+                page_json = page_json()
+            if not isinstance(page_json, dict):
+                continue
+            result = page_json.get('res', page_json)
+            if not isinstance(result, dict):
+                continue
+            texts = result.get('rec_texts') or []
+            scores = result.get('rec_scores') or []
+            polygons = result.get('rec_polys') or result.get('dt_polys') or []
+
+            for index, raw_value in enumerate(texts):
+                text = str(raw_value or '').strip()
+                if not text or index >= len(polygons):
+                    continue
+                try:
+                    confidence = float(scores[index]) if index < len(scores) else 1.0
+                except (TypeError, ValueError):
+                    confidence = 0.0
+                if not np.isfinite(confidence):
+                    confidence = 0.0
+
+                try:
+                    points = np.asarray(polygons[index], dtype=float).reshape(-1, 2)
+                except Exception:
+                    continue
+                verts = []
+                xs = []
+                ys = []
+                for point in points:
+                    x = int(round(float(point[0]) * scale_x))
+                    y = int(round(float(point[1]) * scale_y))
+                    verts.append({'x': x, 'y': y})
+                    xs.append(x)
+                    ys.append(y)
+                if not verts:
+                    continue
+
+                raw_text.append({
+                    'text': text,
+                    'vertices': verts,
+                    'confidence': confidence,
+                })
+                line_items.append((
+                    float(sum(ys)) / len(ys),
+                    float(sum(xs)) / len(xs),
+                    text,
+                ))
+
+                for number in re.findall(r'-?\d*\.?\d+', text):
+                    try:
+                        numeric_entries.append({
+                            'value': float(number),
+                            'text': text,
+                            'x': verts[0]['x'],
+                            'y': verts[0]['y'],
+                        })
+                    except ValueError:
+                        continue
+
+        full_text = ''
+        if line_items:
+            line_items.sort(key=lambda item: (item[0], item[1]))
+            lines = []
+            current_line = []
+            current_y = None
+            y_tolerance = max(10.0, source_img.shape[0] * 0.01)
+            for y, x, text in line_items:
+                if current_y is None or abs(y - current_y) <= y_tolerance:
+                    if current_y is None:
+                        current_y = y
+                    current_line.append((x, text))
+                else:
+                    current_line.sort(key=lambda item: item[0])
+                    lines.append(' '.join(item[1] for item in current_line).strip())
+                    current_line = [(x, text)]
+                    current_y = y
+            if current_line:
+                current_line.sort(key=lambda item: item[0])
+                lines.append(' '.join(item[1] for item in current_line).strip())
+            full_text = '\n'.join(line for line in lines if line)
+
+        suggestions = build_ocr_suggestions(numeric_entries)
+        suggestions = attach_curve_label_hints(suggestions, raw_text)
+        return {
+            'raw': raw_text,
+            'numbers': numeric_entries,
+            'suggestions': suggestions,
+            'full_text': full_text,
+            'engine': 'paddleocr',
+        }
+    except Exception as exc:
+        print(f"PaddleOCR error: {exc}")
+        return {'raw': [], 'numbers': [], 'suggestions': {}, 'engine': 'paddleocr'}
+
+
 def _get_easyocr_reader():
     global _easyocr_reader
     if not LOCAL_OCR_AVAILABLE or easyocr is None:
@@ -6958,7 +7170,7 @@ def _get_easyocr_reader():
 def _detect_text_easyocr(image_bytes, preserve_detail=False):
     reader = _get_easyocr_reader()
     if reader is None:
-        return {'raw': [], 'numbers': [], 'suggestions': {}}
+        return {'raw': [], 'numbers': [], 'suggestions': {}, 'engine': 'easyocr'}
 
     try:
         max_height = 3600 if preserve_detail else 2200
@@ -6966,7 +7178,7 @@ def _detect_text_easyocr(image_bytes, preserve_detail=False):
         nparr = np.frombuffer(image_bytes, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         if img is None or img.size == 0:
-            return {'raw': [], 'numbers': [], 'suggestions': {}}
+            return {'raw': [], 'numbers': [], 'suggestions': {}, 'engine': 'easyocr'}
 
         if preserve_detail:
             ocr_img = img
@@ -7085,12 +7297,13 @@ def _detect_text_easyocr(image_bytes, preserve_detail=False):
         }
     except Exception as e:
         print(f"EasyOCR error: {e}")
-        return {'raw': [], 'numbers': [], 'suggestions': {}}
+        return {'raw': [], 'numbers': [], 'suggestions': {}, 'engine': 'easyocr'}
 
-def detect_text_vision_api(image_bytes, preserve_detail=False):
-    """Use Google Vision API or local OCR fallback to detect text in image"""
+
+def _detect_text_google_vision(image_bytes):
+    """Run Google Vision when it is explicitly selected as the OCR provider."""
     if not VISION_API_AVAILABLE or vision_client is None:
-        return _detect_text_easyocr(image_bytes, preserve_detail=preserve_detail)
+        return {'raw': [], 'numbers': [], 'suggestions': {}, 'engine': 'google_vision'}
 
     try:
         image = vision.Image(content=image_bytes)
@@ -7134,11 +7347,38 @@ def detect_text_vision_api(image_bytes, preserve_detail=False):
             'raw': raw_text,
             'numbers': numeric_entries,
             'suggestions': suggestions,
-            'full_text': full_text
+            'full_text': full_text,
+            'engine': 'google_vision',
         }
     except Exception as e:
         print(f"Vision API error: {e}")
-        return _detect_text_easyocr(image_bytes, preserve_detail=preserve_detail)
+        return {'raw': [], 'numbers': [], 'suggestions': {}, 'engine': 'google_vision'}
+
+
+def detect_text_vision_api(image_bytes, preserve_detail=False):
+    """Detect text with the configured provider and resilient local fallbacks."""
+    provider = str(os.getenv('OCR_PROVIDER', 'local')).strip().lower()
+
+    if provider in {'google', 'google_vision', 'vision'}:
+        google_result = _detect_text_google_vision(image_bytes)
+        if google_result.get('raw'):
+            return google_result
+
+    if provider in {'easyocr', 'easy'}:
+        easy_result = _detect_text_easyocr(image_bytes, preserve_detail=preserve_detail)
+        if easy_result.get('raw'):
+            return easy_result
+
+    paddle_result = _detect_text_paddleocr(image_bytes, preserve_detail=preserve_detail)
+    if paddle_result.get('raw'):
+        return paddle_result
+
+    if provider == 'auto':
+        google_result = _detect_text_google_vision(image_bytes)
+        if google_result.get('raw'):
+            return google_result
+
+    return _detect_text_easyocr(image_bytes, preserve_detail=preserve_detail)
 
 
 @app.route('/reanalyze_panel', methods=['POST'])
@@ -7750,10 +7990,41 @@ def auto_layout_tracks():
 
             def clean_value_text(text):
                 value = str(text or '').strip()
-                value = re.sub(r"^[\s:._,\-=/\\|]+", "", value)
-                value = re.sub(r"[\s:._,\-=/\\|]+$", "", value)
+                value = re.sub(r"^[\s:._,~\-=/\\|]+", "", value)
+                value = re.sub(r"[\s:._,~\-=/\\|]+$", "", value)
                 value = re.sub(r"\s{2,}", " ", value)
                 return value.strip()
+
+            metadata_label_values = {
+                'API', 'COMPANY', 'COUNTY', 'DATE', 'FIELD', 'LOCATION',
+                'NAME', 'PROV', 'PROVINCE', 'SERVICE', 'STATE', 'UWI', 'WELL',
+            }
+            curve_header_noise = re.compile(
+                r"\b(?:API\s+UNITS?|GAMMA\s+RAY|INTERVAL\s+TRANSIT|MICROSECONDS?|CALIBRATION)\b",
+                flags=re.IGNORECASE,
+            )
+
+            def validate_metadata_value(key, raw_value):
+                value = clean_value_text(raw_value)
+                if not value or len(value) > 120:
+                    return None
+                normalized = re.sub(r"[^A-Z0-9]+", " ", value.upper()).strip()
+                if not normalized or normalized in metadata_label_values:
+                    return None
+                if curve_header_noise.search(value):
+                    return None
+                alnum_count = len(re.findall(r"[A-Za-z0-9]", value))
+                if alnum_count < 2:
+                    return None
+                if key in ('api', 'uwi'):
+                    digit_count = len(re.findall(r"\d", value))
+                    if digit_count < 6:
+                        return None
+                elif key == 'date' and not re.search(r"\d", value):
+                    return None
+                elif key in ('state', 'prov', 'county') and re.search(r"\d", value):
+                    return None
+                return value
 
             def looks_like_another_label(text, current_pattern):
                 raw = str(text or '').strip()
@@ -7868,14 +8139,20 @@ def auto_layout_tracks():
                     if m:
                         md['date'] = m.group(1)
 
-            return md if md else None
+            safe_md = {}
+            for key, value in md.items():
+                safe_value = validate_metadata_value(key, value)
+                if safe_value:
+                    safe_md[key] = safe_value
+            return safe_md if safe_md else None
         except Exception:
             return None
 
     is_local_ocr = detected_text.get('engine') == 'easyocr'
+    metadata_text_blob = '' if is_local_ocr else full_text_blob
     header_metadata = (
-        _extract_header_metadata(raw_text, full_text_blob)
-        if treat_region_as_header and not is_local_ocr
+        _extract_header_metadata(raw_text, metadata_text_blob)
+        if treat_region_as_header
         else None
     )
 

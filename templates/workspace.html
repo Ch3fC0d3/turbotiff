@@ -10465,11 +10465,15 @@
                 if (metadata?.fld) metaBits.push(`FLD=${metadata.fld}`);
                 if (metadata?.state) metaBits.push(`STATE=${metadata.state}`);
                 const metaText = metaBits.length ? ` Meta: ${metaBits.join(' | ')}` : '';
+                const metadataFieldCount = getHeaderMetadataFieldCount(metadata);
+                const metadataResultText = metadataFieldCount > 0
+                    ? ` Filled ${metadataFieldCount} LAS header field(s).`
+                    : ' No reliable LAS header fields were found.';
 
                 if (meaningfulTrackCount > 0) {
                     const names = tracks.map((track) => track?.name || '?').join(', ');
                     const appliedCount = Math.min(6, tracks.length);
-                    summaryEl.textContent = `Header captured: ${tracks.length} track(s) — ${names}. Applied the first ${appliedCount} track(s) to Step 4.${metaText}`;
+                    summaryEl.textContent = `Header captured: ${tracks.length} track(s) — ${names}. Populated ${appliedCount} Step 4 track(s).${metadataResultText}${metaText}`;
                 } else if (metadata) {
                     if (result.genericTrackCount > 0) {
                         summaryEl.textContent = `Header fields captured.${metaText} Skipped ${result.genericTrackCount} unlabeled track(s), so Step 4 was not auto-filled.`;
@@ -10726,14 +10730,15 @@
             const detailsEl = document.getElementById('headerMetadataDetails');
             if (detailsEl) detailsEl.open = true;
 
-            // Estimate header region as the top 25% of the image, or up to topPx if it's set
+            // Most log keys fit in the top 12%. A tighter band avoids treating
+            // calibration tables in the log body as curve labels.
             const topPxInput = document.getElementById('topPx');
-            let bottomBound = Math.floor(imageHeight * 0.25);
+            let bottomBound = Math.floor(imageHeight * 0.12);
             
             if (topPxInput && topPxInput.value) {
                 const topPxVal = parseFloat(topPxInput.value);
                 if (topPxVal > 50) {
-                    bottomBound = topPxVal;
+                    bottomBound = Math.min(bottomBound, topPxVal);
                 }
             }
 
