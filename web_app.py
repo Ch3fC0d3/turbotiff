@@ -339,6 +339,12 @@ CACHE_CLEANUP_INTERVAL_SECONDS = _env_int("TURBOTIFF_CACHE_CLEANUP_INTERVAL_SECO
 CACHE_IMAGES_MAX_BYTES = _env_int("TURBOTIFF_CACHE_IMAGES_MAX_MB", 64, 16) * 1024 * 1024
 CACHE_KEEP_SAVED_LOG_IMAGES = _env_bool("TURBOTIFF_CACHE_KEEP_SAVED_LOG_IMAGES", True)
 CACHE_STRIP_DB_IMAGE_BLOBS = _env_bool("TURBOTIFF_STRIP_DB_IMAGE_BLOBS", True)
+BATCH_DIGITIZE_MAX_JOBS = _env_int("TURBOTIFF_BATCH_MAX_JOBS", 12, 1)
+BATCH_DIGITIZE_MAX_REQUEST_BYTES = _env_int("TURBOTIFF_BATCH_MAX_REQUEST_MB", 96, 1) * 1024 * 1024
+BATCH_DIGITIZE_MAX_IMAGE_BYTES = _env_int("TURBOTIFF_BATCH_MAX_IMAGE_MB", 32, 1) * 1024 * 1024
+BATCH_DIGITIZE_MAX_IMAGE_PIXELS = _env_int("TURBOTIFF_BATCH_MAX_IMAGE_MEGAPIXELS", 60, 1) * 1_000_000
+ML_PREDICT_MAX_IMAGE_BYTES = _env_int("TURBOTIFF_ML_PREDICT_MAX_IMAGE_MB", 32, 1) * 1024 * 1024
+_API_IMAGE_FILENAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 def _extract_api_image_filename(value: Any) -> Optional[str]:
@@ -347,9 +353,66 @@ def _extract_api_image_filename(value: Any) -> Optional[str]:
     if marker not in text:
         return None
     filename = text.split(marker, 1)[1].split("?", 1)[0].split("#", 1)[0].strip("/")
-    if not filename or "/" in filename or "\\" in filename:
+    if (
+        not filename
+        or "/" in filename
+        or "\\" in filename
+        or not _API_IMAGE_FILENAME_RE.fullmatch(filename)
+    ):
         return None
     return filename
+
+
+def _remember_uploaded_image_filename(filename: str) -> None:
+    if not _API_IMAGE_FILENAME_RE.fullmatch(str(filename or "")):
+        return
+    recent = [
+        item for item in session.get("uploaded_image_filenames", [])
+        if isinstance(item, str) and _API_IMAGE_FILENAME_RE.fullmatch(item)
+    ]
+    recent = [item for item in recent if item != filename]
+    recent.append(filename)
+    session["uploaded_image_filenames"] = recent[-24:]
+
+
+def _user_can_access_image_filename(user: Optional[Dict[str, Any]], filename: str) -> bool:
+    if not user or not _API_IMAGE_FILENAME_RE.fullmatch(str(filename or "")):
+        return False
+    if user.get("is_admin"):
+        return True
+    if filename in session.get("uploaded_image_filenames", []):
+        return True
+
+    try:
+        with auth_billing.get_db(config.AUTH_DB_PATH) as conn:
+            rows = conn.execute(
+                """
+                SELECT original_image_path, cropped_image_path
+                FROM user_logs
+                WHERE user_id = ?
+                """,
+                (int(user["id"]),),
+            ).fetchall()
+    except Exception:
+        return False
+
+    for row in rows:
+        for value in row:
+            if _extract_api_image_filename(value) == filename:
+                return True
+    return False
+
+
+def _resolve_authorized_image_path(image_ref: Any, user: Dict[str, Any]) -> Path:
+    filename = _extract_api_image_filename(image_ref)
+    if not filename or not _user_can_access_image_filename(user, filename):
+        raise ValueError("Image reference is not available to this account")
+
+    images_dir = (Path(config.DATA_ROOT) / "images").resolve()
+    image_path = (images_dir / filename).resolve()
+    if image_path.parent != images_dir or not image_path.is_file():
+        raise ValueError("Image reference was not found")
+    return image_path
 
 
 def _referenced_image_filenames() -> set:
@@ -10311,20 +10374,20 @@ def favicon():
 @app.route('/api/images/<filename>')
 @login_required()
 def get_image(filename):
-    """Serve saved well log images to authenticated users."""
+    """Serve only images uploaded by or saved to the authenticated account."""
     user = _current_user(require_access=True)
     if not user:
         return "Not authorized", 401
-    
-    # We could theoretically verify the image belongs to the user,
-    # but the UUID filename acts as a sufficient secure capability URL
-    # for users inside their own session.
-    from pathlib import Path
-    images_dir = Path(config.DATA_ROOT) / 'images'
-    return send_from_directory(str(images_dir), filename)
+
+    try:
+        image_path = _resolve_authorized_image_path(f"/api/images/{filename}", user)
+    except ValueError:
+        return "Image not found", 404
+    return send_from_directory(str(image_path.parent), image_path.name)
 
 
 @app.route('/upload', methods=['POST'])
+@login_required()
 def upload_file():
     """Handle file upload and return image info"""
     if 'file' not in request.files:
@@ -10405,6 +10468,7 @@ def upload_file():
     
     # Save as JPEG with 85% quality to save space
     cv2.imwrite(str(image_path), img, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    _remember_uploaded_image_filename(image_filename)
     
     # We still return the base64 version for immediate frontend display,
     # but we also return the permanent path so the frontend can save it.
@@ -10494,6 +10558,106 @@ def pipeline_skeletonize(mask):
         result[eroded > 0] = mask[eroded > 0]
         return result
 
+
+def _connected_peak_centroid(
+    row_probabilities: np.ndarray,
+    candidate_index: int,
+    threshold: float,
+) -> float:
+    """Return the weighted centroid of the thresholded run containing a peak."""
+    row = np.asarray(row_probabilities, dtype=np.float32).reshape(-1)
+    if row.size == 0:
+        return float(candidate_index)
+
+    candidate = int(np.clip(candidate_index, 0, row.size - 1))
+    if row[candidate] < float(threshold):
+        return float(candidate)
+
+    left = candidate
+    right = candidate
+    while left > 0 and row[left - 1] >= threshold:
+        left -= 1
+    while right + 1 < row.size and row[right + 1] >= threshold:
+        right += 1
+
+    weights = row[left:right + 1]
+    total = float(weights.sum())
+    if total <= 1e-8:
+        return float(candidate)
+    positions = np.arange(left, right + 1, dtype=np.float32)
+    return float((positions * weights).sum() / total)
+
+
+def _scale_trace_values(
+    curve_config: Dict[str, Any],
+    xs: np.ndarray,
+    width_px: int,
+) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """Map trace pixels to values using the same scale rules for every pipeline."""
+    left_value = float(curve_config['left_value'])
+    right_value = float(curve_config['right_value'])
+    scale_type = (curve_config.get('scale_type') or '').lower().strip()
+    wrapped = bool(curve_config.get('wrapped'))
+    if not scale_type:
+        hint = scale_detection.classify_curve_type(
+            curve_config.get('name') or curve_config.get('type') or ''
+        )
+        scale_type = (hint or {}).get('scale_type', 'linear')
+
+    auto_wrapped = False
+    if scale_type == 'log' and not wrapped:
+        try:
+            if scale_detection.detect_wrap(xs, width_px):
+                wrapped = True
+                auto_wrapped = True
+        except Exception:
+            pass
+
+    values = scale_detection.pixel_to_value(
+        xs=xs,
+        width_px=width_px,
+        left_value=left_value,
+        right_value=right_value,
+        scale_type=scale_type,
+        wrapped=wrapped,
+    )
+    return values, {
+        'scale_type': scale_type,
+        'wrapped': wrapped,
+        'auto_wrapped': auto_wrapped,
+    }
+
+
+def _trace_ai_with_dp_fallback(
+    roi: np.ndarray,
+    mask: np.ndarray,
+    curve_name: str,
+    left_value: float,
+    right_value: float,
+    curve_type: str,
+    max_step: int,
+    smooth_lambda: float,
+    curv_lambda: float,
+    hot_side: Optional[str],
+) -> Tuple[np.ndarray, np.ndarray]:
+    try:
+        xs = ai_tracer.trace(roi)
+        if xs.ndim != 1 or xs.size != roi.shape[0]:
+            raise ValueError('AI tracer returned an invalid output shape')
+        return xs.astype(np.float32), np.full(xs.shape, 0.95, dtype=np.float32)
+    except Exception as exc:
+        print(f"⚠️ AI Tracer failed for {curve_name}: {exc}")
+        return trace_curve_with_dp(
+            mask,
+            scale_min=left_value,
+            scale_max=right_value,
+            curve_type=curve_type,
+            max_step=max_step,
+            smooth_lambda=smooth_lambda,
+            curv_lambda=curv_lambda,
+            hot_side=hot_side,
+        )
+
 @app.route('/digitize', methods=['POST'])
 @login_required()
 def digitize():
@@ -10517,13 +10681,12 @@ def digitize():
     # reposting full base64 logs can exceed proxy/serverless request limits.
     image_path_ref = (data.get('image_path') or '').strip()
     img = None
-    if image_path_ref.startswith('/api/images/'):
-        image_filename = image_path_ref.rsplit('/', 1)[-1].split('?', 1)[0]
-        disk_path = Path(config.DATA_ROOT) / 'images' / image_filename
-        if disk_path.exists():
-            img = cv2.imread(str(disk_path), cv2.IMREAD_COLOR)
-        else:
-            return jsonify({'error': f'Image file not found for digitize: {image_filename}'}), 400
+    if image_path_ref:
+        try:
+            disk_path = _resolve_authorized_image_path(image_path_ref, user)
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 403
+        img = cv2.imread(str(disk_path), cv2.IMREAD_COLOR)
 
     if img is None:
         image_data = data.get('image')
@@ -10753,17 +10916,18 @@ def digitize():
             # Simple argmax tracer already ran above, do nothing here
             pass
         elif ai_tracer.is_available() and trace_mode == "ai_tracer":
-            # Use the AI model for tracing
-            try:
-                # The AI model predicts coordinates relative to the ROI's left edge
-                # and already handles scaling to the ROI width.
-                xs = ai_tracer.trace(roi)
-                confidence = np.ones_like(xs) * 0.95 # Mock high confidence for AI
-            except Exception as e:
-                print(f"⚠️ AI Tracer failed for {name}: {e}")
-                # Fallback to empty if AI fails
-                xs = np.full(roi.shape[0], np.nan)
-                confidence = np.zeros(roi.shape[0])
+            xs, confidence = _trace_ai_with_dp_fallback(
+                roi,
+                mask,
+                name,
+                left_value,
+                right_value,
+                curve_type,
+                max_step_dp,
+                dp_smooth_lambda,
+                dp_curv_lambda,
+                hot_side,
+            )
         elif pixel_perfect and mode in colored_modes:
             gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
             if trace_mode == "skeleton_path":
@@ -10854,12 +11018,12 @@ def digitize():
                 # Ridge-centroid snap (vectorized plateau expansion)
                 x_local = float(start + best_cand)
                 peak_thr = max_p * 0.99
-                plateau = local_prob >= peak_thr
-                if plateau.any():
-                    seg = local_prob * plateau
-                    s = float(seg.sum())
-                    if s > 1e-8:
-                        x_local = float((local_col * seg).sum() / s)
+                connected_centroid = _connected_peak_centroid(
+                    local_prob,
+                    best_cand,
+                    peak_thr,
+                )
+                x_local = float(start) + connected_centroid
                 if p_local > p_dp * 0.06:
                     xs[y] = x_local
                 else:
@@ -11224,37 +11388,9 @@ def digitize():
                 if std_x < std_threshold:
                     xs[:] = np.nan
 
-        # Scale-aware pixel → value conversion.
-        # curve config may carry scale_type ('linear' | 'log' | 'centered') and wrapped.
-        # If missing, fall back to the curve-type default (e.g. resistivity → log).
-        scale_type = (c.get('scale_type') or '').lower().strip()
-        wrapped_flag = bool(c.get('wrapped'))
-        if not scale_type:
-            _hint = scale_detection.classify_curve_type(c.get('name') or c.get('type') or '')
-            scale_type = (_hint or {}).get('scale_type', 'linear')
+        vals, scale_meta = _scale_trace_values(c, xs, width_px)
 
-        # Auto-detect wrap for log scales when the user didn't check the box.
-        # detect_wrap() fires when the trace has repeated large alternating
-        # jumps (characteristic of multi-decade resistivity wrapping).
-        wrap_auto_detected = False
-        if scale_type == 'log' and not wrapped_flag:
-            try:
-                if scale_detection.detect_wrap(xs, width_px):
-                    wrapped_flag = True
-                    wrap_auto_detected = True
-            except Exception:
-                pass
-
-        vals = scale_detection.pixel_to_value(
-            xs=xs,
-            width_px=width_px,
-            left_value=left_value,
-            right_value=right_value,
-            scale_type=scale_type,
-            wrapped=wrapped_flag,
-        )
-
-        if wrap_auto_detected:
+        if scale_meta['auto_wrapped']:
             curve_warnings.append({
                 'curve': name,
                 'info': f"Auto-enabled wrap unwrapping for {name} (multi-decade log trace detected).",
@@ -12208,311 +12344,273 @@ def clear_preferences():
     })
 
 
+def _decode_bounded_batch_image(image_data: str) -> np.ndarray:
+    if not isinstance(image_data, str) or not image_data.strip():
+        raise ValueError('Missing image data')
+    payload = image_data.split(',', 1)[1] if ',' in image_data else image_data
+    if len(payload) > ((BATCH_DIGITIZE_MAX_IMAGE_BYTES + 2) // 3) * 4:
+        raise ValueError('Image payload is too large')
+    try:
+        image_bytes = base64.b64decode(payload, validate=True)
+    except Exception as exc:
+        raise ValueError('Image payload is not valid base64') from exc
+    if len(image_bytes) > BATCH_DIGITIZE_MAX_IMAGE_BYTES:
+        raise ValueError('Image payload is too large')
+
+    image = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
+    if image is None:
+        raise ValueError('Failed to decode image')
+    if int(image.shape[0]) * int(image.shape[1]) > BATCH_DIGITIZE_MAX_IMAGE_PIXELS:
+        raise ValueError('Decoded image dimensions are too large')
+    return image
+
+
+def _trace_points_to_row_x(
+    trace_points: Any,
+    top_px: int,
+    left_px: int,
+    row_count: int,
+) -> np.ndarray:
+    xs = np.full(max(0, int(row_count)), np.nan, dtype=np.float32)
+    for point in trace_points or []:
+        if not isinstance(point, (list, tuple)) or len(point) < 2:
+            continue
+        try:
+            x_image = float(point[0])
+            y_image = float(point[1])
+        except (TypeError, ValueError):
+            continue
+        row = int(round(y_image - float(top_px)))
+        if 0 <= row < xs.size and np.isfinite(x_image):
+            xs[row] = x_image - float(left_px)
+
+    finite = np.isfinite(xs)
+    if finite.any() and not finite.all():
+        rows = np.arange(xs.size, dtype=np.float32)
+        xs[~finite] = np.interp(rows[~finite], rows[finite], xs[finite]).astype(np.float32)
+    return xs
+
+
+def _downsample_training_vectors(
+    depth: np.ndarray,
+    curve_traces: Dict[str, np.ndarray],
+    curve_values: Dict[str, np.ndarray],
+    factor: int,
+) -> Tuple[np.ndarray, Dict[str, np.ndarray], Dict[str, np.ndarray]]:
+    depth_arr = np.asarray(depth)
+    step = max(1, int(factor))
+    expected = depth_arr.size
+    for group in (curve_traces, curve_values):
+        for name, values in group.items():
+            if np.asarray(values).size != expected:
+                raise ValueError(
+                    f"Training vector length mismatch for {name}: "
+                    f"{np.asarray(values).size} != {expected}"
+                )
+
+    selector = slice(None, None, step)
+    return (
+        depth_arr[selector],
+        {name: np.asarray(values)[selector] for name, values in curve_traces.items()},
+        {name: np.asarray(values)[selector] for name, values in curve_values.items()},
+    )
+
+
+def _run_production_digitize_for_batch(payload: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
+    parent_session = dict(session)
+    with app.test_request_context('/digitize', method='POST', json=payload):
+        session.update(parent_session)
+        response = app.make_response(digitize())
+        body = response.get_json(silent=True)
+        if not isinstance(body, dict):
+            body = {'success': False, 'error': 'Production digitizer returned an invalid response'}
+        return response.status_code, body
+
+
+def _build_batch_training_result(
+    index: int,
+    job: Dict[str, Any],
+    production_result: Dict[str, Any],
+    image: np.ndarray,
+    include_image: bool,
+) -> Dict[str, Any]:
+    config_payload = job['config']
+    depth_config = config_payload['depth']
+    curves = (config_payload.get('curves') or [])[:6]
+    global_options = config_payload.get('global_options') or {}
+    null_value = float(global_options.get('null', -999.25))
+    downsample = max(1, min(64, int(global_options.get('downsample', 1))))
+
+    image_height, image_width = image.shape[:2]
+    top_px = max(0, min(image_height - 1, int(depth_config['top_px'])))
+    bottom_px = max(0, min(image_height, int(depth_config['bottom_px'])))
+    if bottom_px <= top_px:
+        raise ValueError('Invalid depth bounds')
+
+    row_count = bottom_px - top_px
+    depth_values = compute_depth_vector(
+        row_count,
+        float(depth_config['top_depth']),
+        float(depth_config['bottom_depth']),
+    )
+    trace_points_by_curve = production_result.get('curve_traces') or {}
+    traces = {}
+    values = {}
+
+    for curve in curves:
+        name = curve.get('las_mnemonic') or curve.get('name')
+        if not name:
+            continue
+        left_px = max(0, min(image_width - 1, int(curve['left_px'])))
+        right_px = max(0, min(image_width, int(curve['right_px'])))
+        if right_px <= left_px:
+            continue
+
+        xs = _trace_points_to_row_x(
+            trace_points_by_curve.get(name),
+            top_px,
+            left_px,
+            row_count,
+        )
+        mapped_values, _ = _scale_trace_values(curve, xs, right_px - left_px)
+        traces[name] = np.where(np.isfinite(xs), xs, null_value).astype(np.float32)
+        values[name] = np.where(np.isfinite(mapped_values), mapped_values, null_value).astype(np.float32)
+
+    if not traces:
+        raise ValueError('Production digitizer returned no usable curve traces')
+
+    depth_values, traces, values = _downsample_training_vectors(
+        depth_values,
+        traces,
+        values,
+        downsample,
+    )
+    clean_depth = np.where(np.isfinite(depth_values), depth_values, null_value).astype(np.float32)
+
+    result = {
+        'index': index,
+        'success': True,
+        'depth': {
+            'top_px': top_px,
+            'bottom_px': bottom_px,
+            'top_depth': float(depth_config['top_depth']),
+            'bottom_depth': float(depth_config['bottom_depth']),
+            'unit': depth_config.get('unit', 'FT'),
+            'values': clean_depth.tolist(),
+        },
+        'curves': {name: vector.tolist() for name, vector in values.items()},
+        'curve_traces': {name: vector.tolist() for name, vector in traces.items()},
+        'metadata': {
+            'image_width': int(image_width),
+            'image_height': int(image_height),
+            'curve_count': len(values),
+            'null_value': null_value,
+            'pipeline': 'production',
+            'downsample': downsample,
+        },
+        'curve_warnings': production_result.get('curve_warnings') or [],
+        'depth_warnings': production_result.get('depth_warnings') or [],
+    }
+
+    if include_image:
+        encoded_ok, encoded = cv2.imencode(
+            '.jpg',
+            image,
+            [cv2.IMWRITE_JPEG_QUALITY, 85],
+        )
+        if encoded_ok:
+            result['image'] = base64.b64encode(encoded.tobytes()).decode('utf-8')
+    if job.get('header_metadata'):
+        result['header_metadata'] = job['header_metadata']
+    return result
+
+
 @app.route('/api/batch_digitize', methods=['POST'])
+@login_required()
 def batch_digitize():
-    """Process multiple TIFF images for ML training dataset generation.
+    """Generate bounded, production-parity training records for administrators."""
+    user = _current_user(require_access=True)
+    if not user:
+        return jsonify({'success': False, 'error': 'Not authorized'}), 401
+    if not user.get('is_admin'):
+        return jsonify({'success': False, 'error': 'Admin access required'}), 403
+    if request.content_length and request.content_length > BATCH_DIGITIZE_MAX_REQUEST_BYTES:
+        return jsonify({'success': False, 'error': 'Batch request is too large'}), 413
 
-    Expects JSON with:
-      - jobs: list of { image, config, preview_filters, detected_text, header_metadata }
-      - export_format: 'json' (default) or 'las'
-      - include_images: bool (include cropped panel images in output)
-
-    Returns:
-      - results: list of digitization results with metadata
-      - summary: { total, success, failed }
-    """
-    data = request.json or {}
-    jobs = data.get('jobs', [])
-    export_format = data.get('export_format', 'json')
-    include_images = data.get('include_images', True)
-
-    if not jobs:
+    data = request.get_json(silent=True) or {}
+    jobs = data.get('jobs')
+    if not isinstance(jobs, list) or not jobs:
         return jsonify({'success': False, 'error': 'No jobs provided'}), 400
+    if len(jobs) > BATCH_DIGITIZE_MAX_JOBS:
+        return jsonify({
+            'success': False,
+            'error': f'At most {BATCH_DIGITIZE_MAX_JOBS} jobs are allowed per request',
+        }), 400
+    if data.get('export_format', 'json') != 'json':
+        return jsonify({'success': False, 'error': 'Only JSON batch export is supported'}), 400
 
+    include_images = bool(data.get('include_images', False))
     results = []
     success_count = 0
-    failed_count = 0
 
-    for idx, job in enumerate(jobs):
+    for index, job in enumerate(jobs):
         try:
+            if not isinstance(job, dict) or not isinstance(job.get('config'), dict):
+                raise ValueError('Missing config')
+
             image_data = job.get('image')
-            image_path = job.get('image_path')
-            config = job.get('config')
-            preview_filters = job.get('preview_filters', {})
-            detected_text = job.get('detected_text', {})
-            header_metadata = job.get('header_metadata')
-
-            if not image_data and not image_path:
-                results.append({
-                    'index': idx,
-                    'success': False,
-                    'error': 'Missing image or image_path'
-                })
-                failed_count += 1
-                continue
-
-            if not config:
-                results.append({
-                    'index': idx,
-                    'success': False,
-                    'error': 'Missing config'
-                })
-                failed_count += 1
-                continue
-
-            # Load image (path or base64)
-            img = None
-            if image_path:
-                if os.path.exists(image_path):
-                    img = cv2.imread(image_path, cv2.IMREAD_COLOR)
-                else:
-                    results.append({
-                        'index': idx,
-                        'success': False,
-                        'error': f'Image path not found: {image_path}'
-                    })
-                    failed_count += 1
-                    continue
-            elif image_data:
-                try:
-                    # Decode image
-                    if ',' in image_data:
-                        image_data = image_data.split(',')[1]
-                    img_bytes = base64.b64decode(image_data)
-                    nparr = np.frombuffer(img_bytes, np.uint8)
-                    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                except Exception as e:
-                    results.append({
-                        'index': idx,
-                        'success': False,
-                        'error': f'Failed to decode image: {e}'
-                    })
-                    failed_count += 1
-                    continue
-
-            if img is None:
-                results.append({
-                    'index': idx,
-                    'success': False,
-                    'error': 'Failed to decode image'
-                })
-                failed_count += 1
-                continue
-
-            # Extract config
-            depth_cfg = config['depth']
-            curves = (config['curves'] or [])[:6]
-            gopt = config.get('global_options', {})
-
-            null_val = float(gopt.get('null', -999.25))
-            downsample = int(gopt.get('downsample', 1))
-            blur = int(gopt.get('blur', 3))
-            min_run = int(gopt.get('min_run', 2))
-            smooth_window = int(gopt.get('smooth_window', 5))
-
-            H, W, _ = img.shape
-            top = max(0, int(depth_cfg['top_px']))
-            bot = min(H, int(depth_cfg['bottom_px']))
-            top_depth = float(depth_cfg['top_depth'])
-            bottom_depth = float(depth_cfg['bottom_depth'])
-            depth_unit = depth_cfg.get('unit', 'FT')
-
-            nrows = bot - top
-            base_depth = compute_depth_vector(nrows, top_depth, bottom_depth)
-
-            curve_data = {}
-            curve_traces = {}
-
-            for c in curves:
-                name = c.get('las_mnemonic') or c.get('name')
-                unit = c.get('las_unit') or c.get('unit', '')
-                left_px = int(c['left_px'])
-                right_px = int(c['right_px'])
-                left_value = float(c['left_value'])
-                right_value = float(c['right_value'])
-                mode = c.get('mode', 'black')
-                hot_side = c.get('hot_side')
-                pixel_perfect = bool(c.get('pixel_perfect'))
-                trace_mode = c.get('trace_mode')
-                align_channels = bool(c.get('align_channels'))
-                preserve_wiggles = bool(c.get('preserve_wiggles'))
-                crest_boost = bool(c.get('crest_boost'))
-
-                if not hot_side and np.isfinite(left_value) and np.isfinite(right_value):
-                    hot_side = 'right' if right_value >= left_value else 'left'
-
-                left_px = max(0, min(W - 1, left_px))
-                right_px = max(0, min(W, right_px))
-
-                if right_px <= left_px:
-                    continue
-
-                top_clamped = max(0, min(H - 1, int(top)))
-                bot_clamped = max(0, min(H, int(bot)))
-
-                if bot_clamped <= top_clamped:
-                    continue
-
-                roi = img[top_clamped:bot_clamped, left_px:right_px]
-                if roi is None or roi.size == 0:
-                    continue
-
-                if align_channels:
-                    roi = align_rgb_channels(roi)
-                if blur > 0:
-                    bb = blur + 1 if blur % 2 == 0 else blur
-                    roi = cv2.GaussianBlur(roi, (bb, bb), 0)
-
-                mask = compute_prob_map(roi, mode=mode, ui_filters=preview_filters)
-                curve_type = c.get('type', 'GR')
-
-                colored_modes = {"green", "red", "blue", "auto", "cyan", "magenta", "yellow", "orange", "purple"}
-
-                if pixel_perfect and mode in colored_modes:
-                    gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-                    if trace_mode == "skeleton_path":
-                        xs, confidence = trace_curve_skeleton_path(mask)
-                    else:
-                        xs, confidence = trace_curve_pixel_perfect(
-                            mask, grayscale=gray_roi, bgr=roi, hot_side=hot_side,
-                            preserve_wiggles=preserve_wiggles, crest_boost=crest_boost,
-                        )
-                    width_px = mask.shape[1]
-                    if xs.size:
-                        s = pd.Series(xs)
-                        s = s.interpolate(method='linear', limit_direction='both', limit=max(10, int(xs.size * 0.02)))
-                        xs = s.to_numpy(dtype=np.float32)
-                    prob = mask.astype(np.float32) / 255.0
-                    if crest_boost:
-                        xs = _postprocess_missed_peaks(mask, prob, xs, search_radius=40, min_prob=0.004)
-                    else:
-                        xs = _postprocess_missed_peaks(mask, prob, xs, search_radius=30, min_prob=0.008)
-                elif mode in colored_modes:
-                    mask_orig = mask
-                    h_orig, w_orig = mask.shape
-                    mask = cv2.resize(mask, (w_orig * 2, h_orig * 2), interpolation=cv2.INTER_LINEAR)
-                    max_step_dp = 200 * 2
-                    dp_smooth_lambda = 0.001
-                    dp_curv_lambda = 0.001
-
-                    xs_dp, conf_dp = trace_curve_with_dp(
-                        mask, scale_min=left_value, scale_max=right_value,
-                        curve_type=curve_type, max_step=max_step_dp,
-                        smooth_lambda=dp_smooth_lambda, curv_lambda=dp_curv_lambda,
-                        hot_side=hot_side,
-                    )
-
-                    h_mask, w_mask = mask.shape
-                    prob_map = mask.astype(np.float32) / 255.0
-                    xs = np.full(h_mask, np.nan, dtype=np.float32)
-
-                    for row in range(h_mask):
-                        dp_x = xs_dp[row] if row < len(xs_dp) else None
-                        if np.isnan(dp_x):
-                            continue
-
-                        search_radius = 30
-                        x_start = max(0, int(dp_x) - search_radius)
-                        x_end = min(w_mask, int(dp_x) + search_radius + 1)
-                        row_probs = prob_map[row, x_start:x_end]
-
-                        if row_probs.size == 0:
-                            continue
-
-                        local_max_idx = np.argmax(row_probs)
-                        xs[row] = x_start + local_max_idx
-
-                    xs = xs / 2.0
-
-                    mask = mask_orig
-                else:
-                    # 1. Run a first-pass DP tracer to establish a guide line (baseline)
-                    try:
-                        xs_guide, _ = trace_curve_with_dp(
-                            mask, scale_min=left_value, scale_max=right_value,
-                            curve_type=curve_type, max_step=3, smooth_lambda=0.5, curv_lambda=0.05,
-                            hot_side=hot_side,
-                        )
-                        if xs_guide is not None and xs_guide.size > 0:
-                            mask = score_and_suppress_black_components(mask, xs_guide, curve_type=curve_type)
-                    except Exception as e:
-                        print(f"⚠️ score_and_suppress_black_components failed in batch_digitize: {e}")
-
-                    xs, confidence = trace_curve_with_dp(
-                        mask, scale_min=left_value, scale_max=right_value,
-                        curve_type=curve_type, max_step=3, smooth_lambda=0.5, curv_lambda=0.05,
-                        hot_side=hot_side,
-                    )
-
-                if xs.size != nrows:
-                    if xs.size > nrows:
-                        xs = xs[:nrows]
-                    else:
-                        xs = np.pad(xs, (0, nrows - xs.size), mode='edge')
-
-                xs = pd.Series(xs).interpolate(method='linear', limit_direction='both', limit=10).to_numpy()
-
-                scale_range = right_value - left_value
-                if scale_range == 0:
-                    scale_range = 1.0
-
-                values = left_value + (xs / (right_px - left_px)) * scale_range
-                values = np.where(np.isnan(values), null_val, values)
-
-                # Clean NaN/inf from xs and values before converting to list
-                xs_clean = np.where(np.isnan(xs) | np.isinf(xs), null_val, xs)
-                values_clean = np.where(np.isnan(values) | np.isinf(values), null_val, values)
-
-                if downsample > 1:
-                    values_clean = values_clean[::downsample]
-                    base_depth = base_depth[::downsample]
-
-                curve_data[name] = values_clean.tolist()
-                curve_traces[name] = xs_clean.tolist()
-
-            # Clean NaN/inf from depth values before converting to list
-            base_depth_clean = np.where(np.isnan(base_depth) | np.isinf(base_depth), null_val, base_depth)
-
-            result = {
-                'index': idx,
-                'success': True,
-                'depth': {
-                    'top_px': top,
-                    'bottom_px': bot,
-                    'top_depth': top_depth,
-                    'bottom_depth': bottom_depth,
-                    'unit': depth_unit,
-                    'values': base_depth_clean.tolist(),
-                },
-                'curves': curve_data,
-                'curve_traces': curve_traces,
-                'metadata': {
-                    'image_width': W,
-                    'image_height': H,
-                    'curve_count': len(curve_data),
-                    'null_value': null_val,
-                }
+            image_ref = job.get('image_path')
+            production_payload = {
+                'config': job['config'],
+                'preview_filters': job.get('preview_filters') or {},
+                'detected_text': job.get('detected_text') or {},
+                'header_metadata': job.get('header_metadata'),
+                'response_mode': 'lean',
             }
 
-            if include_images:
-                ok, buf = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 85])
-                if ok:
-                    result['image'] = base64.b64encode(buf.tobytes()).decode('utf-8')
+            if image_ref:
+                image_path = _resolve_authorized_image_path(image_ref, user)
+                image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+                if image is None:
+                    raise ValueError('Failed to decode authorized image')
+                production_payload['image_path'] = f'/api/images/{image_path.name}'
+            elif image_data:
+                image = _decode_bounded_batch_image(image_data)
+                normalized_data_url = (
+                    image_data
+                    if ',' in image_data
+                    else f'data:image/unknown;base64,{image_data}'
+                )
+                production_payload['image'] = normalized_data_url
+            else:
+                raise ValueError('Missing image or image_path')
 
-            if header_metadata:
-                result['header_metadata'] = header_metadata
+            if int(image.shape[0]) * int(image.shape[1]) > BATCH_DIGITIZE_MAX_IMAGE_PIXELS:
+                raise ValueError('Decoded image dimensions are too large')
 
-            results.append(result)
+            status_code, production_result = _run_production_digitize_for_batch(
+                production_payload
+            )
+            if status_code >= 400 or not production_result.get('success'):
+                raise ValueError(
+                    production_result.get('error')
+                    or f'Production digitizer failed with status {status_code}'
+                )
+
+            results.append(_build_batch_training_result(
+                index,
+                job,
+                production_result,
+                image,
+                include_images,
+            ))
             success_count += 1
-
-        except Exception as e:
+        except Exception as exc:
             results.append({
-                'index': idx,
+                'index': index,
                 'success': False,
-                'error': str(e)
+                'error': str(exc),
             })
-            failed_count += 1
-            continue
 
     return jsonify({
         'success': True,
@@ -12520,8 +12618,8 @@ def batch_digitize():
         'summary': {
             'total': len(jobs),
             'success': success_count,
-            'failed': failed_count
-        }
+            'failed': len(jobs) - success_count,
+        },
     })
 
 
@@ -12672,6 +12770,7 @@ def export_training_data():
 
 _ML_CURVE_TRACE_MODEL_CACHE = {
      'model_path': None,
+     'device': None,
      'model': None,
      'meta': None,
  }
@@ -12711,8 +12810,17 @@ if TORCH_AVAILABLE:
 
 
 def _ml_decode_image_data_url(image_data: str) -> np.ndarray:
+     if not isinstance(image_data, str) or ',' not in image_data:
+         raise ValueError('Image must be a base64 data URL')
      img_data = image_data.split(',', 1)[1]
-     img_bytes = base64.b64decode(img_data)
+     if len(img_data) > ((ML_PREDICT_MAX_IMAGE_BYTES + 2) // 3) * 4:
+         raise ValueError('Image payload is too large')
+     try:
+         img_bytes = base64.b64decode(img_data, validate=True)
+     except Exception as exc:
+         raise ValueError('Image payload is not valid base64') from exc
+     if len(img_bytes) > ML_PREDICT_MAX_IMAGE_BYTES:
+         raise ValueError('Image payload is too large')
      nparr = np.frombuffer(img_bytes, np.uint8)
      img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
      if img is None:
@@ -12721,13 +12829,20 @@ def _ml_decode_image_data_url(image_data: str) -> np.ndarray:
 
 
 def _ml_load_curve_trace_model(model_path: str, device: str = 'cpu') -> Tuple['torch.nn.Module', Dict]:
+     resolved_path = str(Path(model_path).expanduser().resolve(strict=True))
      cache = _ML_CURVE_TRACE_MODEL_CACHE
-     if cache.get('model') is not None and cache.get('model_path') == model_path:
+     if (
+         cache.get('model') is not None
+         and cache.get('model_path') == resolved_path
+         and cache.get('device') == device
+     ):
          return cache['model'], (cache.get('meta') or {})
 
-     payload = torch.load(model_path, map_location=device)
+     payload = torch.load(resolved_path, map_location=device, weights_only=True)
+     if not isinstance(payload, dict):
+         raise ValueError('Model file must contain a checkpoint dictionary')
      state_dict = payload.get('state_dict')
-     if not state_dict:
+     if not isinstance(state_dict, dict) or not state_dict:
          raise ValueError('Model file missing state_dict')
 
      model = _CurveTraceNet()
@@ -12735,37 +12850,33 @@ def _ml_load_curve_trace_model(model_path: str, device: str = 'cpu') -> Tuple['t
      model.eval()
      model.to(device)
 
+     input_h = int(payload.get('input_h', 256))
+     input_w = int(payload.get('input_w', 128))
+     if not 16 <= input_h <= 4096 or not 16 <= input_w <= 4096:
+         raise ValueError('Model input dimensions are outside supported limits')
      meta = {
-         'input_h': int(payload.get('input_h', 256)),
-         'input_w': int(payload.get('input_w', 128)),
+         'input_h': input_h,
+         'input_w': input_w,
          'curve': payload.get('curve'),
      }
 
-     cache['model_path'] = model_path
+     cache['model_path'] = resolved_path
+     cache['device'] = device
      cache['model'] = model
      cache['meta'] = meta
 
      return model, meta
 
 
-def _ml_resolve_curve_trace_model_path(requested_path: Optional[str]) -> str:
-     if requested_path:
-         return requested_path
-
+def _ml_resolve_curve_trace_model_path() -> str:
      env_path = os.environ.get('CURVE_TRACE_MODEL_PATH')
      if env_path:
-         return env_path
+         return str(Path(env_path).expanduser().resolve())
 
      candidates = [
          Path(__file__).with_name('curve_trace_model.pt'),
          Path.cwd() / 'curve_trace_model.pt',
      ]
-
-     try:
-         desktop_dir = Path(__file__).resolve().parent.parent
-         candidates.append(desktop_dir / 'TestTiflas' / 'curve_trace_model.pt')
-     except Exception:
-         pass
 
      for p in candidates:
          try:
@@ -12880,20 +12991,29 @@ def download_las_zip():
 
 
 @app.route('/api/ml_predict_curve_trace', methods=['POST'])
+@login_required()
 def ml_predict_curve_trace():
+     data = request.json or {}
+     if 'model_path' in data or 'device' in data:
+         return jsonify({
+             'success': False,
+             'error': 'Model path and device are configured by the server',
+         }), 400
      if not TORCH_AVAILABLE:
          return jsonify({'success': False, 'error': 'torch is not available in this environment'}), 400
 
-     data = request.json or {}
      image_data = data.get('image')
      roi = data.get('roi') or {}
 
      if not image_data:
          return jsonify({'success': False, 'error': 'Missing image'}), 400
 
-     model_path = _ml_resolve_curve_trace_model_path(data.get('model_path'))
-
-     device = data.get('device') or 'cpu'
+     model_path = _ml_resolve_curve_trace_model_path()
+     device = (os.environ.get('CURVE_TRACE_MODEL_DEVICE') or 'cpu').strip().lower()
+     if device not in {'cpu', 'cuda'}:
+         return jsonify({'success': False, 'error': 'Invalid configured model device'}), 500
+     if device == 'cuda' and not torch.cuda.is_available():
+         return jsonify({'success': False, 'error': 'Configured CUDA device is unavailable'}), 500
 
      try:
          img = _ml_decode_image_data_url(image_data)
@@ -12921,7 +13041,7 @@ def ml_predict_curve_trace():
          if not Path(model_path).exists():
              return jsonify({
                  'success': False,
-                 'error': f'Model file not found: {model_path}',
+                 'error': 'Configured model file was not found',
              }), 400
 
          model, meta = _ml_load_curve_trace_model(model_path=model_path, device=device)
@@ -12934,6 +13054,11 @@ def ml_predict_curve_trace():
 
          with torch.no_grad():
              pred_norm = model(x_t)[0].detach().cpu().numpy().astype(np.float32)
+
+         pred_norm = np.asarray(pred_norm, dtype=np.float32).reshape(-1)
+         if pred_norm.size != in_h or not np.all(np.isfinite(pred_norm)):
+             raise ValueError('Model returned an invalid trace shape')
+         pred_norm = np.clip(pred_norm, 0.0, 1.0)
 
          roi_w = int(right_px - left_px)
          roi_h = int(bottom_px - top_px)
@@ -12948,7 +13073,7 @@ def ml_predict_curve_trace():
 
          return jsonify({
              'success': True,
-             'model_path': model_path,
+             'model': Path(model_path).name,
              'model_meta': meta,
              'roi': {
                  'top_px': top_px,

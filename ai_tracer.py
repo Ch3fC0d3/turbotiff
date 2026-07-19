@@ -33,13 +33,33 @@ class CurveTraceNet(nn.Module if nn is not None else object):
             nn.Conv2d(base, base, 3, padding=1),
             nn.ReLU(inplace=True),
             nn.Conv2d(base, 1, 1),
-            nn.Sigmoid()
         )
 
     def forward(self, x):
         h = self.enc(x)
-        out = self.dec(h)
-        return out.squeeze(1)
+        logits = self.dec(h).squeeze(1)
+        prob = torch.softmax(logits, dim=-1)
+        x_positions = torch.linspace(0.0, 1.0, logits.shape[-1], device=logits.device)
+        return (prob * x_positions).sum(dim=-1)
+
+
+def _prediction_to_normalized_x(prediction: np.ndarray) -> np.ndarray:
+    """Normalize coordinate-vector or probability-map model output to one x per row."""
+    pred = np.asarray(prediction, dtype=np.float32).squeeze()
+    if pred.ndim == 1:
+        return np.clip(pred, 0.0, 1.0)
+    if pred.ndim != 2 or pred.shape[1] < 1:
+        raise ValueError(f"Unexpected AI trace output shape: {pred.shape}")
+
+    weights = np.clip(pred, 0.0, None)
+    row_sums = weights.sum(axis=1, keepdims=True)
+    empty_rows = row_sums[:, 0] <= 1e-8
+    row_sums[empty_rows] = 1.0
+    x_positions = np.linspace(0.0, 1.0, pred.shape[1], dtype=np.float32)
+    coords = (weights * x_positions[None, :]).sum(axis=1) / row_sums[:, 0]
+    if np.any(empty_rows):
+        coords[empty_rows] = np.argmax(pred[empty_rows], axis=1) / max(1, pred.shape[1] - 1)
+    return np.clip(coords.astype(np.float32), 0.0, 1.0)
 
 
 class AITracer:
@@ -59,7 +79,7 @@ class AITracer:
         p = Path(model_path)
         if p.exists():
             try:
-                ckpt = torch.load(str(p), map_location=self.device, weights_only=False)
+                ckpt = torch.load(str(p), map_location=self.device, weights_only=True)
                 self.input_h = ckpt.get('input_h', 256)
                 self.input_w = ckpt.get('input_w', 128)
                 
@@ -98,7 +118,11 @@ class AITracer:
         # Predict
         with torch.no_grad():
             pred_tensor = self.model(x_tensor) # Shape: [1, input_h]
-        pred_norm = pred_tensor.squeeze().cpu().numpy() # Shape: [input_h], values in [0, 1]
+        pred_norm = _prediction_to_normalized_x(pred_tensor.cpu().numpy())
+        if pred_norm.size != self.input_h:
+            raise ValueError(
+                f"AI trace returned {pred_norm.size} rows; expected {self.input_h}"
+            )
 
         # Scale prediction back to original image coordinates
         # 1. Scale width from [0,1] to [0, orig_w - 1]

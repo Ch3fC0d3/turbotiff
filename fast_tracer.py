@@ -64,25 +64,16 @@ def run_viterbi(cost, prob, max_step, smooth_lambda, curv_lambda):
             dp[y, x] = best_val
             prev[y, x] = best_xp
             
-    # Find best ending point
-    bottom_start = max(0, int(h * 0.8))
+    # The path must span the full image. Selecting an endpoint from an earlier
+    # row favors shorter cumulative paths and leaves the tail under-optimized.
     best_cost = big
     best_y = h - 1
     best_x = 0
-    
-    for y in range(bottom_start, h):
-        # Find min_x in this row
-        min_x = 0
-        min_val = big
-        for x in range(w):
-            if dp[y, x] < min_val:
-                min_val = dp[y, x]
-                min_x = x
-        
-        if min_val < best_cost:
-            best_cost = min_val
-            best_y = y
-            best_x = min_x
+
+    for x in range(w):
+        if dp[best_y, x] < best_cost:
+            best_cost = dp[best_y, x]
+            best_x = x
             
     # Backtrack
     path_x = np.full(h, -1, dtype=np.int32)
@@ -93,30 +84,6 @@ def run_viterbi(cost, prob, max_step, smooth_lambda, curv_lambda):
         if curr_x >= 0:
             path_x[y - 1] = prev[y, curr_x]
             
-    # Forward fill
-    if best_y < h - 1:
-        last_x = best_x
-        for y in range(best_y + 1, h):
-            x0 = max(0, last_x - max_step)
-            x1 = min(w, last_x + max_step + 1)
-            
-            # Find argmax in window
-            best_local_idx = -1
-            best_local_val = -1.0
-            
-            # Manual argmax to avoid slicing/allocating
-            for xi in range(x0, x1):
-                if prob[y, xi] > best_local_val:
-                    best_local_val = prob[y, xi]
-                    best_local_idx = xi
-            
-            if best_local_idx != -1:
-                path_x[y] = best_local_idx
-                last_x = best_local_idx
-            else:
-                # Fallback if window is somehow empty or all zeros (unlikely)
-                path_x[y] = last_x
-
     # Compute confidence and result
     xs = np.full(h, np.nan, dtype=np.float32)
     confidence = np.zeros(h, dtype=np.float32)
