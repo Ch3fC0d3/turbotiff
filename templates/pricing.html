@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pricing & Membership - TifLAS</title>
+    <title>Software Pricing - TifLAS</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = {
@@ -50,20 +50,17 @@
     </style>
     <link rel="stylesheet" href="/static/home_backdrop.css">
 </head>
-<body class="site-backdrop min-h-screen bg-slate-900 text-slate-200 font-sans">
+<body class="site-backdrop business-theme min-h-screen bg-white text-slate-800 font-sans">
     <nav class="sticky top-0 z-50 border-b border-slate-700 bg-slate-800/80 backdrop-blur-md">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="flex justify-between h-16">
                 <div class="flex items-center">
-                    <a href="{{ '/dashboard' if user else '/' }}" class="flex-shrink-0 flex items-center">
+                    <a href="/" class="flex-shrink-0 flex items-center">
                         <img src="/static/images/logo.svg" alt="TifLAS Logo" class="h-12 w-auto">
                     </a>
                     <div class="hidden sm:ml-6 sm:flex sm:space-x-8">
                         <a href="#plans" class="border-transparent text-slate-300 hover:border-primary-500 hover:text-white inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
                             Plans
-                        </a>
-                        <a href="/managed-conversion" class="border-transparent text-slate-300 hover:border-primary-500 hover:text-white inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
-                            Full-Service Conversion
                         </a>
                         <a href="#billing-overview" class="border-transparent text-slate-300 hover:border-primary-500 hover:text-white inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
                             Billing
@@ -74,21 +71,12 @@
                     </div>
                 </div>
                 <div class="flex items-center">
-                    {% if user %}
-                    <a href="/dashboard" class="border border-slate-600 text-slate-200 px-4 py-2 rounded-md text-sm font-bold hover:bg-slate-800 transition-colors">
-                        Dashboard
-                    </a>
-                    <a href="/submit-job" class="ml-2 bg-[#667eea] hover:bg-[#764ba2] text-white px-4 py-2 rounded-md text-sm font-bold transition-colors border border-transparent shadow-[0_0_10px_rgba(102,126,234,0.3)]">
-                        Submit a Job
-                    </a>
-                    {% else %}
                     <a href="/login" class="border border-slate-600 text-slate-200 px-4 py-2 rounded-md text-sm font-bold hover:bg-slate-800 transition-colors">
                         Login
                     </a>
                     <a href="/signup" class="ml-2 bg-[#667eea] hover:bg-[#764ba2] text-white px-4 py-2 rounded-md text-sm font-bold transition-colors border border-transparent shadow-[0_0_10px_rgba(102,126,234,0.3)]">
                         Start Free Trial
                     </a>
-                    {% endif %}
                 </div>
             </div>
         </div>
@@ -99,35 +87,23 @@
         <div class="relative max-w-7xl mx-auto px-4 py-16 sm:px-6 lg:px-8 lg:py-24">
             <div class="max-w-4xl rounded-3xl border border-slate-700/60 bg-slate-900/70 p-10 pricing-surface backdrop-blur-sm">
                 <div class="mb-4 inline-flex items-center rounded-full border border-primary-500/30 bg-primary-900/40 px-3 py-1 text-sm text-primary-200">
-                    Pricing & Membership
+                    Software Pricing
                 </div>
                 <h1 class="text-4xl font-extrabold tracking-tight text-white sm:text-5xl lg:text-6xl">
-                    Choose self-serve AI or let us handle it for you with AI
+                    Self-service well log digitization SaaS
                 </h1>
                 <p class="mt-6 max-w-3xl text-xl text-slate-200">
-                    TifLAS uses AI to help teams convert legacy well log images into structured LAS data. Start with a free 7-day trial (includes up to 3 free logs),
-                    subscribe monthly or annually, or send us your logs for full-service conversion.
+                    TifLAS is software your team uses in the browser to convert legacy well log images into structured LAS data.
+                    Start with a free 7-day trial, then choose monthly or annual access.
                 </p>
                 <div class="mt-5 rounded-2xl border border-primary-500/25 bg-primary-900/20 p-4 text-sm leading-6 text-slate-200">
                     Automation handles the first pass, but people stay in the loop. Complex curves, messy scans, and final QA
                     can be reviewed and corrected by a human before delivery.
                 </div>
                 <div class="mt-8 flex flex-wrap gap-4">
-                    {% if user %}
-                    <a href="/submit-job" class="inline-flex items-center px-6 py-3 border border-transparent text-base font-bold rounded-lg text-white bg-[#667eea] hover:bg-[#764ba2] transition-colors shadow-[0_0_20px_rgba(102,126,234,0.3)]">
-                        Submit a Job
-                    </a>
-                    <a href="/managed-conversion" class="inline-flex items-center px-6 py-3 border border-slate-600 text-base font-bold rounded-lg text-slate-100 bg-slate-900/70 hover:bg-slate-800 transition-colors">
-                        View Full-Service Conversion
-                    </a>
-                    {% else %}
                     <a href="/signup" class="inline-flex items-center px-6 py-3 border border-transparent text-base font-bold rounded-lg text-white bg-[#667eea] hover:bg-[#764ba2] transition-colors shadow-[0_0_20px_rgba(102,126,234,0.3)]">
                         Start Free Trial
                     </a>
-                    <a href="/managed-conversion" class="inline-flex items-center px-6 py-3 border border-slate-600 text-base font-bold rounded-lg text-slate-100 bg-slate-900/70 hover:bg-slate-800 transition-colors">
-                        View Full-Service Conversion
-                    </a>
-                    {% endif %}
                 </div>
             </div>
         </div>
@@ -136,186 +112,37 @@
     <section id="plans" class="py-16 bg-slate-900">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="max-w-3xl mb-10">
-                <h2 class="text-base text-primary-400 font-semibold tracking-wide uppercase">Workflow Options</h2>
+                <h2 class="text-base text-primary-400 font-semibold tracking-wide uppercase">Software Plan</h2>
                 <p class="mt-2 text-3xl leading-8 font-extrabold tracking-tight text-white sm:text-4xl">
-                    Choose in-house extraction or let TifLAS handle the processing
+                    Everything your team needs to digitize well logs
                 </p>
                 <p class="mt-4 text-lg text-slate-400">
-                    One path gives your team the full in-house workspace. The other is done-for-you processing with review,
-                    correction, and final QA built into the service.
+                    Start with a 7-day free trial, then choose monthly or annual access to the complete self-service workspace.
                 </p>
             </div>
-            <div class="grid gap-6 lg:grid-cols-2">
+            <div class="max-w-3xl">
                 <div class="rounded-2xl border border-primary-500/30 bg-slate-800 ring-1 ring-primary-500/20 p-8 pricing-surface">
-                    <div class="text-sm uppercase tracking-[0.2em] text-primary-300">{{ self_service.eyebrow }}</div>
-                    <h2 class="mt-2 text-3xl font-bold text-white">{{ self_service.title }}</h2>
-                    <p class="mt-4 text-slate-300">{{ self_service.description }}</p>
+                    <div class="text-sm uppercase tracking-[0.2em] text-primary-300">Software-as-a-Service</div>
+                    <h2 class="mt-2 text-3xl font-bold text-white">Self-Service Workspace</h2>
+                    <p class="mt-4 text-slate-300">Use TifLAS in your browser to convert your own well logs with AI-assisted extraction, review tools, and LAS export.</p>
 
                     <div class="mt-6 space-y-2">
-                        {% for line in self_service.price_lines %}
-                        <div class="{% if '$' in line %}text-2xl font-extrabold text-white{% else %}text-lg font-semibold text-primary-200{% endif %}">
-                            {{ line }}
-                        </div>
-                        {% endfor %}
+                        <div class="text-2xl font-extrabold text-white">$29.95/month</div>
+                        <div class="text-2xl font-extrabold text-white">$299/year</div>
+                        <div class="text-lg font-semibold text-primary-200">7-day free trial</div>
                     </div>
 
                     <ul class="mt-6 space-y-3 text-sm text-slate-200">
-                        {% for feature in self_service.features %}
-                        <li class="flex items-start gap-3">
-                            <span class="mt-1 h-2 w-2 rounded-full bg-primary-400"></span>
-                            <span>{{ feature }}</span>
-                        </li>
-                        {% endfor %}
+                        <li class="flex items-start gap-3"><span class="mt-1 h-2 w-2 rounded-full bg-primary-400"></span><span>Upload TIFF, PNG, JPG, or PDF log images</span></li>
+                        <li class="flex items-start gap-3"><span class="mt-1 h-2 w-2 rounded-full bg-primary-400"></span><span>AI-assisted track, depth, and curve extraction</span></li>
+                        <li class="flex items-start gap-3"><span class="mt-1 h-2 w-2 rounded-full bg-primary-400"></span><span>Review and correction tools</span></li>
+                        <li class="flex items-start gap-3"><span class="mt-1 h-2 w-2 rounded-full bg-primary-400"></span><span>LAS export</span></li>
+                        <li class="flex items-start gap-3"><span class="mt-1 h-2 w-2 rounded-full bg-primary-400"></span><span>Saved projects and account dashboard</span></li>
                     </ul>
 
-                    <a href="{{ self_service.href }}" class="mt-8 inline-flex w-full items-center justify-center rounded-lg px-5 py-3 text-sm font-bold transition-colors border border-transparent bg-[#667eea] text-white hover:bg-[#764ba2] shadow-[0_0_18px_rgba(102,126,234,0.2)]">
-                        {{ self_service.cta }}
+                    <a href="/signup" class="mt-8 inline-flex w-full items-center justify-center rounded-lg px-5 py-3 text-sm font-bold transition-colors border border-transparent bg-[#667eea] text-white hover:bg-[#764ba2] shadow-[0_0_18px_rgba(102,126,234,0.2)]">
+                        Start Free Trial
                     </a>
-                </div>
-
-                <div class="rounded-2xl border border-slate-700 bg-slate-800/70 p-8 pricing-surface">
-                    <div class="text-sm uppercase tracking-[0.2em] text-slate-400">{{ managed_processing.eyebrow }}</div>
-                    <h2 class="mt-2 text-3xl font-bold text-white">{{ managed_processing.title }}</h2>
-                    <p class="mt-4 text-slate-300">{{ managed_processing.description }}</p>
-
-                    <div class="mt-6 space-y-2">
-                        {% for line in managed_processing.price_lines %}
-                        <div class="text-2xl font-extrabold text-white">
-                            {{ line }}
-                        </div>
-                        {% endfor %}
-                    </div>
-
-                    <ul class="mt-6 space-y-3 text-sm text-slate-200">
-                        {% for note in managed_processing.notes %}
-                        <li class="flex items-start gap-3">
-                            <span class="mt-1 h-2 w-2 rounded-full bg-slate-400"></span>
-                            <span>{{ note }}</span>
-                        </li>
-                        {% endfor %}
-                    </ul>
-
-                    <a href="{{ managed_processing.href }}" class="mt-8 inline-flex w-full items-center justify-center rounded-lg px-5 py-3 text-sm font-bold transition-colors border border-slate-600 bg-slate-900 text-slate-100 hover:bg-slate-700">
-                        {{ managed_processing.cta }}
-                    </a>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    <section id="managed-calculator" class="bg-slate-900 px-4 py-8 sm:px-6 lg:px-8">
-        <div class="mx-auto max-w-7xl">
-            <div class="rounded-[34px] border border-cyan-500/30 bg-[#022743] px-6 py-8 text-white shadow-[0_0_0_1px_rgba(34,211,238,0.04)] sm:px-10 sm:py-12">
-                <div class="grid gap-8 xl:grid-cols-[1.35fr_0.95fr]">
-                    <div>
-                        <div class="text-[15px] uppercase tracking-[0.28em] text-cyan-200/95">
-                            Full-Service Conversion Calculator
-                        </div>
-
-                        <h2 class="mt-6 text-4xl font-semibold tracking-tight text-white sm:text-5xl">
-                            Estimate your processing cost
-                        </h2>
-
-                        <p class="mt-6 max-w-4xl text-lg leading-8 text-white/95 sm:text-[24px] sm:leading-[1.75]">
-                            Enter the depth interval, the number of curves to extract, and the job complexity.
-                            <div class="h-2 w-2 rounded-full bg-primary-500"></div>
-                            <span class="font-semibold text-white">$0.49 per 100 curve-feet</span> with a 
-                            <span class="font-semibold text-white">$29.99 minimum per log</span>
-                        </p>
-
-                        <div class="mt-10 grid gap-6 md:grid-cols-3">
-                            <label class="rounded-[28px] border border-white/10 bg-[#001330] px-6 py-6">
-                                <div class="text-[14px] uppercase tracking-[0.22em] text-slate-300">
-                                    Depth Interval
-                                </div>
-
-                                <div class="mt-8 flex items-end justify-between gap-3">
-                                    <input
-                                        id="managed-depth-feet"
-                                        type="number"
-                                        min="0"
-                                        step="100"
-                                        value="1200"
-                                        class="w-full bg-transparent text-[44px] font-semibold leading-none text-white outline-none sm:text-[52px]"
-                                    />
-                                    <span class="pb-1 text-[20px] text-slate-300">ft</span>
-                                </div>
-                            </label>
-
-                            <label class="rounded-[28px] border border-white/10 bg-[#001330] px-6 py-6">
-                                <div class="text-[14px] uppercase tracking-[0.22em] text-slate-300">
-                                    Curves Extracted
-                                </div>
-
-                                <div class="mt-8 flex items-end justify-between gap-3">
-                                    <input
-                                        id="managed-curve-count"
-                                        type="number"
-                                        min="1"
-                                        step="1"
-                                        value="3"
-                                        class="w-full bg-transparent text-[44px] font-semibold leading-none text-white outline-none sm:text-[52px]"
-                                    />
-                                    <span class="pb-1 text-[20px] text-slate-300">curves</span>
-                                </div>
-                            </label>
-
-                            <label class="rounded-[28px] border border-white/10 bg-[#001330] px-6 py-6">
-                                <div class="text-[14px] uppercase tracking-[0.22em] text-slate-300">
-                                    Complexity
-                                </div>
-
-                                <select
-                                    id="managed-complexity"
-                                    class="mt-7 w-full rounded-[22px] border border-white/10 bg-[#000d24] px-6 py-5 text-[20px] text-white outline-none"
-                                >
-                                    <option value="clean">Clean</option>
-                                    <option value="standard" selected>Standard review</option>
-                                    <option value="difficult">Difficult</option>
-                                </select>
-                            </label>
-                        </div>
-                    </div>
-
-                    <div class="rounded-[40px] border border-white/10 bg-[#000d24] px-8 py-8">
-                        <div class="text-[14px] uppercase tracking-[0.28em] text-slate-300">
-                            Estimated Total
-                        </div>
-
-                        <div id="managed-total" class="mt-5 text-[56px] font-semibold leading-none text-white sm:text-[68px]">
-                            $29.99
-                        </div>
-
-                        <div class="mt-8 space-y-4">
-                            <div class="flex items-center justify-between rounded-[22px] border border-white/10 bg-[#031835] px-6 py-5 text-[18px]">
-                                <span class="text-white/95">Billable curve-feet</span>
-                                <span id="managed-billable-curve-feet" class="font-semibold text-white">5,000</span>
-                            </div>
-
-                            <div class="flex items-center justify-between rounded-[22px] border border-white/10 bg-[#031835] px-6 py-5 text-[18px]">
-                                <span class="text-white/95">100 curve-foot units</span>
-                                <span id="managed-curve-foot-units" class="font-semibold text-white">50.0</span>
-                            </div>
-
-                            <div class="flex items-center justify-between rounded-[22px] border border-white/10 bg-[#031835] px-6 py-5 text-[18px]">
-                                <span class="text-white/95">Complexity multiplier</span>
-                                <span id="managed-complexity-multiplier" class="font-semibold text-white">×1.15</span>
-                            </div>
-                        </div>
-
-                        <div id="managed-formula-note" class="mt-6 rounded-[24px] border border-white/10 bg-[#031835] px-6 py-6 text-[18px] leading-9 text-white/95">
-                            Formula: depth × curves ÷ 100 × $0.49 × complexity · Estimated above minimum.
-                        </div>
-
-                        <p class="mt-7 text-[16px] leading-8 text-slate-300">
-                            Estimate only. Final pricing depends on scan quality, overlapping traces, wraps,
-                            and review needs.
-                        </p>
-
-                        <a href="/managed-conversion" class="mt-7 inline-flex w-full items-center justify-center rounded-[22px] border border-cyan-400/30 bg-cyan-500/10 px-6 py-4 text-base font-bold text-cyan-100 transition-colors hover:bg-cyan-500/20">
-                            Request a Quote
-                        </a>
-                    </div>
                 </div>
             </div>
         </div>
@@ -330,8 +157,8 @@
                         Manage Your Account & Billing
                     </p>
                     <p class="mt-4 text-lg text-slate-300">
-                        The dedicated member account area is where you manage trial status, plan changes, invoices, payment methods,
-                        and subscription controls.
+                        The account area is where you manage trial status, plan changes, invoices, payment methods,
+                        saved projects, and subscription controls.
                     </p>
 
                     <div class="mt-6 rounded-xl border border-slate-700 bg-slate-900 p-8 text-center">
@@ -341,8 +168,8 @@
                             <p class="max-w-md text-sm leading-6 text-slate-300">
                                 Actual billing changes, invoice downloads, and account management stay securely inside the authenticated member area.
                             </p>
-                            <a href="{{ '/account' if user else '/login?next=/account' }}" class="mt-4 inline-flex items-center justify-center rounded-lg bg-[#667eea] px-6 py-3 text-sm font-bold text-white transition-colors hover:bg-[#764ba2] shadow-[0_0_18px_rgba(102,126,234,0.2)]">
-                                {{ 'Open My Account' if user else 'Login to Manage Account' }}
+                            <a href="/login?next=/account" class="mt-4 inline-flex items-center justify-center rounded-lg bg-[#667eea] px-6 py-3 text-sm font-bold text-white transition-colors hover:bg-[#764ba2] shadow-[0_0_18px_rgba(102,126,234,0.2)]">
+                                Login to Manage Account
                             </a>
                         </div>
                     </div>
@@ -351,20 +178,20 @@
                 <div class="rounded-2xl border border-slate-700 bg-slate-800/70 p-8 pricing-surface">
                     <h3 class="text-base text-primary-400 font-semibold tracking-wide uppercase">What Is Included</h3>
                     <p class="mt-2 text-3xl leading-8 font-extrabold tracking-tight text-white">
-                        Membership highlights
+                        Software highlights
                     </p>
                     <div class="mt-6 space-y-4">
                         <div class="rounded-xl border border-slate-700 bg-slate-900 p-4">
                             <div class="font-medium text-white">Workspace access</div>
-                            <div class="mt-1 text-sm text-slate-400">Upload TIFF, PDF, or PNG log images and work through extraction in the browser.</div>
+                            <div class="mt-1 text-sm text-slate-400">Upload TIFF, PDF, PNG, or JPG log images and work through extraction in the browser.</div>
                         </div>
                         <div class="rounded-xl border border-slate-700 bg-slate-900 p-4">
                             <div class="font-medium text-white">Saved projects and exports</div>
-                            <div class="mt-1 text-sm text-slate-400">Keep project history, export LAS, and manage your digitized results from the dashboard.</div>
+                            <div class="mt-1 text-sm text-slate-400">Keep project history, export LAS, and manage digitized results from the dashboard.</div>
                         </div>
                         <div class="rounded-xl border border-slate-700 bg-slate-900 p-4">
-                            <div class="font-medium text-white">Human review stays available</div>
-                            <div class="mt-1 text-sm text-slate-400">Automation speeds up extraction, but review, correction, interpretation, and final QA can still involve a person.</div>
+                            <div class="font-medium text-white">Correction tools included</div>
+                            <div class="mt-1 text-sm text-slate-400">AI speeds up extraction, while browser-based correction tools help your team handle difficult curves.</div>
                         </div>
                     </div>
                     <div class="mt-6 rounded-xl border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-100">
@@ -375,62 +202,6 @@
         </div>
     </section>
 
-    <script>
-        lucide.createIcons();
-
-        (function () {
-            const depthInput = document.getElementById('managed-depth-feet');
-            const curveInput = document.getElementById('managed-curve-count');
-            const complexityInput = document.getElementById('managed-complexity');
-            const totalEl = document.getElementById('managed-total');
-            const billableCurveFeetEl = document.getElementById('managed-billable-curve-feet');
-            const curveFootUnitsEl = document.getElementById('managed-curve-foot-units');
-            const complexityMultiplierEl = document.getElementById('managed-complexity-multiplier');
-            const formulaNoteEl = document.getElementById('managed-formula-note');
-
-            if (!depthInput || !curveInput || !complexityInput || !totalEl || !billableCurveFeetEl || !curveFootUnitsEl || !complexityMultiplierEl || !formulaNoteEl) {
-                return;
-            }
-
-            const complexityMultipliers = {
-                clean: 1,
-                standard: 1.15,
-                difficult: 1.35,
-            };
-
-            const numberFormatter = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
-
-            function clampNumber(value, fallback, minValue) {
-                const parsed = Number(value);
-                if (!Number.isFinite(parsed)) return fallback;
-                return Math.max(minValue, parsed);
-            }
-
-            function updateManagedCalculator() {
-                const depthFeet = clampNumber(depthInput.value, 0, 0);
-                const curveCount = clampNumber(curveInput.value, 1, 1);
-                const complexity = complexityInput.value in complexityMultipliers ? complexityInput.value : 'standard';
-                const multiplier = complexityMultipliers[complexity];
-
-                depthInput.value = String(depthFeet);
-                curveInput.value = String(curveCount);
-                complexityInput.value = complexity;
-
-                const hundredCurveFootUnits = (depthFeet * curveCount) / 100;
-                const rawTotal = hundredCurveFootUnits * 0.49 * multiplier;
-                
-                const minimumApplied = rawTotal < 29.99;
-                const total = Math.max(29.99, rawTotal);
-
-                totalEl.textContent = `$${total.toFixed(2)}`;
-                formulaNoteEl.textContent = `Formula: depth × curves ÷ 100 × $0.49 × complexity · ${minimumApplied ? 'Minimum charge applied.' : 'Estimated above minimum.'}`;
-            }
-
-            depthInput.addEventListener('input', updateManagedCalculator);
-            curveInput.addEventListener('input', updateManagedCalculator);
-            complexityInput.addEventListener('change', updateManagedCalculator);
-            updateManagedCalculator();
-        })();
-    </script>
+    <script>lucide.createIcons();</script>
 </body>
 </html>

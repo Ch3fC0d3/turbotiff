@@ -207,7 +207,7 @@ def require_directional_access():
     if not user:
         return redirect(url_for('login', next=request.url))
     if not auth_billing.can_access_workspace(user):
-        flash('Full-service users cannot access the self-serve tools. Upgrade to a self-serve plan to use this feature.', 'warning')
+        flash('This account does not include workspace access. Choose a software plan to use this tool.', 'warning')
         return redirect(url_for('dashboard'))
 
 app.register_blueprint(directional_bp, url_prefix='/directional')
@@ -8799,47 +8799,7 @@ def index():
 
 @app.route('/pricing')
 def pricing():
-    user = _current_user(require_access=False)
-    self_service = {
-        'eyebrow': 'Pricing & Membership',
-        'title': 'Self-Serve Workspace',
-        'description': 'Access the AI digitization suite to convert your own well logs with high accuracy and speed. Includes a 7-day free trial.',
-        'features': [
-            'Upload image and map depth limits',
-            'AI detects tracks and snaps to curves',
-            'Review and correction tools',
-            'LAS export',
-            'Saved projects',
-            'Account dashboard',
-        ],
-        'cta': 'Start Free Trial' if not user else 'Submit a Job',
-        'href': '/signup' if not user else '/submit-job',
-    }
-    managed_processing = {
-        'eyebrow': 'Done-for-you option',
-        'title': 'Full-Service Conversion',
-        'description': 'Send us your logs and we’ll process them for you with review, correction, and final QA built into the workflow.',
-        'price_lines': [
-            '$0.49 per 100 curve-feet',
-            '$29.99 minimum per log',
-        ],
-        'notes': [
-            'Poor scans, overlapping traces, wraps, and heavy cleanup may require additional review.',
-            'Pricing scales with extracted curve volume',
-            'Best for teams that want finished output',
-            'Human review stays in the loop',
-            'Quoted separately for highly difficult logs',
-        ],
-        'cta': 'Request a Quote',
-        'href': '/managed-conversion',
-    }
-    return render_template(
-        'pricing.html',
-        user=user,
-        self_service=self_service,
-        managed_processing=managed_processing,
-        current_plan_label=auth_billing.plan_label(user.get('plan_code')) if user else None,
-    )
+    return render_template('pricing.html')
 
 
 @app.route('/api/managed-jobs/upload-url', methods=['POST'])
@@ -9309,7 +9269,7 @@ def signup():
                 flash('Account created! Welcome to the managed jobs dashboard.', 'success')
                 return redirect(url_for('dashboard'))
             
-            # Regular self-serve path: start trial immediately
+            # Software account path: start trial immediately.
             trial_end_iso = (datetime.now(timezone.utc) + timedelta(days=auth_billing.TRIAL_DAYS)).isoformat()
             auth_billing.update_user_fields(
                 config.AUTH_DB_PATH,
@@ -10282,7 +10242,7 @@ def workspace():
         return redirect(url_for('login'))
 
     if not auth_billing.can_access_workspace(user):
-        flash('Full-service users cannot access the self-serve workspace. Upgrade to a self-serve plan to use this feature.', 'warning')
+        flash('This account does not include workspace access. Choose a software plan to use this tool.', 'warning')
         return redirect(url_for('dashboard'))
 
     log_id = request.args.get('log_id')
@@ -10341,8 +10301,12 @@ def las_viewer():
 
 @app.route('/favicon.ico')
 def favicon():
-    """Return empty response for favicon to prevent 404 errors."""
-    return '', 204
+    """Use the current brand mark as the browser icon."""
+    return send_from_directory(
+        os.path.join(app.root_path, 'static', 'images'),
+        'logo.svg',
+        mimetype='image/svg+xml',
+    )
 
 @app.route('/api/images/<filename>')
 @login_required()

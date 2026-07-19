@@ -1,11 +1,19 @@
-import torch
-import torch.nn as nn
+try:
+    import torch
+    import torch.nn as nn
+    TORCH_IMPORT_ERROR = None
+except Exception as exc:
+    torch = None
+    nn = None
+    TORCH_IMPORT_ERROR = exc
 import numpy as np
 import cv2
 from pathlib import Path
 
-class CurveTraceNet(nn.Module):
+class CurveTraceNet(nn.Module if nn is not None else object):
     def __init__(self, in_ch: int = 1, base: int = 16):
+        if nn is None:
+            raise RuntimeError(f"PyTorch is unavailable: {TORCH_IMPORT_ERROR}")
         super().__init__()
         self.enc = nn.Sequential(
             nn.Conv2d(in_ch, base, 3, padding=1),
@@ -36,10 +44,16 @@ class CurveTraceNet(nn.Module):
 
 class AITracer:
     def __init__(self, model_path="curve_trace_model.pt"):
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.model = None
         self.input_h = 256
         self.input_w = 128
+
+        if torch is None:
+            self.device = None
+            print(f"[WARN] AI model unavailable because PyTorch could not load: {TORCH_IMPORT_ERROR}")
+            return
+
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
         # Load model if available
         p = Path(model_path)
@@ -61,7 +75,6 @@ class AITracer:
     def is_available(self):
         return self.model is not None
 
-    @torch.no_grad()
     def trace(self, roi_bgr: np.ndarray) -> np.ndarray:
         """
         Runs the AI model on a cropped BGR image of the curve track.
@@ -83,7 +96,8 @@ class AITracer:
         x_tensor = x_tensor.to(self.device)
 
         # Predict
-        pred_tensor = self.model(x_tensor) # Shape: [1, input_h]
+        with torch.no_grad():
+            pred_tensor = self.model(x_tensor) # Shape: [1, input_h]
         pred_norm = pred_tensor.squeeze().cpu().numpy() # Shape: [input_h], values in [0, 1]
 
         # Scale prediction back to original image coordinates

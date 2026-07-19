@@ -1,11 +1,11 @@
 :root {
-    --bg-gradient: linear-gradient(135deg, #111827 0%, #0f172a 100%);
-    --glass-bg: #1e293b;
-    --glass-border: rgba(255, 255, 255, 0.05);
-    --primary: #4ecca3;
-    --primary-hover: #45b38f;
-    --text-main: #ffffff;
-    --text-muted: #b0bec5;
+    --bg-gradient: linear-gradient(180deg, #ffffff 0%, #f4f7fa 100%);
+    --glass-bg: #ffffff;
+    --glass-border: #dbe4ee;
+    --primary: #0f766e;
+    --primary-hover: #115e59;
+    --text-main: #0f172a;
+    --text-muted: #526174;
     --paper-bg: #faf7ef;
     --paper-line: #d8d0c0;
     --paper-ink: #22313b;
@@ -48,9 +48,9 @@ body {
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
     border: 1px solid var(--glass-border);
-    border-radius: 20px;
+    border-radius: 8px;
     padding: 40px;
-    box-shadow: 0 25px 45px rgba(0, 0, 0, 0.2);
+    box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
     animation: fadeIn 0.8s ease-out;
 }
 
@@ -103,10 +103,10 @@ label {
 }
 
 input, select {
-    background: rgba(0, 0, 0, 0.2);
+    background: #ffffff;
     border: 1px solid var(--glass-border);
     border-radius: 10px;
-    color: white;
+    color: #0f172a;
     padding: 12px 15px;
     font-family: inherit;
     font-size: 15px;
@@ -116,7 +116,7 @@ input, select {
 input:focus, select:focus {
     outline: none;
     border-color: var(--primary);
-    box-shadow: 0 0 10px rgba(78, 204, 163, 0.3);
+    box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
 }
 
 input[type="file"] {
@@ -124,9 +124,9 @@ input[type="file"] {
 }
 
 input[type="file"]::file-selector-button {
-    background: var(--glass-bg);
+    background: #f1f5f9;
     border: 1px solid var(--glass-border);
-    color: white;
+    color: #334155;
     padding: 6px 12px;
     border-radius: 6px;
     cursor: pointer;
@@ -135,22 +135,22 @@ input[type="file"]::file-selector-button {
 }
 
 input[type="file"]::file-selector-button:hover {
-    background: rgba(255, 255, 255, 0.05);
+    background: #e2e8f0;
 }
 
 option {
-    background-color: #203a43;
-    color: white;
+    background-color: #ffffff;
+    color: #0f172a;
 }
 
 button {
     width: 100%;
     margin-top: 10px;
     background: var(--primary);
-    color: #1a1a2e;
+    color: #ffffff;
     border: none;
     padding: 15px;
-    border-radius: 12px;
+    border-radius: 6px;
     font-size: 16px;
     font-weight: 600;
     cursor: pointer;
@@ -163,7 +163,7 @@ button {
 button:hover {
     background: var(--primary-hover);
     transform: translateY(-2px);
-    box-shadow: 0 10px 20px rgba(78, 204, 163, 0.2);
+    box-shadow: 0 8px 18px rgba(15, 118, 110, 0.18);
 }
 
 button.loading span {
@@ -258,13 +258,13 @@ button.loading::after {
 }
 
 .action-link.secondary {
-    background: rgba(255, 255, 255, 0.08);
+    background: #ffffff;
     color: var(--text-main);
     border: 1px solid var(--glass-border);
 }
 
 .action-link.secondary:hover {
-    background: rgba(255, 255, 255, 0.12);
+    background: #f1f5f9;
 }
 
 .viewer-container {
@@ -311,6 +311,12 @@ button.loading::after {
     text-align: right;
 }
 
+.viewer-toolbar label,
+.viewer-note,
+.viewer-toolbar span {
+    color: #526174 !important;
+}
+
 .track-legend {
     display: flex;
     flex-wrap: wrap;
@@ -323,10 +329,10 @@ button.loading::after {
     gap: 8px;
     padding: 9px 12px;
     border-radius: 999px;
-    background: rgba(250, 247, 239, 0.12);
-    border: 1px solid rgba(250, 247, 239, 0.18);
+    background: #f8fafc;
+    border: 1px solid #dbe4ee;
     font-size: 13px;
-    color: #f6f1e6;
+    color: #334155;
 }
 
 .track-pill.reference {
@@ -343,7 +349,7 @@ button.loading::after {
 .viewer-status {
     padding: 18px;
     border-radius: 14px;
-    background: rgba(250, 247, 239, 0.08);
+    background: #f8fafc;
     color: var(--text-muted);
     text-align: center;
     font-size: 14px;

@@ -8,53 +8,45 @@
     <script src="https://unpkg.com/lucide@latest"></script>
     <style>
         .log-card-surface {
-            background: linear-gradient(160deg, #f8f4ea 0%, #efe7d6 52%, #e2f1e7 100%);
-            border-color: rgba(212, 195, 158, 0.55);
-            box-shadow: 0 18px 34px rgba(5, 10, 24, 0.24);
+            background: #ffffff;
+            border-color: #dbe3ea;
+            box-shadow: 0 10px 24px rgba(15, 23, 42, 0.07);
         }
 
         .log-card-surface:hover {
-            border-color: rgba(31, 118, 94, 0.45);
-            box-shadow: 0 22px 42px rgba(5, 10, 24, 0.28);
+            border-color: #9fb7b1;
+            box-shadow: 0 14px 30px rgba(15, 23, 42, 0.1);
         }
     </style>
     <link rel="stylesheet" href="/static/home_backdrop.css">
 </head>
-<body class="site-backdrop min-h-screen bg-slate-950 text-slate-100 font-sans">
+<body class="site-backdrop business-theme min-h-screen bg-white text-slate-800 font-sans">
     
     <!-- Top Navigation -->
-    <nav class="border-b border-slate-800 bg-slate-900 px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+    <nav class="min-h-16 border-b border-slate-200 bg-white px-4 py-3 sm:px-6 lg:px-8 flex flex-wrap items-center justify-between gap-y-3">
         <div class="flex items-center gap-4">
             <img src="/static/images/logo.svg" alt="TifLAS Logo" class="h-10 w-auto">
-            <span class="text-xl font-bold tracking-tight text-white hidden sm:block">Dashboard</span>
+            <span class="text-xl font-bold text-slate-900 hidden sm:block">Dashboard</span>
         </div>
         
-        <div class="flex items-center gap-4 ml-auto">
-            {% if user.subscription_status != 'managed_only' %}
-            <a href="/directional" class="text-sm font-medium transition-colors ml-2 px-3 py-1.5 rounded-full" style="background: rgba(16, 185, 129, 0.2); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.4);">
-                🎯 Directional Tool
+        <div class="flex w-full items-center justify-end gap-2 sm:w-auto sm:gap-4 sm:ml-auto">
+            <a href="/directional" class="hidden lg:inline-flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-100">
+                <i data-lucide="crosshair" class="h-4 w-4 text-teal-700"></i> Directional Tool
             </a>
-            <a href="/workspace" class="text-sm font-medium text-slate-300 hover:text-white transition-colors ml-2">
+            <a href="/workspace" class="hidden md:inline text-sm font-medium text-slate-600 hover:text-slate-900 transition-colors ml-2">
                 Workspace
             </a>
-            <div class="h-6 w-px bg-slate-700 mx-2"></div>
-            {% endif %}
-            <a href="/managed-conversion" class="text-sm font-medium text-cyan-300 hover:text-cyan-200 transition-colors ml-2 px-3 py-1.5 rounded-full" style="background: rgba(6, 182, 212, 0.1); border: 1px solid rgba(6, 182, 212, 0.3);">
-                ✨ Managed Conversion
-            </a>
-            <div class="h-6 w-px bg-slate-700 mx-2"></div>
+            <div class="hidden md:block h-6 w-px bg-slate-200 mx-2"></div>
             {% if user.is_admin %}
-            <a href="/admin" class="text-sm font-medium text-amber-500 hover:text-amber-400 transition-colors">Admin</a>
-            <div class="h-6 w-px bg-slate-700 mx-2"></div>
+            <a href="/admin" class="text-sm font-medium text-amber-700 hover:text-amber-800 transition-colors">Admin</a>
+            <div class="h-6 w-px bg-slate-200 mx-2"></div>
             {% endif %}
-            {% if user.subscription_status != 'managed_only' %}
-            <a href="/workspace" class="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600 transition-colors">
-                <i data-lucide="plus" class="h-4 w-4"></i> New Log
+            <a href="/workspace" class="inline-flex items-center gap-2 rounded-md bg-teal-700 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-teal-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-700 transition-colors sm:px-4" title="New Log">
+                <i data-lucide="plus" class="h-4 w-4"></i><span class="hidden sm:inline">New Log</span>
             </a>
-            <div class="h-6 w-px bg-slate-700 mx-2"></div>
-            {% endif %}
-            <a href="/account" class="text-sm font-medium text-slate-300 hover:text-white transition-colors">Manage Billing</a>
-            <a href="/logout" class="text-sm font-medium text-slate-300 hover:text-white transition-colors ml-2">Logout</a>
+            <div class="hidden md:block h-6 w-px bg-slate-200 mx-2"></div>
+            <a href="/account" class="text-sm font-medium text-slate-600 hover:text-slate-900 transition-colors"><span class="sm:hidden">Billing</span><span class="hidden sm:inline">Manage Billing</span></a>
+            <a href="/logout" class="text-sm font-medium text-slate-600 hover:text-slate-900 transition-colors ml-2">Logout</a>
         </div>
     </nav>
 
@@ -63,7 +55,7 @@
         
         <!-- Welcome Section -->
         <div class="mb-10">
-            <h1 class="text-3xl font-bold text-white tracking-tight">
+            <h1 class="text-3xl font-bold text-slate-900">
                 Welcome back, {{ user.full_name.split(' ')[0] if user.full_name else 'User' }}
                 {% if impersonating %}
                 <span class="ml-3 inline-flex items-center rounded-md bg-amber-400/10 px-2 py-1 text-sm font-medium text-amber-500 ring-1 ring-inset ring-amber-400/20">
@@ -72,7 +64,7 @@
                 <button onclick="stopImpersonating()" class="ml-2 text-sm text-slate-400 hover:text-white underline">Stop</button>
                 {% endif %}
             </h1>
-            <p class="mt-2 text-slate-400">Manage your digitized well logs or start a new project.</p>
+            <p class="mt-2 text-slate-600">Manage your digitized well logs or start a new project.</p>
         </div>
 
         {% if global_banner %}
@@ -103,7 +95,7 @@
         <!-- Logs Grid -->
         <div>
             <div class="flex items-center justify-between mb-6">
-                <h2 class="text-xl font-semibold text-white">Your Logs</h2>
+                <h2 class="text-xl font-semibold text-slate-900">Your Logs</h2>
             </div>
             
             {% if logs and logs|length > 0 %}
@@ -126,11 +118,9 @@
                         <button onclick="viewLog('{{ log.id }}')" class="flex-1 inline-flex justify-center items-center gap-2 rounded-md bg-emerald-900/10 px-3 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-900/16 ring-1 ring-inset ring-emerald-700/25 transition-colors" title="View LAS">
                             <i data-lucide="line-chart" class="h-4 w-4"></i> View LAS
                         </button>
-                        {% if user.subscription_status != 'managed_only' %}
                         <a href="/workspace?log_id={{ log.id }}" class="inline-flex items-center justify-center rounded-md bg-white/75 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-white ring-1 ring-inset ring-stone-400/55 transition-colors" title="Edit in Workspace">
                             <i data-lucide="edit-3" class="h-4 w-4"></i>
                         </a>
-                        {% endif %}
                         {% if log.original_image_path %}
                         <button onclick="openImage('{{ log.original_image_path }}')" class="inline-flex items-center justify-center rounded-md bg-white/75 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-white ring-1 ring-inset ring-stone-400/55 transition-colors" title="View Original Image">
                             <i data-lucide="image" class="h-4 w-4"></i>
@@ -151,28 +141,16 @@
             </div>
             {% else %}
             <!-- Empty State -->
-            <div class="text-center rounded-2xl border-2 border-dashed border-slate-800 px-12 py-16">
-                <div class="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-slate-900">
-                    <i data-lucide="folder-open" class="h-6 w-6 text-slate-400"></i>
+            <div class="text-center rounded-lg border-2 border-dashed border-slate-200 bg-white px-12 py-16">
+                <div class="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-slate-100">
+                    <i data-lucide="folder-open" class="h-6 w-6 text-slate-500"></i>
                 </div>
-                <h3 class="mt-4 text-sm font-semibold text-white">No logs saved</h3>
-                <p class="mt-1 text-sm text-slate-400">
-                    {% if user.subscription_status == 'managed_only' %}
-                        Submit a log for full-service conversion.
-                    {% else %}
-                        Get started by digitizing a new well log image.
-                    {% endif %}
-                </p>
+                <h3 class="mt-4 text-sm font-semibold text-slate-900">No logs saved</h3>
+                <p class="mt-1 text-sm text-slate-600">Get started by digitizing a new well log image.</p>
                 <div class="mt-6">
-                    {% if user.subscription_status == 'managed_only' %}
-                    <a href="/managed-conversion" class="inline-flex items-center gap-2 rounded-md bg-cyan-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-cyan-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-600">
-                        ✨ Request Conversion
-                    </a>
-                    {% else %}
-                    <a href="/workspace" class="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600">
+                    <a href="/workspace" class="inline-flex items-center gap-2 rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-teal-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-700">
                         <i data-lucide="plus" class="h-4 w-4"></i> Digitize New Log
                     </a>
-                    {% endif %}
                 </div>
             </div>
             {% endif %}

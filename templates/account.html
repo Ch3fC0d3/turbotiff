@@ -7,7 +7,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="/static/home_backdrop.css">
 </head>
-<body class="site-backdrop min-h-screen bg-slate-950 text-slate-100">
+<body class="site-backdrop business-theme min-h-screen bg-white text-slate-800">
     <div class="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
         <div class="mb-6 flex flex-col sm:flex-row items-start sm:items-center justify-between">
             <div>
@@ -16,7 +16,7 @@
                 </a>
                 <h1 class="text-2xl font-bold">Member Account</h1>
                 <p class="mt-1 text-sm text-slate-300">
-                    The member account page lets users manage their TifLAS subscription, payment method, invoices, and plan status. New users receive a 7-day free trial, then can continue on either a $99 monthly plan or a $999 annual plan.
+                    The member account page lets users manage their TifLAS subscription, payment method, invoices, and plan status. New users receive a 7-day free trial, then can continue on either a $29.95 monthly plan or a $299 annual plan.
                 </p>
                 <div class="mt-4 flex flex-wrap gap-2">
                     <a href="/pricing" class="rounded-md border border-slate-700 px-3 py-2 text-sm hover:bg-slate-800 transition-colors">Pricing & Membership</a>
@@ -112,30 +112,6 @@
                     </form>
                 </div>
                 <p class="mt-2 text-xs text-slate-400">Annual plan highlighted as best value. {% if not trial_eligibility.eligible %}{{ trial_eligibility.reason }}{% endif %}</p>
-            </section>
-
-            <section class="rounded-xl border border-slate-800 bg-slate-900 p-5 md:col-span-2">
-                <h2 class="text-lg font-semibold">Full-Service Conversion Service</h2>
-                <p class="mt-2 text-sm text-slate-400">
-                    Prefer to let us handle the digitization? See the full breakdown on the
-                    <a href="/managed-conversion" class="font-semibold text-cyan-300 hover:text-cyan-200">Full-Service Conversion page</a>.
-                </p>
-                <div class="mt-4 flex flex-wrap gap-3">
-                    <form method="POST" action="/billing/create-checkout-session">
-                        <input type="hidden" name="plan" value="managed_simple">
-                        <input type="hidden" name="mode" value="managed">
-                        <button type="submit" class="rounded-md border border-slate-600 px-4 py-2 text-sm font-semibold text-slate-100 hover:bg-slate-800">Order Simple ($29.99)</button>
-                    </form>
-
-                    <form method="POST" action="/billing/create-checkout-session">
-                        <input type="hidden" name="plan" value="managed_standard">
-                        <input type="hidden" name="mode" value="managed">
-                        <button type="submit" class="rounded-md border border-slate-600 px-4 py-2 text-sm font-semibold text-slate-100 hover:bg-slate-800">Order Standard ($59.99)</button>
-                    </form>
-                    
-                    <a href="mailto:support@tiflas.com?subject=Custom Quote Request" class="rounded-md border border-slate-600 px-4 py-2 text-sm font-semibold text-slate-100 hover:bg-slate-800">Request Custom Quote</a>
-                </div>
-                <p class="mt-2 text-xs text-slate-400">One-time payment per log. Requires manual upload of files after purchase.</p>
             </section>
 
             <section class="rounded-xl border border-slate-800 bg-slate-900 p-5">

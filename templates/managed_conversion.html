@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pricing & Membership - TifLAS</title>
+    <title>Managed Conversion - TifLAS</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = {
@@ -50,7 +50,7 @@
     </style>
     <link rel="stylesheet" href="/static/home_backdrop.css">
 </head>
-<body class="site-backdrop min-h-screen bg-slate-900 text-slate-200 font-sans">
+<body class="site-backdrop business-theme min-h-screen bg-white text-slate-800 font-sans">
     <nav class="sticky top-0 z-50 border-b border-slate-700 bg-slate-800/80 backdrop-blur-md">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="flex justify-between h-16">
@@ -63,7 +63,7 @@
                             Plans
                         </a>
                         <a href="/managed-conversion" class="border-primary-500 text-white inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
-                            Full-Service Conversion
+                            Managed Conversion
                         </a>
                         <a href="/pricing#billing-overview" class="border-transparent text-slate-300 hover:border-primary-500 hover:text-white inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
                             Billing
@@ -78,8 +78,8 @@
                     <a href="/dashboard" class="border border-slate-600 text-slate-200 px-4 py-2 rounded-md text-sm font-bold hover:bg-slate-800 transition-colors">
                         Dashboard
                     </a>
-                    <a href="/submit-job" class="ml-2 bg-[#667eea] hover:bg-[#764ba2] text-white px-4 py-2 rounded-md text-sm font-bold transition-colors border border-transparent shadow-[0_0_10px_rgba(102,126,234,0.3)]">
-                        Submit a Job
+                    <a href="/dashboard" class="ml-2 bg-[#667eea] hover:bg-[#764ba2] text-white px-4 py-2 rounded-md text-sm font-bold transition-colors border border-transparent shadow-[0_0_10px_rgba(102,126,234,0.3)]">
+                        Open Workspace
                     </a>
                     {% else %}
                     <a href="/login" class="border border-slate-600 text-slate-200 px-4 py-2 rounded-md text-sm font-bold hover:bg-slate-800 transition-colors">
@@ -99,14 +99,13 @@
         <div class="relative max-w-7xl mx-auto px-4 py-16 sm:px-6 lg:px-8 lg:py-24">
             <div class="max-w-4xl rounded-3xl border border-slate-700/60 bg-slate-900/70 p-10 pricing-surface backdrop-blur-sm">
                 <div class="mb-4 inline-flex items-center rounded-full border border-primary-500/30 bg-primary-900/40 px-3 py-1 text-sm text-primary-200">
-                    Pricing & Membership
+                    Optional Managed Conversion
                 </div>
                 <h1 class="text-4xl font-extrabold tracking-tight text-white sm:text-5xl lg:text-6xl">
-                    Choose self-serve or let us handle it for you
+                    Done-for-you conversion when your team needs help
                 </h1>
                 <p class="mt-6 max-w-3xl text-xl text-slate-200">
-                    TifLAS helps teams convert legacy well log images into structured LAS data. Start with a free 7-day trial,
-                    subscribe monthly or annually, or send us your logs for full-service conversion.
+                    TifLAS is self-service software first. When a job needs extra support, send us your legacy well log images and our team can convert them into structured LAS data with review and final QA.
                 </p>
                 <div class="mt-5 rounded-2xl border border-primary-500/25 bg-primary-900/20 p-4 text-sm leading-6 text-slate-200">
                     Automation handles the first pass, but people stay in the loop. Complex curves, messy scans, and final QA
@@ -115,17 +114,17 @@
                 <div class="mt-8 flex flex-wrap gap-4">
                     {% if user %}
                     <a href="/submit-job" class="inline-flex items-center px-6 py-3 border border-transparent text-base font-bold rounded-lg text-white bg-[#667eea] hover:bg-[#764ba2] transition-colors shadow-[0_0_20px_rgba(102,126,234,0.3)]">
-                        Submit a Job
+                        Submit Managed Job
                     </a>
-                    <a href="#managed-service" class="inline-flex items-center px-6 py-3 border border-slate-600 text-base font-bold rounded-lg text-slate-100 bg-slate-900/70 hover:bg-slate-800 transition-colors">
-                        View Full-Service Conversion
+                    <a href="/signup" class="inline-flex items-center px-6 py-3 border border-slate-600 text-base font-bold rounded-lg text-slate-100 bg-slate-900/70 hover:bg-slate-800 transition-colors">
+                        Start Software Trial
                     </a>
                     {% else %}
-                    <a href="/signup" class="inline-flex items-center px-6 py-3 border border-transparent text-base font-bold rounded-lg text-white bg-[#667eea] hover:bg-[#764ba2] transition-colors shadow-[0_0_20px_rgba(102,126,234,0.3)]">
-                        Start Free Trial
+                    <a href="/submit-job" class="inline-flex items-center px-6 py-3 border border-transparent text-base font-bold rounded-lg text-white bg-[#667eea] hover:bg-[#764ba2] transition-colors shadow-[0_0_20px_rgba(102,126,234,0.3)]">
+                        Submit Managed Job
                     </a>
-                    <a href="#managed-service" class="inline-flex items-center px-6 py-3 border border-slate-600 text-base font-bold rounded-lg text-slate-100 bg-slate-900/70 hover:bg-slate-800 transition-colors">
-                        View Full-Service Conversion
+                    <a href="/signup" class="inline-flex items-center px-6 py-3 border border-slate-600 text-base font-bold rounded-lg text-slate-100 bg-slate-900/70 hover:bg-slate-800 transition-colors">
+                        Start Software Trial
                     </a>
                     {% endif %}
                 </div>
@@ -136,7 +135,7 @@
     <section id="managed-service" class="py-16 bg-slate-800 border-y border-slate-700">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="max-w-3xl">
-                <h2 class="text-base text-primary-400 font-semibold tracking-wide uppercase">Full-Service Conversion</h2>
+                <h2 class="text-base text-primary-400 font-semibold tracking-wide uppercase">Managed Conversion</h2>
                 <p class="mt-2 text-3xl leading-8 font-extrabold tracking-tight text-white sm:text-4xl">
                     We do it for you
                 </p>
@@ -164,8 +163,8 @@
                         </li>
                         {% endfor %}
                     </ul>
-                    <a href="{{ '/submit-job' }}" class="mt-6 inline-flex w-full items-center justify-center rounded-lg border border-slate-600 bg-slate-800 px-4 py-3 text-sm font-bold text-slate-100 transition-colors hover:bg-slate-700">
-                        Submit a Job
+                    <a href="/submit-job" class="mt-6 inline-flex w-full items-center justify-center rounded-lg border border-slate-600 bg-slate-800 px-4 py-3 text-sm font-bold text-slate-100 transition-colors hover:bg-slate-700">
+                        Submit Managed Job
                     </a>
                 </div>
                 {% endfor %}

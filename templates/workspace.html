@@ -145,12 +145,9 @@
         }
         .upload-area:hover { background: rgba(102, 126, 234, 0.1); border-color: #A4E033; }
         .upload-area.dragover { background: rgba(102, 126, 234, 0.2); border-color: #667eea; }
-        .upload-area.managed { border-color: #06b6d4; }
-        .upload-area.managed:hover { background: rgba(6, 182, 212, 0.1); border-color: #22d3ee; }
-        .upload-area.managed.dragover { background: rgba(6, 182, 212, 0.2); border-color: #06b6d4; }
         .upload-grid {
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: minmax(0, 1fr);
             gap: 20px;
         }
         @media (max-width: 900px) {
@@ -165,7 +162,6 @@
             display: block;
         }
         .upload-label.self { color: #a4e033; }
-        .upload-label.managed { color: #22d3ee; }
         #imagePreview {
             max-width: 100%;
             border: 0;
@@ -1410,7 +1406,7 @@
     </style>
     <link rel="stylesheet" href="/static/home_backdrop.css">
 </head>
-<body class="site-backdrop">
+<body class="site-backdrop business-theme business-workspace">
     <div id="introModalBackdrop" class="intro-backdrop hidden" onclick="closeIntroModal()">
         <div id="introModal" class="intro-modal" onclick="event.stopPropagation()">
             <button type="button" class="intro-modal-close" onclick="closeIntroModal()" aria-label="Close">×</button>
@@ -1479,14 +1475,6 @@
                             <p>📁 Drag & drop your TIFF/PNG/JPG/PDF here or click to browse</p>
                             <div class="hint-text mt-1">⚠️ Max file size: 100MB</div>
                             <input type="file" id="fileInput" accept="image/*,.pdf,application/pdf" style="display:none">
-                        </div>
-                    </div>
-                    <div>
-                        <span class="upload-label managed">✨ Full-Service Managed Conversion</span>
-                        <div class="upload-area managed" id="managedUploadArea">
-                            <p>💼 Drop here to send for expert-managed conversion</p>
-                            <div class="hint-text mt-1">We'll handle digitization, QA, and delivery for you.</div>
-                            <input type="file" id="managedFileInput" accept="image/*,.pdf,application/pdf" style="display:none">
                         </div>
                     </div>
                 </div>
@@ -8971,53 +8959,6 @@
                 handleFile(e.target.files[0]);
             }
         });
-
-        // Managed conversion drop area -> hand off to /submit-job
-        const managedUploadArea = document.getElementById('managedUploadArea');
-        const managedFileInput = document.getElementById('managedFileInput');
-        if (managedUploadArea && managedFileInput) {
-            const handleManagedFile = (file) => {
-                if (!file) return;
-                const reader = new FileReader();
-                reader.onload = (ev) => {
-                    try {
-                        sessionStorage.setItem('tiflas_managed_pending_file', JSON.stringify({
-                            name: file.name,
-                            size: file.size,
-                            type: file.type,
-                            dataUrl: ev.target.result,
-                            capturedAt: Date.now()
-                        }));
-                    } catch (err) {
-                        // If storage is exceeded (large files), we skip storing and just redirect
-                        console.warn('Managed file too large for sessionStorage, continuing without preload:', err);
-                    }
-                    window.location.href = '/submit-job';
-                };
-                reader.readAsDataURL(file);
-            };
-
-            managedUploadArea.addEventListener('click', () => managedFileInput.click());
-            managedUploadArea.addEventListener('dragover', (e) => {
-                e.preventDefault();
-                managedUploadArea.classList.add('dragover');
-            });
-            managedUploadArea.addEventListener('dragleave', () => {
-                managedUploadArea.classList.remove('dragover');
-            });
-            managedUploadArea.addEventListener('drop', (e) => {
-                e.preventDefault();
-                managedUploadArea.classList.remove('dragover');
-                if (e.dataTransfer.files.length) {
-                    handleManagedFile(e.dataTransfer.files[0]);
-                }
-            });
-            managedFileInput.addEventListener('change', (e) => {
-                if (e.target.files.length) {
-                    handleManagedFile(e.target.files[0]);
-                }
-            });
-        }
 
         function adjustNumberInput(inputId, direction) {
             const input = document.getElementById(inputId);

@@ -62,11 +62,12 @@
             animation-delay: 0s;
         }
     </style>
+    <link rel="stylesheet" href="/static/home_backdrop.css">
 </head>
-<body class="min-h-screen bg-slate-900 text-slate-200">
+<body class="site-backdrop business-theme min-h-screen bg-white text-slate-800">
 
     <!-- Navigation -->
-    <nav class="bg-slate-800/80 border-b border-slate-700 sticky top-0 z-50 backdrop-blur-md">
+    <nav class="bg-white/95 border-b border-slate-200 sticky top-0 z-50 backdrop-blur-md">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="flex justify-between h-16">
                 <div class="flex items-center">
@@ -74,16 +75,16 @@
                         <img src="/static/images/logo.svg" alt="TifLAS Logo" class="h-12 w-auto">
                     </div>
                     <div class="hidden sm:ml-6 sm:flex sm:space-x-8">
-                        <a href="#overview" class="border-transparent text-slate-300 hover:border-primary-500 hover:text-white inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
+                        <a href="#overview" class="border-transparent text-slate-600 hover:border-primary-500 hover:text-slate-950 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
                             Overview
                         </a>
-                        <a href="#workflow" class="border-transparent text-slate-300 hover:border-primary-500 hover:text-white inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
+                        <a href="#workflow" class="border-transparent text-slate-600 hover:border-primary-500 hover:text-slate-950 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
                             Workflow
                         </a>
-                        <a href="#advantages" class="border-transparent text-slate-300 hover:border-primary-500 hover:text-white inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
+                        <a href="#advantages" class="border-transparent text-slate-600 hover:border-primary-500 hover:text-slate-950 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
                             Advantages
                         </a>
-                        <a href="/pricing" class="border-transparent text-slate-300 hover:border-primary-500 hover:text-white inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
+                        <a href="/pricing" class="border-transparent text-slate-600 hover:border-primary-500 hover:text-slate-950 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
                             Pricing
                         </a>
                     </div>
@@ -92,7 +93,7 @@
                     <a href="/signup" class="bg-[#667eea] hover:bg-[#764ba2] text-white px-4 py-2 rounded-md text-sm font-bold transition-colors border border-transparent shadow-[0_0_10px_rgba(102,126,234,0.3)]">
                         Start Free Trial
                     </a>
-                    <a href="/login" class="ml-2 border border-slate-600 text-slate-200 px-4 py-2 rounded-md text-sm font-bold hover:bg-slate-800 transition-colors">
+                    <a href="/login" class="ml-2 border border-slate-300 text-slate-700 px-4 py-2 rounded-md text-sm font-bold hover:bg-slate-50 transition-colors">
                         Login
                     </a>
                 </div>
@@ -101,9 +102,9 @@
     </nav>
 
     <!-- Hero Section -->
-    <div class="relative bg-slate-900 overflow-hidden min-h-[600px] flex items-start">
+    <div class="relative bg-white overflow-hidden min-h-[600px] flex items-start">
         <!-- Animated Background (WellLogHero approximation) -->
-        <div class="absolute inset-0 overflow-hidden pointer-events-none select-none bg-slate-900">
+        <div class="absolute inset-0 overflow-hidden pointer-events-none select-none bg-white">
             <!-- Grid Pattern -->
             <div class="absolute inset-0 opacity-20">
                 <svg width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">
@@ -149,7 +150,7 @@
             </div>
             
             <!-- Overlay to fade out bottom/top edges -->
-            <div class="absolute inset-0 bg-gradient-to-b from-slate-900/80 via-transparent to-slate-900/80 pointer-events-none"></div>
+            <div class="absolute inset-0 bg-gradient-to-b from-white/95 via-white/30 to-white pointer-events-none"></div>
         </div>
         
         <!-- Content Overlay -->
@@ -162,31 +163,31 @@
 
             <!-- Eyebrow -->
             <div class="mb-6 text-center">
-                <p class="text-base sm:text-lg text-slate-400 max-w-3xl mx-auto text-center">
-                    AI-powered well log digitization — full service or self-service
+                <p class="text-base sm:text-lg text-slate-600 max-w-3xl mx-auto text-center">
+                    AI-powered well log digitization software
                 </p>
             </div>
 
             <!-- Hero Text Box -->
-            <div class="bg-slate-900/40 backdrop-blur-md p-10 rounded-3xl border border-slate-700/30 shadow-2xl max-w-4xl text-center">
-                <h1 class="text-4xl font-extrabold tracking-tight text-white sm:text-5xl lg:text-6xl">
-                    Legacy Well Logs to LAS — <span class="text-primary-400">AI-Powered Full Service from $0.49</span>
+            <div class="p-10 max-w-4xl text-center">
+                <h1 class="text-4xl font-extrabold tracking-tight text-slate-950 sm:text-5xl lg:text-6xl">
+                    Self-Service Software for Legacy Well Logs
                 </h1>
-                <p class="mt-6 text-xl text-slate-200 max-w-3xl mx-auto">
-                    TifLAS uses AI to convert scanned well log images into structured LAS files for modern subsurface workflows. Choose full-service conversion from $0.49 per 100 curve-feet ($29.99 minimum), or use our AI-powered self-service platform for $99/month or $999/year.
+                <p class="mt-6 text-xl text-slate-600 max-w-3xl mx-auto">
+                    TifLAS is a browser-based SaaS workspace for converting scanned well log images into structured LAS files with AI-assisted extraction, review tools, and export controls.
                 </p>
-                <p class="mt-3 text-sm text-slate-300">
-                    Full Service from $0.49/100 curve-feet &bull; $29.99 minimum per log &bull; AI Self-Service: 7-day free trial, then $99/month or $999/year
+                <p class="mt-3 text-sm text-slate-500">
+                    Upload TIFF, PNG, JPG, or PDF logs, review the extraction, correct difficult curves, and export LAS data from your account.
                 </p>
                 <div class="mt-10 flex flex-wrap justify-center gap-4">
-                    <a href="/submit-job" class="inline-flex items-center px-8 py-4 border border-transparent text-lg font-bold rounded-lg text-white bg-[#667eea] hover:bg-[#764ba2] transition-colors shadow-[0_0_20px_rgba(102,126,234,0.3)]">
-                        Get Full-Service Conversion <i data-lucide="arrow-right" class="ml-2 h-6 w-6"></i>
+                    <a href="/signup" class="inline-flex items-center px-8 py-4 border border-transparent text-lg font-bold rounded-lg text-white bg-[#667eea] hover:bg-[#764ba2] transition-colors shadow-[0_0_20px_rgba(102,126,234,0.3)]">
+                        Start Free Trial <i data-lucide="arrow-right" class="ml-2 h-6 w-6"></i>
                     </a>
-                    <a href="/signup" class="inline-flex items-center px-8 py-4 border border-slate-600 text-lg font-bold rounded-lg text-slate-100 bg-slate-900/70 hover:bg-slate-800 transition-colors">
-                        Start AI Self-Service Trial
+                    <a href="/managed-conversion" class="inline-flex items-center px-8 py-4 border border-slate-300 text-lg font-bold rounded-lg text-slate-700 bg-white hover:bg-slate-50 transition-colors">
+                        Need Done-for-You Help?
                     </a>
                 </div>
-                <p class="mt-6 text-sm text-slate-400">
+                <p class="mt-6 text-sm text-slate-500">
                     AI-assisted workflows for TIFF, PNG, and PDF well log images — with tools to review and correct output when needed.
                 </p>
             </div>
@@ -776,29 +777,6 @@
                         </p>
                     </div>
 
-                    <!-- Pricing Block -->
-                    <div class="mt-12 rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-lg">
-                        <h4 class="text-xl font-bold text-white mb-6">Simple Pricing</h4>
-                        
-                        <div class="space-y-6">
-                            <div>
-                                <h5 class="text-lg font-bold text-sky-400">Full Service — from $0.49 per 100 curve-feet</h5>
-                                <p class="text-sm text-slate-300 mt-1">Send us your legacy log images and let our team handle the conversion using our AI-assisted workflow and human review process.</p>
-                            </div>
-                            <div class="border-t border-slate-700/50 pt-6">
-                                <h5 class="text-lg font-bold text-primary-400">AI Self-Service — $99/month</h5>
-                                <p class="text-sm text-slate-300 mt-1">Use the TifLAS platform to digitize logs in-house with AI assistance and built-in correction tools.</p>
-                            </div>
-                            <div class="border-t border-slate-700/50 pt-6">
-                                <h5 class="text-lg font-bold text-primary-400">Annual Plan — $999/year</h5>
-                                <p class="text-sm text-slate-300 mt-1">Best value for teams with recurring conversion needs who want ongoing access to AI-powered self-service.</p>
-                            </div>
-                            <div class="border-t border-slate-700/50 pt-6 flex flex-wrap gap-4">
-                                <a href="/submit-job" class="inline-flex items-center px-5 py-2.5 border border-transparent text-sm font-bold rounded-lg text-white bg-[#667eea] hover:bg-[#764ba2] transition-colors">Talk to Us About Full Service</a>
-                                <a href="/signup" class="inline-flex items-center px-5 py-2.5 border border-slate-600 text-sm font-bold rounded-lg text-slate-100 bg-slate-800 hover:bg-slate-700 transition-colors">Start AI Self-Service Trial</a>
-                            </div>
-                        </div>
-                    </div>
                 </div>
 
                 <div class="bg-slate-900 p-8 rounded-xl border border-slate-700 h-fit">
@@ -843,14 +821,11 @@
                 Ready to use AI to convert legacy well logs into usable LAS data?
             </h2>
             <p class="mt-4 text-xl text-slate-300">
-                Choose full-service conversion from $0.49, or start digitizing in-house with TifLAS AI Self-Service for $99/month or $999/year — with correction tools available when a log needs extra help.
+                Start digitizing logs in your browser with TifLAS self-service software built for AI-assisted extraction, review, correction, and LAS export.
             </p>
             <div class="mt-10 flex flex-wrap justify-center gap-4">
-                <a href="/submit-job" class="inline-flex items-center px-8 py-4 border border-transparent text-lg font-bold rounded-lg text-white bg-[#667eea] hover:bg-[#764ba2] transition-colors shadow-[0_0_20px_rgba(102,126,234,0.3)]">
-                    Get Full-Service Conversion
-                </a>
-                <a href="/signup" class="inline-flex items-center px-8 py-4 border border-slate-600 text-lg font-bold rounded-lg text-slate-100 bg-slate-900/70 hover:bg-slate-800 transition-colors">
-                    Start AI Self-Service Trial
+                <a href="/signup" class="inline-flex items-center px-8 py-4 border border-transparent text-lg font-bold rounded-lg text-white bg-[#667eea] hover:bg-[#764ba2] transition-colors shadow-[0_0_20px_rgba(102,126,234,0.3)]">
+                    Start Free Trial
                 </a>
             </div>
         </div>

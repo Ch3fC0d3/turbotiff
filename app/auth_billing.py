@@ -389,7 +389,7 @@ def get_admin_stats(db_path: str) -> Dict[str, Any]:
                 if plan == 'monthly_99':
                     stats['mrr'] += 99
                 elif plan == 'annual_999':
-                    stats['mrr'] += 83.25 # $999/12
+                    stats['mrr'] += 24.92  # $299/12
             elif status == 'trialing':
                 stats['trial_users'] += 1
                 
@@ -566,8 +566,8 @@ def compute_trial_countdown(user: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 def plan_label(plan_code: str) -> str:
     return {
         "trial": "Free Trial",
-        "monthly": "$99 / month",
-        "annual": "$999 / year",
+        "monthly": "$29.95 / month",
+        "annual": "$299 / year",
         "none": "No active plan",
     }.get(plan_code or "none", "No active plan")
 
