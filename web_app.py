@@ -42,6 +42,7 @@ from app import auth_billing
 from app import mailer
 from app import scale_detection
 from app import corrections_store
+from app import track_analysis
 import app.config as config
 from werkzeug.security import generate_password_hash, check_password_hash
 import stripe
@@ -183,6 +184,10 @@ HF_MODEL_ID = os.getenv("HF_MODEL_ID")
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL_ID = os.getenv("OPENAI_MODEL_ID") or os.getenv("OPENAI_MODEL")
+OPENAI_TRACK_ANALYST_MODEL = (
+    os.getenv("OPENAI_TRACK_ANALYST_MODEL")
+    or track_analysis.DEFAULT_TRACK_ANALYST_MODEL
+)
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL_ID = os.getenv("GEMINI_MODEL_ID") or "models/gemini-2.0-flash"
@@ -2516,6 +2521,18 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
 
     enable_grid_suppression = ui_filters.get('enable_grid_suppression', True)
     enable_curve_masking = ui_filters.get('enable_curve_masking', True)
+    try:
+        guided_grid_x = float(ui_filters.get('grid_spacing_x_px'))
+        if not np.isfinite(guided_grid_x) or guided_grid_x <= 0:
+            guided_grid_x = None
+    except (TypeError, ValueError):
+        guided_grid_x = None
+    try:
+        guided_grid_y = float(ui_filters.get('grid_spacing_y_px'))
+        if not np.isfinite(guided_grid_y) or guided_grid_y <= 0:
+            guided_grid_y = None
+    except (TypeError, ValueError):
+        guided_grid_y = None
 
     if _dual_polarity_allowed and mode == "auto" and use_invert:
         try:
@@ -2937,16 +2954,26 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
 
         # Additional grid removal on the mask itself (less aggressive if already processed)
         if enable_grid_suppression and h >= 20 and w >= 20:
+            guided_v_len = (
+                max(8, min(80, int(round(guided_grid_y * 0.70))))
+                if guided_grid_y is not None else None
+            )
+            guided_h_len = (
+                max(8, min(max(8, w // 2), int(round(guided_grid_x * 0.70))))
+                if guided_grid_x is not None else None
+            )
             if is_bw_log:
                 # Lighter grid removal since we already did aggressive removal
-                k_v = cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(8, min(40, h // 3))))
+                vertical_len = guided_v_len or max(8, min(40, h // 3))
+                k_v = cv2.getStructuringElement(cv2.MORPH_RECT, (1, vertical_len))
                 # AGGRESSIVE: Remove horizontal lines > 10px to kill grid shelves
-                k_h = cv2.getStructuringElement(cv2.MORPH_RECT, (12, 1))
+                k_h = cv2.getStructuringElement(cv2.MORPH_RECT, (guided_h_len or 12, 1))
             else:
                 # Standard grid removal for non-B&W images
-                k_v = cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(10, min(60, h // 2))))
+                vertical_len = guided_v_len or max(10, min(60, h // 2))
+                k_v = cv2.getStructuringElement(cv2.MORPH_RECT, (1, vertical_len))
                 # AGGRESSIVE: Remove horizontal lines > 15px to kill grid shelves even if not detected as B&W
-                k_h = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 1))
+                k_h = cv2.getStructuringElement(cv2.MORPH_RECT, (guided_h_len or 15, 1))
             
             v_lines = cv2.morphologyEx(color_mask, cv2.MORPH_OPEN, k_v)
             h_lines = cv2.morphologyEx(color_mask, cv2.MORPH_OPEN, k_h)
@@ -10523,6 +10550,62 @@ def upload_file():
         'vision_api_available': bool(VISION_API_AVAILABLE or LOCAL_OCR_AVAILABLE)
     })
 
+
+@app.route('/api/analyze-track-preview', methods=['POST'])
+@login_required()
+def analyze_track_preview():
+    """Return bounded visual guidance for the local precision tracer."""
+    user = _current_user(require_access=True)
+    if not user:
+        return jsonify({'success': False, 'error': 'Not authorized'}), 401
+    if not OPENAI_API_KEY:
+        return jsonify({
+            'success': False,
+            'configured': False,
+            'error': 'Track analysis is not configured on this server',
+        }), 503
+
+    data = request.get_json(silent=True) or {}
+    image_ref = str(data.get('image_path') or '').strip()
+    img = None
+    if image_ref:
+        try:
+            image_path = _resolve_authorized_image_path(image_ref, user)
+        except ValueError as exc:
+            return jsonify({'success': False, 'error': str(exc)}), 403
+        img = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+    else:
+        image_data = data.get('image')
+        if not isinstance(image_data, str) or len(image_data) > 24 * 1024 * 1024:
+            return jsonify({
+                'success': False,
+                'error': 'Use an uploaded image reference for track analysis',
+            }), 400
+        img, decode_error = _decode_image_data_url(image_data)
+        if decode_error:
+            return jsonify({'success': False, 'error': decode_error}), 400
+
+    if img is None or img.size == 0:
+        return jsonify({'success': False, 'error': 'Could not decode image'}), 400
+    if int(img.shape[0]) * int(img.shape[1]) > 120_000_000:
+        return jsonify({'success': False, 'error': 'Image is too large for track analysis'}), 400
+
+    try:
+        analysis = track_analysis.analyze_with_openai(
+            img,
+            api_key=OPENAI_API_KEY,
+            model=OPENAI_TRACK_ANALYST_MODEL,
+            region=data.get('region'),
+        )
+    except track_analysis.TrackAnalysisError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 502
+    except Exception as exc:
+        print(f"[track-analysis] Unexpected failure: {exc}")
+        return jsonify({'success': False, 'error': 'Track analysis failed'}), 502
+
+    return jsonify({'success': True, 'analysis': analysis})
+
+
 def pipeline_cc_cleanup(mask, min_size=20):
     """Connected-component noise cleanup. Removes small isolated blobs of pixels."""
     if mask is None or mask.size == 0:
@@ -10760,6 +10843,7 @@ def digitize():
         hot_side = c.get('hot_side')
         pixel_perfect = bool(c.get('pixel_perfect'))
         trace_mode = c.get('trace_mode')
+        analysis_guidance = c.get('analysis_guidance') if isinstance(c.get('analysis_guidance'), dict) else None
         align_channels = bool(c.get('align_channels'))
         preserve_wiggles = bool(c.get('preserve_wiggles'))
         crest_boost = bool(c.get('crest_boost'))
@@ -10826,6 +10910,9 @@ def digitize():
         curve_ui_filters = dict(preview_filters)
         curve_ui_filters['enable_grid_suppression'] = enable_grid_suppression
         curve_ui_filters['enable_curve_masking'] = enable_curve_masking
+        if analysis_guidance:
+            curve_ui_filters['grid_spacing_x_px'] = analysis_guidance.get('horizontal_grid_spacing_px')
+            curve_ui_filters['grid_spacing_y_px'] = analysis_guidance.get('vertical_grid_spacing_px')
 
         # NEW: Build a soft probability mask for the curve using color/edges
         # plus vertical-rail suppression. This returns an 8-bit image where
@@ -10841,6 +10928,29 @@ def digitize():
         # Pipeline: Skeletonization / Thinning
         if enable_skeletonization:
             mask = pipeline_skeletonize(mask)
+
+        if analysis_guidance:
+            mask = track_analysis.apply_curve_guidance(
+                mask,
+                roi,
+                analysis_guidance,
+                roi_left=left_px,
+                roi_top=top_clamped,
+            )
+            low_confidence_sections = analysis_guidance.get('low_confidence_sections')
+            if not isinstance(low_confidence_sections, list):
+                low_confidence_sections = []
+            try:
+                guidance_confidence = float(analysis_guidance.get('confidence') or 0.0)
+            except (TypeError, ValueError):
+                guidance_confidence = 0.0
+            if guidance_confidence < 0.60 or low_confidence_sections:
+                curve_warnings.append({
+                    'curve': name,
+                    'info': 'Vision analysis marked part of this curve for manual review.',
+                    'manual_review': True,
+                    'regions': low_confidence_sections[:12],
+                })
 
         if mode not in {"green", "red", "blue", "auto", "cyan", "magenta", "yellow", "orange", "purple"}:
             _pm = mask.astype(np.float32) / 255.0
@@ -10910,6 +11020,12 @@ def digitize():
                     dp_smooth_lambda = 0.005
                     dp_curv_lambda = 0.001
                     max_step_dp = 150
+
+            max_step_dp = track_analysis.guided_max_step(
+                max_step_dp,
+                analysis_guidance,
+                mask.shape[1],
+            )
 
         # Optional pixel-perfect skeleton tracer (preserve every bump)
         if not enable_viterbi:

@@ -64,9 +64,12 @@ If you don't set `GEMINI_MODEL_ID`, the app defaults to `gemini-1.5-flash`.
 ```env
 OPENAI_API_KEY=sk-...your-key-here...
 OPENAI_MODEL_ID=gpt-3.5-turbo
+OPENAI_TRACK_ANALYST_MODEL=gpt-5.6-luna
 ```
 
-You can also use `gpt-4o-mini` or other chat-capable models if your account allows it.
+`OPENAI_TRACK_ANALYST_MODEL` controls the full-color preview analyzer. It uses the
+Responses API with image input and strict structured output. `OPENAI_MODEL_ID`
+continues to control the older text-only helpers.
 
 **Option C: Hugging Face Inference**
 

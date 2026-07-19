@@ -1833,9 +1833,13 @@
                                 </div>
 
                                 <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:6px 0;">
+                                    <button type="button" class="btn" id="analyzeTracksBtn" style="padding:4px 10px;font-size:0.85em;" onclick="analyzeTracksWithAI()" title="Analyze track boundaries, curve colors, scales, wraps, and trace seeds from a color preview">
+                                        Analyze tracks
+                                    </button>
                                     <button type="button" class="btn" style="padding:4px 10px;font-size:0.85em;" onclick="detectAllScales()" title="Run OCR + AI on every configured curve to set scale type, wrapped, and endpoints in one pass">
                                         🤖 AI detect all scales
                                     </button>
+                                    <span id="trackAnalysisStatus" class="hint-text" style="font-size:0.8em;color:#64748b;"></span>
                                     <span id="detectAllStatus" class="hint-text" style="font-size:0.8em;color:#94a3b8;"></span>
                                 </div>
                                 <div id="curvesContainer"></div>
@@ -2040,6 +2044,8 @@
 
         let uploadedImage = null;
         let uploadedImagePath = null;
+        let lastTrackAnalysis = null;
+        let trackGuidanceByIndex = [];
         let originalUploadedImagePath = null;
         let imageWidth = 0;
         let imageHeight = 0;
@@ -5539,6 +5545,7 @@
                     scale_type: (document.getElementById(`scaleType${i}`)?.value || 'linear').toLowerCase(),
                     wrapped: !!document.getElementById(`wrapped${i}`)?.checked,
                     mode: document.getElementById(`mode${i}`)?.value || 'black',
+                    analysis_guidance: trackGuidanceByIndex[i] || null,
                     enable_grid_suppression: document.getElementById(`traceGridSuppression${i}`) ? document.getElementById(`traceGridSuppression${i}`).checked : true,
                     enable_curve_masking: document.getElementById(`traceCurveMasking${i}`) ? document.getElementById(`traceCurveMasking${i}`).checked : true,
                     enable_cc_cleanup: document.getElementById(`traceCCCleanup${i}`) ? document.getElementById(`traceCCCleanup${i}`).checked : true,
@@ -10064,6 +10071,8 @@
             ocrSuggestions = null;
             aiReviewAccepted = false;
             detectedText = null;
+            lastTrackAnalysis = null;
+            trackGuidanceByIndex = [];
             curveEdgePick = null;
             trackOverlayDrag = null;
             lastDigitizedDepth = null;
@@ -10902,6 +10911,146 @@
             } catch (err) {
                 showStatus(`AI track detection request failed: ${err.message}`, 'error');
                 clearTrackOverlays();
+            }
+        }
+
+        function trackAnalysisCurveType(mnemonic) {
+            const value = String(mnemonic || '').toUpperCase();
+            if (['DT', 'DTC', 'DTCO'].includes(value)) return 'DT';
+            if (['GR', 'RHOB', 'NPHI', 'CALI', 'SP'].includes(value)) return value;
+            return 'OTHER';
+        }
+
+        function trackAnalysisColorMode(color) {
+            const value = String(color || '').toLowerCase();
+            const modes = ['black', 'red', 'green', 'blue', 'cyan', 'magenta', 'yellow', 'orange', 'purple'];
+            return modes.includes(value) ? value : 'auto';
+        }
+
+        async function analyzeTracksWithAI() {
+            if ((!uploadedImage && !uploadedImagePath) || !imageWidth || !imageHeight) {
+                showStatus('Upload an image before analyzing tracks.', 'error');
+                return;
+            }
+
+            const button = document.getElementById('analyzeTracksBtn');
+            const status = document.getElementById('trackAnalysisStatus');
+            const canUseImagePath = !!(uploadedImagePath && uploadedImagePath.startsWith('/api/images/'));
+            const region = {
+                left_px: primaryRegion && Number.isFinite(primaryRegion.left_px) ? Number(primaryRegion.left_px) : 0,
+                right_px: primaryRegion && Number.isFinite(primaryRegion.right_px) ? Number(primaryRegion.right_px) : imageWidth,
+                top_px: 0,
+                bottom_px: imageHeight,
+            };
+
+            if (button) button.disabled = true;
+            if (status) status.textContent = 'Analyzing color preview...';
+            showStatus('Analyzing track layout and curve guidance...', 'info');
+
+            try {
+                const response = await fetch('/api/analyze-track-preview', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        image_path: canUseImagePath ? uploadedImagePath : null,
+                        image: canUseImagePath ? null : uploadedImage,
+                        region,
+                    }),
+                });
+                const data = await response.json();
+                if (!response.ok || !data.success) {
+                    throw new Error(data.error || `Track analysis failed (${response.status})`);
+                }
+
+                const analysis = data.analysis || {};
+                const globalIgnore = Array.isArray(analysis.global_ignore_regions)
+                    ? analysis.global_ignore_regions
+                    : [];
+                const proposed = [];
+                for (const track of (analysis.tracks || [])) {
+                    for (const curve of (track.curves || [])) {
+                        if (proposed.length >= 6) break;
+                        proposed.push({ track, curve });
+                    }
+                    if (proposed.length >= 6) break;
+                }
+                if (!proposed.length) {
+                    throw new Error('No visible curves were identified in the selected panel.');
+                }
+
+                lastTrackAnalysis = analysis;
+                detectedTracks = sanitizeTrackPairs(proposed.map(({ track }) => [
+                    Math.round(Number(track.left_x)),
+                    Math.round(Number(track.right_x)),
+                ]));
+                document.getElementById('numCurves').value = proposed.length;
+                generateCurveInputs();
+
+                trackGuidanceByIndex = proposed.map(({ track, curve }) => ({
+                    ...curve,
+                    track_id: track.id,
+                    track_confidence: track.confidence,
+                    horizontal_grid_spacing_px: track.horizontal_grid_spacing_px,
+                    vertical_grid_spacing_px: track.vertical_grid_spacing_px,
+                    ignore_regions: [
+                        ...globalIgnore,
+                        ...(Array.isArray(track.ignore_regions) ? track.ignore_regions : []),
+                    ],
+                }));
+
+                proposed.forEach(({ track, curve }, index) => {
+                    const mnemonic = String(curve.mnemonic || `CURVE${index + 1}`).toUpperCase();
+                    const type = trackAnalysisCurveType(mnemonic);
+                    const typeEl = document.getElementById(`type${index}`);
+                    if (typeEl) {
+                        typeEl.value = type;
+                        syncCurveTypeToLabels(index);
+                    }
+
+                    const nameEl = document.getElementById(`name${index}`);
+                    const mnemonicEl = document.getElementById(`lasMnemonic${index}`);
+                    const modeEl = document.getElementById(`mode${index}`);
+                    const leftPxEl = document.getElementById(`leftPx${index}`);
+                    const rightPxEl = document.getElementById(`rightPx${index}`);
+                    const scaleTypeEl = document.getElementById(`scaleType${index}`);
+                    const leftValEl = document.getElementById(`leftVal${index}`);
+                    const rightValEl = document.getElementById(`rightVal${index}`);
+                    const unitEl = document.getElementById(`unit${index}`);
+                    const lasUnitEl = document.getElementById(`lasUnit${index}`);
+                    const wrappedEl = document.getElementById(`wrapped${index}`);
+
+                    if (nameEl) nameEl.value = mnemonic;
+                    if (mnemonicEl) mnemonicEl.value = mnemonic;
+                    if (modeEl) modeEl.value = trackAnalysisColorMode(curve.color);
+                    if (leftPxEl) leftPxEl.value = Math.round(Number(track.left_x));
+                    if (rightPxEl) rightPxEl.value = Math.round(Number(track.right_x));
+                    if (scaleTypeEl && ['linear', 'log', 'centered'].includes(track.scale_type)) {
+                        scaleTypeEl.value = track.scale_type;
+                    }
+                    if (leftValEl && Number.isFinite(track.scale_min)) leftValEl.value = track.scale_min;
+                    if (rightValEl && Number.isFinite(track.scale_max)) rightValEl.value = track.scale_max;
+                    if (unitEl && track.unit) unitEl.value = track.unit;
+                    if (lasUnitEl && track.unit) lasUnitEl.value = track.unit;
+                    if (wrappedEl) wrappedEl.checked = !!(curve.wrap_enabled || track.wraparound);
+                });
+
+                refreshTrackOverlaysFromCurves();
+                updateCurveScaleHints();
+                renderCurveListView();
+                const reviewCount = proposed.reduce(
+                    (count, item) => count + (item.curve.low_confidence_sections || []).length,
+                    0,
+                );
+                const confidence = Math.round(Number(analysis.analysis_confidence || 0) * 100);
+                if (status) {
+                    status.textContent = `${proposed.length} curves, ${confidence}% confidence${reviewCount ? `, ${reviewCount} review regions` : ''}`;
+                }
+                showStatus(`Track analysis applied to ${proposed.length} curve(s). Review the settings before digitizing.`, 'success');
+            } catch (error) {
+                if (status) status.textContent = error.message;
+                showStatus(`Track analysis failed: ${error.message}`, 'error');
+            } finally {
+                if (button) button.disabled = false;
             }
         }
 
