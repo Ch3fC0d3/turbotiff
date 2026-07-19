@@ -11,11 +11,54 @@
             background: #ffffff;
             border-color: #dbe3ea;
             box-shadow: 0 10px 24px rgba(15, 23, 42, 0.07);
+            container-type: inline-size;
+            min-width: 0;
         }
 
         .log-card-surface:hover {
             border-color: #9fb7b1;
             box-shadow: 0 14px 30px rgba(15, 23, 42, 0.1);
+        }
+
+        .logs-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+            gap: 1.5rem;
+        }
+
+        .log-created-at {
+            min-width: 0;
+            max-width: calc(100% - 3.5rem);
+            overflow-wrap: anywhere;
+            line-height: 1.25;
+            text-align: right;
+        }
+
+        .log-card-actions {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(2.5rem, 1fr));
+            gap: 0.625rem;
+        }
+
+        .log-action-primary {
+            grid-column: 1 / -1;
+            min-height: 2.75rem;
+        }
+
+        .log-action-icon {
+            min-width: 0;
+            min-height: 2.75rem;
+            width: 100%;
+        }
+
+        @container (min-width: 36rem) {
+            .log-card-actions {
+                grid-template-columns: minmax(7rem, 1fr) repeat(5, 2.75rem);
+            }
+
+            .log-action-primary {
+                grid-column: auto;
+            }
         }
     </style>
     <link rel="stylesheet" href="/static/home_backdrop.css">
@@ -99,40 +142,40 @@
             </div>
             
             {% if logs and logs|length > 0 %}
-            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            <div class="logs-grid">
                 {% for log in logs %}
-                <div class="log-card-surface rounded-xl border p-6 flex flex-col transition-all duration-200">
-                    <div class="flex items-start justify-between mb-4">
-                        <div class="rounded-lg bg-white/70 p-2 text-emerald-700 ring-1 ring-inset ring-stone-300/80">
+                <div class="log-card-surface rounded-xl border p-4 sm:p-5 xl:p-6 flex flex-col transition-all duration-200">
+                    <div class="flex min-w-0 items-start justify-between gap-3 mb-4">
+                        <div class="shrink-0 rounded-lg bg-white/70 p-2 text-emerald-700 ring-1 ring-inset ring-stone-300/80">
                             <i data-lucide="file-text" class="h-6 w-6"></i>
                         </div>
-                        <span class="inline-flex items-center rounded-full bg-stone-900/8 px-2.5 py-0.5 text-xs font-medium text-slate-700 ring-1 ring-inset ring-stone-400/40">
+                        <time datetime="{{ log.created_at }}" data-log-created-at class="log-created-at inline-flex items-center rounded-full bg-stone-900/8 px-2.5 py-1 text-xs font-medium text-slate-700 ring-1 ring-inset ring-stone-400/40" title="{{ log.created_at }}">
                             {{ log.created_at }}
-                        </span>
+                        </time>
                     </div>
                     
                     <h3 class="text-lg font-semibold text-slate-900 mb-1 truncate" title="{{ log.name }}">{{ log.name }}</h3>
                     <p class="text-sm text-slate-600 mb-4 flex-grow">{{ log.curve_count }} curves &middot; {{ log.depth_start }} to {{ log.depth_end }} {{ log.depth_unit }}</p>
                     
-                    <div class="flex gap-3 mt-auto pt-4 border-t border-stone-400/45">
-                        <button onclick="viewLog('{{ log.id }}')" class="flex-1 inline-flex justify-center items-center gap-2 rounded-md bg-emerald-900/10 px-3 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-900/16 ring-1 ring-inset ring-emerald-700/25 transition-colors" title="View LAS">
+                    <div class="log-card-actions mt-auto pt-4 border-t border-stone-400/45">
+                        <button onclick="viewLog('{{ log.id }}')" class="log-action-primary inline-flex justify-center items-center gap-2 rounded-md bg-emerald-900/10 px-3 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-900/16 ring-1 ring-inset ring-emerald-700/25 transition-colors" title="View LAS">
                             <i data-lucide="line-chart" class="h-4 w-4"></i> View LAS
                         </button>
-                        <a href="/workspace?log_id={{ log.id }}" class="inline-flex items-center justify-center rounded-md bg-white/75 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-white ring-1 ring-inset ring-stone-400/55 transition-colors" title="Edit in Workspace">
+                        <a href="/workspace?log_id={{ log.id }}" class="log-action-icon inline-flex items-center justify-center rounded-md bg-white/75 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-white ring-1 ring-inset ring-stone-400/55 transition-colors" title="Edit in Workspace">
                             <i data-lucide="edit-3" class="h-4 w-4"></i>
                         </a>
                         {% if log.original_image_path %}
-                        <button onclick="openImage('{{ log.original_image_path }}')" class="inline-flex items-center justify-center rounded-md bg-white/75 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-white ring-1 ring-inset ring-stone-400/55 transition-colors" title="View Original Image">
+                        <button onclick="openImage('{{ log.original_image_path }}')" class="log-action-icon inline-flex items-center justify-center rounded-md bg-white/75 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-white ring-1 ring-inset ring-stone-400/55 transition-colors" title="View Original Image">
                             <i data-lucide="image" class="h-4 w-4"></i>
                         </button>
                         {% endif %}
-                        <a href="/api/logs/{{ log.id }}/download" class="inline-flex items-center justify-center rounded-md bg-white/75 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-white ring-1 ring-inset ring-stone-400/55 transition-colors" title="Download LAS">
+                        <a href="/api/logs/{{ log.id }}/download" class="log-action-icon inline-flex items-center justify-center rounded-md bg-white/75 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-white ring-1 ring-inset ring-stone-400/55 transition-colors" title="Download LAS">
                             <i data-lucide="download" class="h-4 w-4"></i>
                         </a>
-                        <button type="button" data-action="rename-log" data-log-id="{{ log.id }}" data-log-name="{{ log.name }}" class="inline-flex items-center justify-center rounded-md bg-white/75 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-white ring-1 ring-inset ring-stone-400/55 transition-colors" title="Rename Log">
+                        <button type="button" data-action="rename-log" data-log-id="{{ log.id }}" data-log-name="{{ log.name }}" class="log-action-icon inline-flex items-center justify-center rounded-md bg-white/75 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-white ring-1 ring-inset ring-stone-400/55 transition-colors" title="Rename Log">
                             <i data-lucide="edit-2" class="h-4 w-4"></i>
                         </button>
-                        <button type="button" data-action="delete-log" data-log-id="{{ log.id }}" data-log-name="{{ log.name }}" class="inline-flex items-center justify-center rounded-md bg-white/75 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 hover:text-red-800 ring-1 ring-inset ring-stone-400/55 hover:ring-red-300 transition-colors" title="Delete LAS">
+                        <button type="button" data-action="delete-log" data-log-id="{{ log.id }}" data-log-name="{{ log.name }}" class="log-action-icon inline-flex items-center justify-center rounded-md bg-white/75 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 hover:text-red-800 ring-1 ring-inset ring-stone-400/55 hover:ring-red-300 transition-colors" title="Delete LAS">
                             <i data-lucide="trash-2" class="h-4 w-4"></i>
                         </button>
                     </div>
@@ -159,6 +202,18 @@
 
     <script>
         lucide.createIcons();
+
+        document.querySelectorAll('[data-log-created-at]').forEach((timeElement) => {
+            const rawDate = timeElement.getAttribute('datetime');
+            const parsedDate = new Date(rawDate);
+            if (!Number.isNaN(parsedDate.getTime())) {
+                timeElement.textContent = new Intl.DateTimeFormat(undefined, {
+                    year: 'numeric',
+                    month: 'short',
+                    day: 'numeric'
+                }).format(parsedDate);
+            }
+        });
         
         function viewLog(logId) {
             // We'll pass the log ID to the viewer via localStorage or URL params
