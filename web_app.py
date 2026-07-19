@@ -33,6 +33,7 @@ from flask import (
     send_file, Response, redirect, url_for, session, flash, send_from_directory
 )
 import math
+import importlib.util
 import os
 import atexit
 import random
@@ -90,36 +91,23 @@ except Exception:
     torch = None
     nn = None
 
-# Paddle and Torch load overlapping Windows runtime libraries. Importing Torch
-# first avoids a Paddle/torch DLL collision, while these cache paths keep model
-# files inside the app's ignored data directory.
+# Paddle and Torch load overlapping native libraries. Keep Paddle's model cache
+# inside the persistent data directory and defer its heavy import until OCR is
+# requested so production workers can boot quickly.
 _paddle_cache_root = Path(__file__).parent / 'data' / 'paddle_runtime'
 _paddlex_cache_root = Path(__file__).parent / 'data' / 'paddlex'
 os.environ.setdefault('PADDLE_PDX_CACHE_HOME', str(_paddlex_cache_root))
 os.environ.setdefault('PADDLE_PDX_MODEL_SOURCE', 'bos')
 os.environ.setdefault('PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK', 'True')
-_original_home = os.environ.get('HOME')
-_original_userprofile = os.environ.get('USERPROFILE')
 try:
-    os.environ['HOME'] = str(_paddle_cache_root)
-    os.environ['USERPROFILE'] = str(_paddle_cache_root)
-    from paddleocr import PaddleOCR as _PaddleOCR
-    PaddleOCR = _PaddleOCR
-    PADDLE_OCR_AVAILABLE = True
-    print("[OK] PaddleOCR available as the primary local OCR engine.")
+    PADDLE_OCR_AVAILABLE = importlib.util.find_spec('paddleocr') is not None
+    if PADDLE_OCR_AVAILABLE:
+        print("[OK] PaddleOCR package available for lazy local OCR initialization.")
+    else:
+        print("[INFO] PaddleOCR package unavailable; EasyOCR fallback remains active.")
 except Exception as e:
-    PaddleOCR = None
     PADDLE_OCR_AVAILABLE = False
     print(f"[INFO] PaddleOCR unavailable; EasyOCR fallback remains active: {e}")
-finally:
-    if _original_home is None:
-        os.environ.pop('HOME', None)
-    else:
-        os.environ['HOME'] = _original_home
-    if _original_userprofile is None:
-        os.environ.pop('USERPROFILE', None)
-    else:
-        os.environ['USERPROFILE'] = _original_userprofile
 
 try:
     import easyocr as _easyocr_mod
@@ -6985,8 +6973,8 @@ _paddle_ocr_predict_lock = threading.Lock()
 
 
 def _get_paddle_ocr_reader():
-    global _paddle_ocr_reader
-    if not PADDLE_OCR_AVAILABLE or PaddleOCR is None:
+    global _paddle_ocr_reader, PaddleOCR, PADDLE_OCR_AVAILABLE
+    if not PADDLE_OCR_AVAILABLE:
         return None
     if _paddle_ocr_reader is None:
         with _paddle_ocr_init_lock:
@@ -6996,6 +6984,9 @@ def _get_paddle_ocr_reader():
                 try:
                     os.environ['HOME'] = str(_paddle_cache_root)
                     os.environ['USERPROFILE'] = str(_paddle_cache_root)
+                    if PaddleOCR is None:
+                        from paddleocr import PaddleOCR as _PaddleOCR
+                        PaddleOCR = _PaddleOCR
                     _paddle_ocr_reader = PaddleOCR(
                         text_detection_model_name='PP-OCRv6_small_det',
                         text_recognition_model_name='PP-OCRv6_small_rec',
@@ -7009,6 +7000,7 @@ def _get_paddle_ocr_reader():
                     print("[OK] PaddleOCR reader initialized (CPU, PP-OCRv6 small).")
                 except Exception as exc:
                     print(f"[WARN] PaddleOCR initialization failed: {exc}")
+                    PADDLE_OCR_AVAILABLE = False
                     _paddle_ocr_reader = False
                 finally:
                     if original_home is None:
@@ -11981,7 +11973,9 @@ def digitize():
 def health():
     return jsonify({
         'status': 'ok',
-        'vision_api': VISION_API_AVAILABLE
+        'vision_api': VISION_API_AVAILABLE,
+        'ocr_provider': str(os.getenv('OCR_PROVIDER', 'local')).strip().lower(),
+        'paddle_ocr_package': PADDLE_OCR_AVAILABLE,
     })
 
 

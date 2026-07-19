@@ -20,6 +20,10 @@ class PaddleOcrTests(unittest.TestCase):
         self.assertTrue(ok)
         self.image_bytes = encoded.tobytes()
 
+    def test_paddle_import_is_deferred_until_first_ocr_request(self):
+        self.assertTrue(web_app.PADDLE_OCR_AVAILABLE)
+        self.assertIsNone(web_app.PaddleOCR)
+
     def test_paddle_adapter_returns_common_ocr_payload(self):
         reader = Mock()
         reader.predict.return_value = [_PaddlePage({
