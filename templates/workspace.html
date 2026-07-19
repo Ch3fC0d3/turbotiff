@@ -10422,6 +10422,9 @@
             const bestTrackResult = trackCandidates[0] || null;
             const anyTracksDetected = valid.some((result) => result.trackInfo.totalCount > 0);
             const genericTrackCount = valid.reduce((count, result) => count + (result.trackInfo.genericOnly ? result.trackInfo.totalCount : 0), 0);
+            const textAnalysisUnavailable = valid.some((result) =>
+                result.fallbackMode === 'edge_detection_no_ai_provider'
+            );
 
             return {
                 metadata: mergedMetadata,
@@ -10430,6 +10433,7 @@
                 trackInfo: bestTrackResult ? bestTrackResult.trackInfo : analyzeHeaderTracks([]),
                 anyTracksDetected,
                 genericTrackCount,
+                textAnalysisUnavailable,
                 usedTrackFallback: !!(bestTrackResult && bestTrackResult.fallbackMode),
             };
         }
@@ -10441,9 +10445,9 @@
             const tracks = Array.isArray(result.tracks) ? result.tracks : [];
             const meaningfulTrackCount = result.trackInfo?.meaningfulCount || 0;
 
-            headerMetadata = metadata;
             if (metadata) {
-                applyHeaderMetadataToInputs(metadata);
+                headerMetadata = mergeHeaderMetadataValues(headerMetadata, metadata) || metadata;
+                applyHeaderMetadataToInputs(headerMetadata);
             }
 
             if (meaningfulTrackCount > 0) {
@@ -10473,7 +10477,9 @@
                         summaryEl.textContent = `Header fields captured.${metaText} No labeled tracks were found to pre-fill Step 4.`;
                     }
                 } else if (result.anyTracksDetected) {
-                    summaryEl.textContent = `Detected unlabeled track boxes, but skipped Step 4 prefill because the header labels/scales were not readable.`;
+                    summaryEl.textContent = result.textAnalysisUnavailable
+                        ? 'Detected track geometry, but text analysis is not configured on this server. Existing Step 4 labels were left unchanged.'
+                        : 'Detected track geometry, but no reliable curve labels or scales were identified. Existing Step 4 labels were left unchanged.';
                 } else {
                     summaryEl.textContent = 'Header capture found no usable fields or labeled tracks. Try a clearer selection.';
                 }
@@ -10486,7 +10492,12 @@
             } else if (metadata) {
                 showStatus('✓ Header fields captured. No readable labeled tracks were found for Step 4.', 'info');
             } else if (result.anyTracksDetected) {
-                showStatus('Detected track boxes, but the header labels were not readable enough to pre-fill Step 4.', 'warning');
+                showStatus(
+                    result.textAnalysisUnavailable
+                        ? 'Track geometry was detected, but text analysis is not configured on this server.'
+                        : 'Track geometry was detected, but no reliable curve labels or scales were identified.',
+                    'warning'
+                );
             } else {
                 showStatus('No usable header fields or labeled tracks were detected. Try a larger or clearer header selection.', 'warning');
             }
@@ -10745,8 +10756,8 @@
                     captureResults.push(topResult);
                 }
 
-                // --- Also scan bottom 50% for footer-style headers (e.g. ATR logs) ---
-                const bottomStart = Math.floor(imageHeight * 0.50);
+                // Scan a tighter footer band so OCR does not downsample readable labels into noise.
+                const bottomStart = Math.floor(imageHeight * 0.80);
                 if (bottomStart < imageHeight - 10) {
                     headerRegion = {
                         left_px: 0,
@@ -11704,8 +11715,11 @@
                     const overlap = ovHigh - ovLow;
                     if (overlap <= 0) continue;
                     const span = tr.high - tr.low;
-                    const coverage = span > 0 ? (overlap / span) : 0;
-                    const score = coverage;
+                    if (span <= 0) continue;
+                    const endpointError = (
+                        Math.abs(minVal - tr.low) + Math.abs(maxVal - tr.high)
+                    ) / span;
+                    const score = 1 / (1 + endpointError);
                     if (score > bestScore) {
                         bestScore = score;
                         bestType = tr.type;
@@ -12612,7 +12626,10 @@
             // One-time auto-application of inferred types right after fields
             // are generated, so the AI guess fills the dropdowns, but later
             // edits only show warnings and a Fix button.
-            updateCurveScaleHints(true);
+            const hasReadableHeaderLabels = Array.isArray(headerTracks) && headerTracks.some((track) =>
+                track && track.name && !isGenericHeaderTrackName(track.name)
+            );
+            updateCurveScaleHints(!hasReadableHeaderLabels);
             // Generate validation report after curves are populated
             setTimeout(() => generateValidationReport(), 100);
             // Refresh compact list view

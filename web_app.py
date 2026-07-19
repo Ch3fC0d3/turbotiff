@@ -42,6 +42,7 @@ from app import auth_billing
 from app import mailer
 from app import scale_detection
 from app import corrections_store
+from app import header_layout
 from app import track_analysis
 import app.config as config
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -6954,34 +6955,39 @@ def _get_easyocr_reader():
     return _easyocr_reader if _easyocr_reader is not False else None
 
 
-def _detect_text_easyocr(image_bytes):
+def _detect_text_easyocr(image_bytes, preserve_detail=False):
     reader = _get_easyocr_reader()
     if reader is None:
         return {'raw': [], 'numbers': [], 'suggestions': {}}
 
     try:
-        image_bytes = downsample_for_ocr(image_bytes, max_height=2200)
+        max_height = 3600 if preserve_detail else 2200
+        image_bytes = downsample_for_ocr(image_bytes, max_height=max_height)
         nparr = np.frombuffer(image_bytes, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         if img is None or img.size == 0:
             return {'raw': [], 'numbers': [], 'suggestions': {}}
 
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        gray = cv2.GaussianBlur(gray, (3, 3), 0)
-        gray = cv2.adaptiveThreshold(
-            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 11
-        )
-        ocr_img = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
-        if max(ocr_img.shape[:2]) < 1800:
-            ocr_img = cv2.resize(ocr_img, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
+        if preserve_detail:
+            ocr_img = img
+        else:
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            gray = cv2.GaussianBlur(gray, (3, 3), 0)
+            gray = cv2.adaptiveThreshold(
+                gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 11
+            )
+            ocr_img = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
+            if max(ocr_img.shape[:2]) < 1800:
+                ocr_img = cv2.resize(ocr_img, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
 
         results = reader.readtext(
             ocr_img,
             detail=1,
             paragraph=False,
-            text_threshold=0.5,
-            low_text=0.25,
-            link_threshold=0.3,
+            text_threshold=0.45 if preserve_detail else 0.5,
+            low_text=0.2 if preserve_detail else 0.25,
+            link_threshold=0.25 if preserve_detail else 0.3,
+            mag_ratio=1.5 if preserve_detail else 1.0,
         )
 
         raw_text = []
@@ -6995,6 +7001,12 @@ def _detect_text_easyocr(image_bytes):
                 continue
             bbox = entry[0]
             text = str(entry[1] or '').strip()
+            try:
+                confidence = float(entry[2]) if len(entry) >= 3 else 1.0
+            except (TypeError, ValueError):
+                confidence = 0.0
+            if not np.isfinite(confidence):
+                confidence = 0.0
             if not text:
                 continue
 
@@ -7016,9 +7028,10 @@ def _detect_text_easyocr(image_bytes):
             raw_text.append({
                 'text': text,
                 'vertices': verts,
+                'confidence': float(confidence),
             })
 
-            if xs and ys:
+            if xs and ys and confidence >= 0.35:
                 x_center = float(sum(xs)) / len(xs)
                 y_center = float(sum(ys)) / len(ys)
                 line_items.append((y_center, x_center, text))
@@ -7067,16 +7080,17 @@ def _detect_text_easyocr(image_bytes):
             'raw': raw_text,
             'numbers': numeric_entries,
             'suggestions': suggestions,
-            'full_text': full_text
+            'full_text': full_text,
+            'engine': 'easyocr',
         }
     except Exception as e:
         print(f"EasyOCR error: {e}")
         return {'raw': [], 'numbers': [], 'suggestions': {}}
 
-def detect_text_vision_api(image_bytes):
+def detect_text_vision_api(image_bytes, preserve_detail=False):
     """Use Google Vision API or local OCR fallback to detect text in image"""
     if not VISION_API_AVAILABLE or vision_client is None:
-        return _detect_text_easyocr(image_bytes)
+        return _detect_text_easyocr(image_bytes, preserve_detail=preserve_detail)
 
     try:
         image = vision.Image(content=image_bytes)
@@ -7124,7 +7138,7 @@ def detect_text_vision_api(image_bytes):
         }
     except Exception as e:
         print(f"Vision API error: {e}")
-        return _detect_text_easyocr(image_bytes)
+        return _detect_text_easyocr(image_bytes, preserve_detail=preserve_detail)
 
 
 @app.route('/reanalyze_panel', methods=['POST'])
@@ -7633,7 +7647,10 @@ def auto_layout_tracks():
 
     header_bytes = buf.tobytes()
 
-    detected_text = detect_text_vision_api(header_bytes)
+    detected_text = detect_text_vision_api(
+        header_bytes,
+        preserve_detail=treat_region_as_header,
+    )
     raw_text = detected_text.get('raw', []) or []
     full_text_blob = detected_text.get('full_text', '')
 
@@ -7646,6 +7663,13 @@ def auto_layout_tracks():
             for entry in raw_entries:
                 if not isinstance(entry, dict):
                     continue
+                confidence = entry.get('confidence')
+                if confidence is not None:
+                    try:
+                        if float(confidence) < 0.65:
+                            continue
+                    except (TypeError, ValueError):
+                        continue
                 text = (entry.get('text') or '').strip()
                 if not text:
                     continue
@@ -7848,7 +7872,12 @@ def auto_layout_tracks():
         except Exception:
             return None
 
-    header_metadata = _extract_header_metadata(raw_text, full_text_blob) if treat_region_as_header else None
+    is_local_ocr = detected_text.get('engine') == 'easyocr'
+    header_metadata = (
+        _extract_header_metadata(raw_text, full_text_blob)
+        if treat_region_as_header and not is_local_ocr
+        else None
+    )
 
     items = []
     for entry in raw_text:
@@ -7922,6 +7951,14 @@ def auto_layout_tracks():
     }
 
     layout = call_ai_auto_layout(layout_payload)
+    if not layout:
+        local_tracks = header_layout.infer_tracks_from_ocr(items, panel_w)
+        if local_tracks:
+            layout = {
+                'tracks': local_tracks,
+                'header_metadata': {},
+                'fallback': 'local_ocr_layout',
+            }
     if not layout:
         has_provider = bool((GEMINI_API_KEY and GEMINI_MODEL_ID) or (OPENAI_API_KEY and OPENAI_MODEL_ID) or (HF_API_TOKEN and HF_MODEL_ID))
 
