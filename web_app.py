@@ -11228,6 +11228,7 @@ def digitize():
     curve_warnings = []
 
     for c in curves:
+        curve_started = time.perf_counter()
         # LAS-facing name/unit come from las_mnemonic/las_unit (or name/unit as fallback)
         name = c.get('las_mnemonic') or c.get('name')
         unit = c.get('las_unit') or c.get('unit', '')
@@ -11421,6 +11422,17 @@ def digitize():
                 max_step_dp,
                 analysis_guidance,
                 mask.shape[1],
+            )
+            # A curve cannot physically jump hundreds of pixels between adjacent
+            # raster rows. The previous 150-200px setting made Viterbi work
+            # proportional to billions of transitions on tall logs and caused
+            # Railway to return 502 while the worker continued for 20 minutes.
+            max_step_cap = max(3, min(32, int(os.environ.get('TURBOTIFF_MAX_STEP_CAP', '10'))))
+            max_step_dp = min(max_step_dp, max_step_cap)
+            print(
+                f"[digitize-curve-start] curve={name} mode={mode} "
+                f"roi={mask.shape[1]}x{mask.shape[0]} max_step={max_step_dp}",
+                flush=True,
             )
 
         # Optional pixel-perfect skeleton tracer (preserve every bump)
@@ -11936,6 +11948,12 @@ def digitize():
                     curve_trace_debug[name] = dbg
             except Exception:
                 pass
+
+        print(
+            f"[digitize-curve-finish] curve={name} "
+            f"elapsed_s={time.perf_counter() - curve_started:.3f}",
+            flush=True,
+        )
     
     # Resample to fixed 0.5 ft step when using feet
     las_depth = base_depth
