@@ -14586,35 +14586,60 @@
                 const traceDebugExport = shouldRequestTraceDebugExport();
                 const digitizeUrl = traceDebugExport ? '/digitize?trace_debug=1' : '/digitize';
                 const canUseUploadedImagePath = !!(uploadedImagePath && uploadedImagePath.startsWith('/api/images/'));
-                const response = await fetch(digitizeUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        image: canUseUploadedImagePath ? null : uploadedImage,
-                        image_path: canUseUploadedImagePath ? uploadedImagePath : null,
-                        config: config,
-                        detected_text: detectedText || null,
-                        preview_filters: previewFilters,
-                        header_metadata: headerMetadata || null,
-                        trace_debug_export: traceDebugExport,
-                        response_mode: traceDebugExport ? 'debug' : 'lean',
-                    }),
-                });
-
+                const hasInlineImageFallback = (
+                    typeof uploadedImage === 'string'
+                    && /^data:image\/(?:jpeg|png|webp);base64,/i.test(uploadedImage)
+                );
+                let useImagePath = canUseUploadedImagePath;
+                let response = null;
                 let data = null;
                 let rawText = null;
-                try {
-                    rawText = await response.text();
-                } catch (err) {
-                    rawText = null;
-                }
+                for (let attempt = 0; attempt < 2; attempt += 1) {
+                    response = await fetch(digitizeUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            image: useImagePath ? null : uploadedImage,
+                            image_path: useImagePath ? uploadedImagePath : null,
+                            config: config,
+                            detected_text: detectedText || null,
+                            preview_filters: previewFilters,
+                            header_metadata: headerMetadata || null,
+                            trace_debug_export: traceDebugExport,
+                            response_mode: traceDebugExport ? 'debug' : 'lean',
+                        }),
+                    });
 
-                if (rawText) {
+                    data = null;
+                    rawText = null;
                     try {
-                        data = JSON.parse(rawText);
+                        rawText = await response.text();
                     } catch (err) {
-                        data = null;
+                        rawText = null;
                     }
+                    if (rawText) {
+                        try {
+                            data = JSON.parse(rawText);
+                        } catch (err) {
+                            data = null;
+                        }
+                    }
+
+                    const missingImageReference = (
+                        response.status === 403
+                        && data
+                        && data.error === 'Image reference was not found'
+                    );
+                    if (attempt === 0 && useImagePath && hasInlineImageFallback && missingImageReference) {
+                        // Unsaved uploads can expire from the server cache while
+                        // their browser preview remains available. Retry only in
+                        // that exact case, using the already-loaded browser copy.
+                        uploadedImagePath = null;
+                        useImagePath = false;
+                        showStatus('Server image cache expired; retrying with the image in this workspace...', 'info');
+                        continue;
+                    }
+                    break;
                 }
 
                 if (!response.ok) {
