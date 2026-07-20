@@ -353,6 +353,7 @@ _TIMED_REQUEST_PATHS = {
     '/digitize',
     '/api/batch_digitize',
     '/api/auto_layout',
+    '/api/images/recover',
     '/reanalyze_panel',
 }
 
@@ -7051,7 +7052,7 @@ def _get_paddle_ocr_reader():
                         text_recognition_model_name='PP-OCRv6_small_rec',
                         use_doc_orientation_classify=False,
                         use_doc_unwarping=False,
-                        use_textline_orientation=True,
+                        use_textline_orientation=False,
                         text_recognition_batch_size=8,
                         device='cpu',
                         enable_mkldnn=False,
@@ -7416,12 +7417,13 @@ def detect_text_vision_api(image_bytes, preserve_detail=False):
             return google_result
 
     if provider in {'easyocr', 'easy'}:
-        easy_result = _detect_text_easyocr(image_bytes, preserve_detail=preserve_detail)
-        if easy_result.get('raw'):
-            return easy_result
+        return _detect_text_easyocr(image_bytes, preserve_detail=preserve_detail)
 
     paddle_result = _detect_text_paddleocr(image_bytes, preserve_detail=preserve_detail)
-    if paddle_result.get('raw'):
+    # Do not retain both local OCR model families in one production worker.
+    # Even an empty Paddle result is preferable to loading EasyOCR's second
+    # model set immediately before full-resolution digitization.
+    if PADDLE_OCR_AVAILABLE:
         return paddle_result
 
     if provider == 'auto':
@@ -10778,6 +10780,35 @@ def get_image(filename):
     return send_from_directory(str(image_path.parent), image_path.name)
 
 
+@app.route('/api/images/recover', methods=['POST'])
+@login_required()
+def recover_workspace_image():
+    """Restore an expired browser-resident JPEG without rerunning upload OCR."""
+    user = _current_user(require_access=True)
+    if not user:
+        return jsonify({'success': False, 'error': 'Not authorized'}), 401
+
+    upload = request.files.get('file')
+    if upload is None:
+        return jsonify({'success': False, 'error': 'Missing recovery image'}), 400
+    image_bytes = upload.read()
+    if not image_bytes or len(image_bytes) > 250 * 1024 * 1024:
+        return jsonify({'success': False, 'error': 'Recovery image is empty or too large'}), 400
+    if not image_bytes.startswith(b'\xff\xd8\xff'):
+        return jsonify({'success': False, 'error': 'Recovery image must be JPEG'}), 400
+
+    images_dir = Path(config.DATA_ROOT) / 'images'
+    images_dir.mkdir(parents=True, exist_ok=True)
+    image_filename = f"{uuid.uuid4().hex}.jpg"
+    image_path = images_dir / image_filename
+    image_path.write_bytes(image_bytes)
+    _remember_uploaded_image_filename(image_filename)
+    return jsonify({
+        'success': True,
+        'image_path': f'/api/images/{image_filename}',
+    })
+
+
 @app.route('/upload', methods=['POST'])
 @login_required()
 def upload_file():
@@ -11438,11 +11469,12 @@ def digitize():
         # Run both DP and Direct Centerline tracers, then merge per-row based on probability.
         # AND DISABLE EXTRA REFINEMENTS which cause the zig-zag snapping.
         elif mode in colored_modes:
-            # SUPER-RESOLUTION: Upscale mask by 2x to allow sub-pixel precision
-            # Use LINEAR interpolation to create smooth gradients between pixels
+            # SUPER-RESOLUTION: Upscale horizontally for sub-pixel x precision.
+            # Doubling height adds no horizontal precision and quadruples the
+            # DP working set on tall well logs, which can terminate small workers.
             mask_orig = mask
             h_orig, w_orig = mask.shape
-            mask = cv2.resize(mask, (w_orig * 2, h_orig * 2), interpolation=cv2.INTER_LINEAR)
+            mask = cv2.resize(mask, (w_orig * 2, h_orig), interpolation=cv2.INTER_LINEAR)
             
             # Adjust parameters for 2x scale
             max_step_dp_sr = max_step_dp * 2
@@ -11535,23 +11567,8 @@ def digitize():
             s = pd.Series(xs)
             xs = s.interpolate(method='linear', limit_direction='both', limit=max(25, int(xs.size * 0.02))).to_numpy(dtype=np.float32)
             
-            # DOWNSAMPLE: Map back to original resolution
-            # Take every 2nd point and divide coordinate by 2
-            # Use averaging to reduce noise: (y*2 + y*2+1) / 2
-            xs_down = np.full(h_orig, np.nan, dtype=np.float32)
-            for y_orig in range(h_orig):
-                y_sr = y_orig * 2
-                val1 = xs[y_sr]
-                val2 = xs[y_sr + 1] if y_sr + 1 < h_mask else val1
-                
-                if np.isfinite(val1) and np.isfinite(val2):
-                    xs_down[y_orig] = (val1 + val2) / 4.0 # Divide by 2 (avg) then divide by 2 (scale) -> /4
-                elif np.isfinite(val1):
-                    xs_down[y_orig] = val1 / 2.0
-                elif np.isfinite(val2):
-                    xs_down[y_orig] = val2 / 2.0
-            
-            xs = xs_down
+            # Map the horizontal coordinate back; row count never changed.
+            xs = xs / 2.0
             # Restore original mask for downstream
             mask = mask_orig
 

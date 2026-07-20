@@ -14632,11 +14632,27 @@
                     );
                     if (attempt === 0 && useImagePath && hasInlineImageFallback && missingImageReference) {
                         // Unsaved uploads can expire from the server cache while
-                        // their browser preview remains available. Retry only in
-                        // that exact case, using the already-loaded browser copy.
-                        uploadedImagePath = null;
-                        useImagePath = false;
-                        showStatus('Server image cache expired; retrying with the image in this workspace...', 'info');
+                        // their browser preview remains available. Restore the
+                        // lightweight path first instead of putting a very large
+                        // base64 image inside the expensive digitize request.
+                        showStatus('Server image cache expired; restoring the image from this workspace...', 'info');
+                        const recoveryBlob = await (await fetch(uploadedImage)).blob();
+                        const recoveryForm = new FormData();
+                        recoveryForm.append('file', recoveryBlob, 'workspace-recovery.jpg');
+                        const recoveryResponse = await fetch('/api/images/recover', {
+                            method: 'POST',
+                            body: recoveryForm,
+                        });
+                        const recoveryData = await recoveryResponse.json().catch(() => null);
+                        if (!recoveryResponse.ok || !recoveryData || !recoveryData.image_path) {
+                            const recoveryMessage = recoveryData && recoveryData.error
+                                ? recoveryData.error
+                                : `HTTP ${recoveryResponse.status}`;
+                            throw new Error(`Could not restore expired image: ${recoveryMessage}`);
+                        }
+                        uploadedImagePath = recoveryData.image_path;
+                        useImagePath = true;
+                        showStatus('Image restored; retrying digitization...', 'info');
                         continue;
                     }
                     break;
