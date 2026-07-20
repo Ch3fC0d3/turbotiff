@@ -25,6 +25,7 @@ def _ocr_entry(text, left, top, right, bottom, confidence=None):
 
 class HeaderLayoutEndpointTests(unittest.TestCase):
     def setUp(self):
+        web_app._auto_layout_disabled_providers.clear()
         image = np.full((120, 1000, 3), 255, dtype=np.uint8)
         ok, encoded = cv2.imencode('.jpg', image)
         self.assertTrue(ok)
@@ -59,6 +60,7 @@ class HeaderLayoutEndpointTests(unittest.TestCase):
                 })
 
         self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.headers.get('X-Request-ID'))
         payload = response.get_json()
         self.assertTrue(payload['success'])
         self.assertEqual(
@@ -101,6 +103,24 @@ class HeaderLayoutEndpointTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         metadata = response.get_json()['header_metadata']
         self.assertEqual(metadata, {'well': 'MENDEL ESTATE NO 1'})
+
+    def test_permanently_rejected_gemini_key_is_skipped_after_first_failure(self):
+        rejected = type('Response', (), {
+            'status_code': 403,
+            'text': 'API_KEY_HTTP_REFERRER_BLOCKED',
+        })()
+        payload = {'image': {'width_px': 100}, 'items': []}
+
+        with patch.object(web_app, 'GEMINI_API_KEY', 'test-key'), \
+                patch.object(web_app, 'GEMINI_MODEL_ID', 'test-model'), \
+                patch.object(web_app, 'OPENAI_API_KEY', None), \
+                patch.object(web_app, 'HF_API_TOKEN', None), \
+                patch.object(web_app.requests, 'post', return_value=rejected) as post:
+            self.assertIsNone(web_app.call_ai_auto_layout(payload))
+            self.assertIsNone(web_app.call_ai_auto_layout(payload))
+
+        self.assertEqual(post.call_count, 1)
+        self.assertIn('gemini', web_app._auto_layout_disabled_providers)
 
 
 if __name__ == '__main__':

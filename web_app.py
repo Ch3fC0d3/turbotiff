@@ -30,7 +30,7 @@ from google.cloud import storage
 
 from flask import (
     Flask, render_template, request, jsonify, make_response, 
-    send_file, Response, redirect, url_for, session, flash, send_from_directory
+    send_file, Response, redirect, url_for, session, flash, send_from_directory, g
 )
 import math
 import importlib.util
@@ -347,6 +347,49 @@ def restore_session_from_token():
             session['user_id'] = user['id']
             session['is_admin'] = user.get('is_admin', 0)
             session.permanent = True
+
+
+_TIMED_REQUEST_PATHS = {
+    '/digitize',
+    '/api/batch_digitize',
+    '/api/auto_layout',
+    '/reanalyze_panel',
+}
+
+
+@app.before_request
+def log_processing_request_start():
+    """Leave a durable start marker for expensive requests.
+
+    A platform-level 502 can terminate a worker before Flask can emit a response
+    or traceback.  The unmatched start marker makes that case distinguishable
+    from an application error in Railway logs.
+    """
+    if request.path not in _TIMED_REQUEST_PATHS:
+        return
+    g.processing_request_started = time.perf_counter()
+    g.processing_request_id = uuid.uuid4().hex[:12]
+    print(
+        f"[request-start] id={g.processing_request_id} method={request.method} "
+        f"path={request.path} content_length={request.content_length or 0}",
+        flush=True,
+    )
+
+
+@app.after_request
+def log_processing_request_finish(response):
+    started = getattr(g, 'processing_request_started', None)
+    if started is None:
+        return response
+    elapsed = time.perf_counter() - started
+    request_id = getattr(g, 'processing_request_id', 'unknown')
+    print(
+        f"[request-finish] id={request_id} method={request.method} "
+        f"path={request.path} status={response.status_code} elapsed_s={elapsed:.3f}",
+        flush=True,
+    )
+    response.headers['X-Request-ID'] = request_id
+    return response
 
 auth_billing.init_db(config.AUTH_DB_PATH)
 stripe.api_key = config.STRIPE_SECRET_KEY
@@ -1547,6 +1590,18 @@ def call_ai_calibration(calib_payload):
     return None
 
 
+_auto_layout_disabled_providers = set()
+_auto_layout_provider_lock = threading.Lock()
+
+
+def _disable_auto_layout_provider(provider, reason):
+    with _auto_layout_provider_lock:
+        if provider in _auto_layout_disabled_providers:
+            return
+        _auto_layout_disabled_providers.add(provider)
+    print(f"[WARN] Disabled {provider} for auto-layout until worker restart: {reason}", flush=True)
+
+
 def call_ai_auto_layout(layout_payload):
     """Ask an LLM to infer logging track layout from header text items.
 
@@ -1643,7 +1698,7 @@ def call_ai_auto_layout(layout_payload):
     payload_text = schema_hint + json.dumps(layout_payload, indent=2)
 
     # Prefer Gemini if configured
-    if GEMINI_API_KEY and GEMINI_MODEL_ID:
+    if GEMINI_API_KEY and GEMINI_MODEL_ID and 'gemini' not in _auto_layout_disabled_providers:
         try:
             model_name = GEMINI_MODEL_ID if GEMINI_MODEL_ID.startswith("models/") else f"models/{GEMINI_MODEL_ID}"
             url = f"https://generativelanguage.googleapis.com/v1/{model_name}:generateContent?key={GEMINI_API_KEY}"
@@ -1662,6 +1717,8 @@ def call_ai_auto_layout(layout_payload):
                             return layout
             else:
                 print(f"Gemini API error (auto_layout): {resp.status_code} {resp.text}")
+                if resp.status_code in {401, 403}:
+                    _disable_auto_layout_provider('gemini', f'HTTP {resp.status_code}')
         except Exception as exc:
             print(f"Gemini API error (auto_layout): {exc}")
 
@@ -1690,7 +1747,7 @@ def call_ai_auto_layout(layout_payload):
             print(f"OpenAI API error (auto_layout): {exc}")
 
     # Fallback to Hugging Face text-generation if available
-    if not HF_API_TOKEN or not HF_MODEL_ID:
+    if not HF_API_TOKEN or not HF_MODEL_ID or 'huggingface' in _auto_layout_disabled_providers:
         return None
 
     try:
@@ -1711,6 +1768,8 @@ def call_ai_auto_layout(layout_payload):
             return layout
     except Exception as exc:
         print(f"HF text_generation error (auto_layout): {exc}")
+        if 'image-text-to-text task is not supported' in str(exc).lower():
+            _disable_auto_layout_provider('huggingface', 'configured model is not a text-generation model')
 
     return None
 
