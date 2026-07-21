@@ -3374,6 +3374,57 @@ def trace_curve_with_dp(
     if h < 2 or w < 2:
         return np.full(h, np.nan), np.zeros(h)
 
+    # Viterbi cost grows with every raster row, while full-page logs commonly
+    # contain 18k-30k rows. Decode a bounded vertical representation and
+    # interpolate the path back to every original row; the subsequent
+    # full-resolution recentering passes still place each sample on the ink.
+    # This keeps two-pass black tracing inside normal reverse-proxy deadlines.
+    max_dp_rows = max(2000, int(os.environ.get('TURBOTIFF_MAX_DP_ROWS', '6000')))
+    if h > max_dp_rows:
+        h_small = int(max_dp_rows)
+        mask_small = cv2.resize(curve_mask, (w, h_small), interpolation=cv2.INTER_AREA)
+        row_scale = float(h - 1) / float(max(1, h_small - 1))
+        max_step_small = max(1, min(20, int(math.ceil(float(max_step) * row_scale))))
+        recursive_kwargs = {
+            'scale_min': scale_min,
+            'scale_max': scale_max,
+            'curve_type': curve_type,
+            'max_step': max_step_small,
+            'smooth_lambda': smooth_lambda,
+            'curv_lambda': curv_lambda,
+            'hot_side': hot_side,
+        }
+        # Phase 3 adds cylindrical decoding through this optional argument.
+        # Keep the optimization compatible with both the legacy and Phase 3
+        # signatures while those changes coexist in the working tree.
+        if 'wrap_enabled' in locals():
+            recursive_kwargs['wrap_enabled'] = bool(locals()['wrap_enabled'])
+        xs_small, conf_small = trace_curve_with_dp(mask_small, **recursive_kwargs)
+        if xs_small is None or xs_small.size == 0:
+            return xs_small, conf_small
+
+        source_rows = np.linspace(0.0, float(h - 1), xs_small.size, dtype=np.float32)
+        target_rows = np.arange(h, dtype=np.float32)
+        finite = np.isfinite(xs_small)
+        if not np.any(finite):
+            return np.full(h, np.nan, dtype=np.float32), np.zeros(h, dtype=np.float32)
+        xs_full = np.interp(
+            target_rows,
+            source_rows[finite],
+            xs_small[finite],
+        ).astype(np.float32)
+        conf_values = np.asarray(conf_small, dtype=np.float32)
+        conf_finite = np.isfinite(conf_values)
+        if np.any(conf_finite):
+            conf_full = np.interp(
+                target_rows,
+                source_rows[conf_finite],
+                conf_values[conf_finite],
+            ).astype(np.float32)
+        else:
+            conf_full = np.zeros(h, dtype=np.float32)
+        return xs_full, conf_full
+
     if not getattr(fast_tracer, "NUMBA_AVAILABLE", False) and w > 420:
         w_small = int(max(64, min(420, w)))
         if w_small < w:
