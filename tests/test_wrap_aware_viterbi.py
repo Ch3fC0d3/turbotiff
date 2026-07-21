@@ -13,6 +13,29 @@ def test_black_sonic_curves_preserve_short_trace_excursions():
     assert not web_app.should_preserve_black_trace_detail("green", "DTC")
 
 
+def test_sonic_hot_ink_refinement_prefers_curve_over_vertical_rail():
+    height, width = 180, 120
+    rows = np.arange(height, dtype=np.float32)
+    expected = 53.0 + 8.0 * np.sin(rows / 17.0)
+    roi = np.full((height, width, 3), 255, dtype=np.uint8)
+    points = np.column_stack((np.rint(expected).astype(np.int32), rows.astype(np.int32)))
+    cv2.polylines(roi, [points.reshape(-1, 1, 2)], False, (0, 0, 0), 2, cv2.LINE_AA)
+    cv2.line(roi, (88, 0), (88, height - 1), (0, 0, 0), 2)
+    for y in range(20, height, 30):
+        cv2.line(roi, (0, y), (width - 1, y), (80, 80, 80), 1)
+
+    initial = expected - 18.0
+    refined = web_app.refine_black_sonic_trace_to_hot_ink(
+        roi,
+        initial.astype(np.float32),
+        hot_side="right",
+        search_radius=60,
+    )
+
+    assert float(np.median(np.abs(refined - expected))) < 4.0
+    assert float(np.median(np.abs(refined - 88.0))) > 20.0
+
+
 def test_wrap_aware_viterbi_continues_across_track_boundary():
     height, width = 180, 64
     unwrapped = np.linspace(54.0, 78.0, height, dtype=np.float32)

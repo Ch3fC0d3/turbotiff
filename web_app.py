@@ -6030,6 +6030,83 @@ def should_preserve_black_trace_detail(mode, curve_type=None, curve_name=None, p
     return bool(preserve_wiggles or (identifiers & sonic_names))
 
 
+def refine_black_sonic_trace_to_hot_ink(
+    roi_bgr,
+    xs,
+    hot_side="right",
+    search_radius=None,
+):
+    """Pull a coarse black sonic trace toward nearby non-rail ink.
+
+    DTC curves commonly contain long, nearly horizontal excursions.  The
+    general black probability map can mistake those excursions for grid, while
+    a simple darkest-pixel snap can lock onto a continuous vertical rail.  This
+    pass uses raw adaptive ink, rejects candidates with strong long-column
+    occupancy, then selects the chart-reading side of the remaining local ink.
+    """
+    if roi_bgr is None or xs is None or not hasattr(xs, "size") or xs.size < 3:
+        return xs
+    try:
+        gray = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
+    except Exception:
+        return xs
+    h, w = gray.shape[:2]
+    if h < 3 or w < 3:
+        return xs
+
+    block = max(21, min(81, (w // 30) | 1))
+    dark = cv2.adaptiveThreshold(
+        gray,
+        255,
+        cv2.ADAPTIVE_THRESH_MEAN_C,
+        cv2.THRESH_BINARY_INV,
+        block,
+        4,
+    ) > 0
+    support_x = max(5, min(15, (w // 72) | 1))
+    support_y = max(9, min(31, (h // 2500) | 1))
+    support = cv2.blur(dark.astype(np.float32), (support_x, support_y))
+    row_window = max(51, min(401, (int(round(w * 0.28)) | 1)))
+    column_window = max(101, min(501, (h // 80) | 1))
+    local_row_occupancy = cv2.blur(dark.astype(np.float32), (row_window, 1))
+    long_column_occupancy = cv2.blur(dark.astype(np.float32), (1, column_window))
+
+    radius = int(search_radius) if search_radius is not None else int(round(w * 0.14))
+    radius = max(24, min(220, radius))
+    result = np.asarray(xs, dtype=np.float32).copy()
+    n = min(h, result.size)
+    choose_right = str(hot_side or "right").strip().lower() != "left"
+
+    for y in range(n):
+        current = float(result[y])
+        if not np.isfinite(current):
+            continue
+        center = int(round(current))
+        lo = max(0, center - radius)
+        hi = min(w, center + radius + 1)
+        eligible = (
+            dark[y, lo:hi]
+            & (support[y, lo:hi] >= 0.20)
+            & (local_row_occupancy[y, lo:hi] < 0.72)
+            & (long_column_occupancy[y, lo:hi] < 0.75)
+        )
+        candidates = np.flatnonzero(eligible)
+        if candidates.size:
+            selected = int(candidates[-1] if choose_right else candidates[0])
+            result[y] = float(lo + selected)
+
+    try:
+        smooth_window = max(9, min(31, (h // 1000) | 1))
+        result[:n] = pd.Series(result[:n]).rolling(
+            smooth_window,
+            center=True,
+            min_periods=1,
+        ).median().to_numpy(dtype=np.float32)
+    except Exception:
+        pass
+    return result
+
+
 def snap_black_trace_to_wide_darkest(roi_bgr, xs, search_radius=55, min_darkness_gain=0.12, neighbor_consistency=25.0):
     """For each row, search a wide window around the current trace point for
     a darker pixel and snap to it if it is clearly darker AND the shift stays
@@ -11976,6 +12053,16 @@ def digitize():
                     if wrap_enabled:
                         xs_smooth = np.mod(xs_smooth, float(mask.shape[1]))
                     xs[valid_mask] = xs_smooth[valid_mask]
+                except Exception:
+                    pass
+
+            if preserve_black_detail:
+                try:
+                    xs = refine_black_sonic_trace_to_hot_ink(
+                        roi,
+                        xs,
+                        hot_side=hot_side,
+                    )
                 except Exception:
                     pass
 
