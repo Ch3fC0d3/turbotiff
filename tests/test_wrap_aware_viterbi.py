@@ -21,8 +21,16 @@ def test_sonic_hot_ink_refinement_prefers_curve_over_vertical_rail():
     points = np.column_stack((np.rint(expected).astype(np.int32), rows.astype(np.int32)))
     cv2.polylines(roi, [points.reshape(-1, 1, 2)], False, (0, 0, 0), 2, cv2.LINE_AA)
     cv2.line(roi, (88, 0), (88, height - 1), (0, 0, 0), 2)
+    for y in range(2, height, 7):
+        cv2.circle(roi, (105, y), 1, (0, 0, 0), -1)
     for y in range(20, height, 30):
         cv2.line(roi, (0, y), (width - 1, y), (80, 80, 80), 1)
+
+    # A real wrapped DTC excursion can run horizontally across a large part of
+    # the track for several scan rows. Its hot edge is signal, not grid.
+    for y in range(72, 79):
+        x0 = int(round(expected[y]))
+        cv2.line(roi, (x0, y), (x0 + 28, y), (0, 0, 0), 2)
 
     initial = expected - 18.0
     refined = web_app.refine_black_sonic_trace_to_hot_ink(
@@ -34,6 +42,8 @@ def test_sonic_hot_ink_refinement_prefers_curve_over_vertical_rail():
 
     assert float(np.median(np.abs(refined - expected))) < 4.0
     assert float(np.median(np.abs(refined - 88.0))) > 20.0
+    assert float(np.median(refined[73:78] - expected[73:78])) > 20.0
+    assert float(np.median(np.abs(refined - 105.0))) > 30.0
 
 
 def test_wrap_aware_viterbi_continues_across_track_boundary():

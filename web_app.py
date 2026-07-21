@@ -2635,6 +2635,9 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
 
     enable_grid_suppression = ui_filters.get('enable_grid_suppression', True)
     enable_curve_masking = ui_filters.get('enable_curve_masking', True)
+    preserve_horizontal_excursions = bool(
+        ui_filters.get('preserve_horizontal_excursions', False)
+    )
     try:
         guided_grid_x = float(ui_filters.get('grid_spacing_x_px'))
         if not np.isfinite(guided_grid_x) or guided_grid_x <= 0:
@@ -3080,14 +3083,26 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
                 # Lighter grid removal since we already did aggressive removal
                 vertical_len = guided_v_len or max(8, min(40, h // 3))
                 k_v = cv2.getStructuringElement(cv2.MORPH_RECT, (1, vertical_len))
-                # AGGRESSIVE: Remove horizontal lines > 10px to kill grid shelves
-                k_h = cv2.getStructuringElement(cv2.MORPH_RECT, (guided_h_len or 12, 1))
+                # Sonic curves can contain real, nearly horizontal wrap
+                # excursions spanning much of the track.  For those curves,
+                # only classify almost-full-width strokes as grid.
+                horizontal_len = (
+                    max(12, int(round(w * 0.85)))
+                    if preserve_horizontal_excursions
+                    else (guided_h_len or 12)
+                )
+                k_h = cv2.getStructuringElement(cv2.MORPH_RECT, (horizontal_len, 1))
             else:
                 # Standard grid removal for non-B&W images
                 vertical_len = guided_v_len or max(10, min(60, h // 2))
                 k_v = cv2.getStructuringElement(cv2.MORPH_RECT, (1, vertical_len))
                 # AGGRESSIVE: Remove horizontal lines > 15px to kill grid shelves even if not detected as B&W
-                k_h = cv2.getStructuringElement(cv2.MORPH_RECT, (guided_h_len or 15, 1))
+                horizontal_len = (
+                    max(15, int(round(w * 0.85)))
+                    if preserve_horizontal_excursions
+                    else (guided_h_len or 15)
+                )
+                k_h = cv2.getStructuringElement(cv2.MORPH_RECT, (horizontal_len, 1))
             
             v_lines = cv2.morphologyEx(color_mask, cv2.MORPH_OPEN, k_v)
             h_lines = cv2.morphologyEx(color_mask, cv2.MORPH_OPEN, k_h)
@@ -3618,7 +3633,8 @@ def trace_curve_with_dp(
     # opening. This is more discriminative than a raw row-fraction threshold.
     if h >= 4 and w >= 8:
         # Use a slightly smaller kernel for horizontal lines so we catch broken grid rails too
-        horiz_kernel_w = max(3, w // 5)
+        sonic_curve = curve_type_upper in {"DTC", "DT", "DTCO", "AC", "SONIC"}
+        horiz_kernel_w = max(3, int(round(w * 0.85)) if sonic_curve else w // 5)
         horiz_kern = cv2.getStructuringElement(cv2.MORPH_RECT, (horiz_kernel_w, 1))
         horiz_detected = cv2.morphologyEx(bin_mask.astype(np.uint8), cv2.MORPH_OPEN, horiz_kern)
         horiz_row_frac = horiz_detected.mean(axis=1)
@@ -6036,13 +6052,12 @@ def refine_black_sonic_trace_to_hot_ink(
     hot_side="right",
     search_radius=None,
 ):
-    """Pull a coarse black sonic trace toward nearby non-rail ink.
+    """Follow the hot edge of the *same* nearby sonic stroke.
 
-    DTC curves commonly contain long, nearly horizontal excursions.  The
-    general black probability map can mistake those excursions for grid, while
-    a simple darkest-pixel snap can lock onto a continuous vertical rail.  This
-    pass uses raw adaptive ink, rejects candidates with strong long-column
-    occupancy, then selects the chart-reading side of the remaining local ink.
+    Wrapped DTC curves can contain long, nearly horizontal excursions.  Choose
+    the chart-reading edge of the dark run attached to the incoming path, not
+    the farthest dark pixel in the search band.  That distinction prevents a
+    dotted annotation column or neighboring curve from producing stair steps.
     """
     if roi_bgr is None or xs is None or not hasattr(xs, "size") or xs.size < 3:
         return xs
@@ -6063,40 +6078,77 @@ def refine_black_sonic_trace_to_hot_ink(
         block,
         4,
     ) > 0
-    support_x = max(5, min(15, (w // 72) | 1))
-    support_y = max(9, min(31, (h // 2500) | 1))
-    support = cv2.blur(dark.astype(np.float32), (support_x, support_y))
-    row_window = max(51, min(401, (int(round(w * 0.28)) | 1)))
+    support = cv2.blur(dark.astype(np.float32), (7, 11))
     column_window = max(101, min(501, (h // 80) | 1))
-    local_row_occupancy = cv2.blur(dark.astype(np.float32), (row_window, 1))
-    long_column_occupancy = cv2.blur(dark.astype(np.float32), (1, column_window))
+    row_window = max(51, min(401, (int(round(w * 0.42)) | 1)))
+    long_column_occupancy = cv2.blur(
+        dark.astype(np.float32),
+        (1, column_window),
+    )
+    local_row_occupancy = cv2.blur(
+        dark.astype(np.float32),
+        (row_window, 1),
+    )
 
-    radius = int(search_radius) if search_radius is not None else int(round(w * 0.14))
+    radius = int(search_radius) if search_radius is not None else int(round(w * 0.25))
     radius = max(24, min(220, radius))
     result = np.asarray(xs, dtype=np.float32).copy()
     n = min(h, result.size)
     choose_right = str(hot_side or "right").strip().lower() != "left"
 
     for y in range(n):
-        current = float(result[y])
+        current = float(xs[y])
         if not np.isfinite(current):
             continue
+        # A nearly full row is a grid rule, page border, or filled block.  Hold
+        # the incoming path through it instead of choosing either edge.
+        if float(np.mean(dark[y])) >= 0.72:
+            continue
         center = int(round(current))
-        lo = max(0, center - radius)
-        hi = min(w, center + radius + 1)
+        if choose_right:
+            lo = max(0, center - 5)
+            hi = min(w, center + radius + 1)
+        else:
+            lo = max(0, center - radius)
+            hi = min(w, center + 6)
         eligible = (
             dark[y, lo:hi]
-            & (support[y, lo:hi] >= 0.20)
-            & (local_row_occupancy[y, lo:hi] < 0.72)
+            & (support[y, lo:hi] >= 0.12)
             & (long_column_occupancy[y, lo:hi] < 0.75)
+            & (local_row_occupancy[y, lo:hi] < 0.72)
         )
-        candidates = np.flatnonzero(eligible)
-        if candidates.size:
-            selected = int(candidates[-1] if choose_right else candidates[0])
-            result[y] = float(lo + selected)
+        changes = np.diff(np.r_[False, eligible, False].astype(np.int8))
+        starts = np.flatnonzero(changes == 1)
+        ends = np.flatnonzero(changes == -1) - 1
+        best = None
+        for start, end in zip(starts, ends):
+            run_left = int(lo + start)
+            run_right = int(lo + end)
+            run_width = run_right - run_left + 1
+            if run_width >= int(round(w * 0.82)):
+                continue
+            run_slice = slice(run_left, run_right + 1)
+            support_peak = float(np.max(support[y, run_slice]))
+            rail_occupancy = float(np.mean(long_column_occupancy[y, run_slice]))
+            if choose_right:
+                distance = max(0.0, float(run_left) - current)
+            else:
+                distance = max(0.0, current - float(run_right))
+            score = (
+                support_peak
+                - rail_occupancy
+                - 0.001 * distance
+                + 0.01 * min(run_width, 30)
+            )
+            selected_edge = run_right if choose_right else run_left
+            candidate = (score, selected_edge)
+            if best is None or candidate > best:
+                best = candidate
+        if best is not None and best[0] > 0.0:
+            result[y] = float(best[1])
 
     try:
-        smooth_window = max(9, min(31, (h // 1000) | 1))
+        smooth_window = 5
         result[:n] = pd.Series(result[:n]).rolling(
             smooth_window,
             center=True,
@@ -11516,6 +11568,13 @@ def digitize():
         align_channels = bool(c.get('align_channels'))
         preserve_wiggles = bool(c.get('preserve_wiggles'))
         crest_boost = bool(c.get('crest_boost'))
+        curve_type = c.get('type', 'GR')
+        preserve_black_detail = should_preserve_black_trace_detail(
+            mode,
+            curve_type=curve_type,
+            curve_name=name,
+            preserve_wiggles=preserve_wiggles,
+        )
         if not hot_side and np.isfinite(left_value) and np.isfinite(right_value):
             hot_side = 'right' if right_value >= left_value else 'left'
 
@@ -11579,6 +11638,7 @@ def digitize():
         curve_ui_filters = dict(preview_filters)
         curve_ui_filters['enable_grid_suppression'] = enable_grid_suppression
         curve_ui_filters['enable_curve_masking'] = enable_curve_masking
+        curve_ui_filters['preserve_horizontal_excursions'] = preserve_black_detail
         if analysis_guidance:
             curve_ui_filters['grid_spacing_x_px'] = analysis_guidance.get('horizontal_grid_spacing_px')
             curve_ui_filters['grid_spacing_y_px'] = analysis_guidance.get('vertical_grid_spacing_px')
@@ -11629,14 +11689,6 @@ def digitize():
             # Debug info removed
 
         # NEW: Use DP-based smooth path tracing with plausibility checks
-        curve_type = c.get('type', 'GR')  # Get curve type for plausibility
-        preserve_black_detail = should_preserve_black_trace_detail(
-            mode,
-            curve_type=curve_type,
-            curve_name=name,
-            preserve_wiggles=preserve_wiggles,
-        )
-
         # If viterbi is disabled, use a simple argmax over the mask
         if not enable_viterbi:
             h_mask, w_mask = mask.shape
@@ -11930,7 +11982,11 @@ def digitize():
                     hot_side=hot_side,
                     wrap_enabled=wrap_enabled,
                 )
-                if xs_guide is not None and xs_guide.size > 0:
+                if (
+                    not preserve_black_detail
+                    and xs_guide is not None
+                    and xs_guide.size > 0
+                ):
                     mask = score_and_suppress_black_components(mask, xs_guide, curve_type=curve_type)
             except Exception as e:
                 print(f"⚠️ score_and_suppress_black_components failed: {e}")
