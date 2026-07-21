@@ -10,7 +10,7 @@ except Exception:
         return _wrap
 
 @jit(nopython=True, cache=True)
-def run_viterbi(cost, prob, max_step, smooth_lambda, curv_lambda):
+def run_viterbi(cost, prob, max_step, smooth_lambda, curv_lambda, wrap_enabled=False):
     """
     Optimized Viterbi algorithm for curve tracing using Numba.
     
@@ -20,6 +20,7 @@ def run_viterbi(cost, prob, max_step, smooth_lambda, curv_lambda):
         max_step: int, maximum horizontal jump
         smooth_lambda: float, penalty for 1st derivative (jumps)
         curv_lambda: float, penalty for 2nd derivative (kinks)
+        wrap_enabled: allow circular transitions between the track edges
         
     Returns:
         xs: (h,) float32 array of x-coordinates (with NaNs)
@@ -38,22 +39,38 @@ def run_viterbi(cost, prob, max_step, smooth_lambda, curv_lambda):
     # Forward pass
     for y in range(1, h):
         for x in range(w):
-            x0 = max(0, x - max_step)
-            x1 = min(w, x + max_step + 1)
-            
             best_val = big
             best_xp = -1
-            
-            for xp in range(x0, x1):
+
+            candidate_count = 2 * max_step + 1 if wrap_enabled else 0
+            x0 = max(0, x - max_step)
+            x1 = min(w, x + max_step + 1)
+            loop_count = candidate_count if wrap_enabled else x1 - x0
+            for candidate_idx in range(loop_count):
+                if wrap_enabled:
+                    dx = candidate_idx - max_step
+                    xp = x - dx
+                    if xp < 0:
+                        xp += w
+                    elif xp >= w:
+                        xp -= w
+                else:
+                    xp = x0 + candidate_idx
+                    dx = x - xp
                 # 1st derivative penalty
-                dx = x - xp
                 smooth_penalty = smooth_lambda * (dx * dx)
                 
                 # 2nd derivative penalty
                 if curv_lambda > 0.0 and y >= 2:
                     xpp = prev[y - 1, xp]
                     if xpp >= 0:
-                        k = x - 2 * xp + xpp
+                        prev_dx = xp - xpp
+                        if wrap_enabled:
+                            if 2 * prev_dx > w:
+                                prev_dx -= w
+                            elif 2 * prev_dx < -w:
+                                prev_dx += w
+                        k = dx - prev_dx
                         smooth_penalty += curv_lambda * (k * k)
                 
                 v = dp[y - 1, xp] + cost[y, x] + smooth_penalty
@@ -96,37 +113,36 @@ def run_viterbi(cost, prob, max_step, smooth_lambda, curv_lambda):
             
         p_best = prob[y, x]
         
-        # Second best in window
+        # Compare the selected path pixel against the strongest *other* local
+        # candidate. The selected point is not necessarily the row maximum;
+        # continuity can intentionally choose a weaker pixel.
+        best_other = -1.0
         x0 = max(0, x - max_step)
         x1 = min(w, x + max_step + 1)
-        
-        # We need second best value
-        max_val = -1.0
-        second_max_val = -1.0
-        
-        for xi in range(x0, x1):
+        candidate_count = 2 * max_step + 1 if wrap_enabled else x1 - x0
+        for candidate_idx in range(candidate_count):
+            if wrap_enabled:
+                local_dx = candidate_idx - max_step
+                xi = x - local_dx
+                if xi < 0:
+                    xi += w
+                elif xi >= w:
+                    xi -= w
+            else:
+                xi = x0 + candidate_idx
+            if xi == x:
+                continue
             val = prob[y, xi]
-            if val > max_val:
-                second_max_val = max_val
-                max_val = val
-            elif val > second_max_val:
-                second_max_val = val
-                
-        # Confidence = p_best - p_second
-        # If there was only one pixel or max_val was p_best
-        # Logic matches: p_second = probs_sorted[1] if size > 1 else 0.0
-        
-        # If x is the max_val, then p_best is max_val. 
-        # We want the *next* best that isn't p_best? 
-        # The original code sorts the window. 
-        # If p_best is indeed the max in the window (which it should be if it's on the path or close), 
-        # then second_max_val is what we want.
-        
-        conf = 0.0
-        if second_max_val >= 0:
-            conf = p_best - second_max_val
-        else:
-            conf = p_best
+            if val > best_other:
+                best_other = val
+
+        if best_other < 0.0:
+            best_other = 0.0
+        conf = p_best - best_other
+        if conf < 0.0:
+            conf = 0.0
+        elif conf > 1.0:
+            conf = 1.0
             
         confidence[y] = conf
         

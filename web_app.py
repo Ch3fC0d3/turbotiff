@@ -3351,6 +3351,7 @@ def trace_curve_with_dp(
     smooth_lambda=0.5,
     curv_lambda=0.0,
     hot_side=None,
+    wrap_enabled=False,
 ):
     """Trace a curve using dynamic programming for smooth path finding.
     
@@ -3362,6 +3363,7 @@ def trace_curve_with_dp(
         max_step: Max horizontal movement per row (pixels)
         smooth_lambda: First-derivative smoothness penalty weight (penalizes jumps)
         curv_lambda: Second-derivative curvature penalty weight (penalizes kinks)
+        wrap_enabled: Allow circular transitions between the track edges
     
     Returns:
         xs: Array of x-coordinates (one per row), with np.nan for low-confidence rows
@@ -3439,6 +3441,7 @@ def trace_curve_with_dp(
                 smooth_lambda=smooth_lambda,
                 curv_lambda=curv_lambda,
                 hot_side=hot_side,
+                wrap_enabled=wrap_enabled,
             )
             if xs_small is None or xs_small.size == 0:
                 return xs_small, conf_small
@@ -3632,7 +3635,8 @@ def trace_curve_with_dp(
         prob.astype(np.float32), 
         int(max_step), 
         float(smooth_lambda), 
-        float(curv_lambda)
+        float(curv_lambda),
+        bool(wrap_enabled),
     )
     
     # Run optimized DP (Backward Pass)
@@ -3642,7 +3646,8 @@ def trace_curve_with_dp(
         prob[::-1].astype(np.float32), 
         int(max_step), 
         float(smooth_lambda), 
-        float(curv_lambda)
+        float(curv_lambda),
+        bool(wrap_enabled),
     )
     # Flip results back to match original orientation
     xs_bwd = xs_bwd_flipped[::-1]
@@ -3688,6 +3693,17 @@ def trace_curve_with_dp(
         axis=1,
     )
     candidate_valid = np.isfinite(candidates)
+
+    def _trace_delta(x_cur, x_prev):
+        dx = float(x_cur) - float(x_prev)
+        if wrap_enabled and w > 1:
+            dx = (dx + 0.5 * w) % w - 0.5 * w
+        return dx
+
+    def _trace_midpoint(x1, x2):
+        if not wrap_enabled or w <= 1:
+            return 0.5 * (float(x1) + float(x2))
+        return (float(x1) + 0.5 * _trace_delta(x2, x1)) % w
 
     def _candidate_cost(y_idx, x_val, conf_val):
         x_idx = int(min(w - 1, max(0, int(round(float(x_val))))))
@@ -3737,7 +3753,7 @@ def trace_curve_with_dp(
                         continue
 
                     x_prev = float(candidates[yy - 1, prev_state])
-                    dx = x_cur - x_prev
+                    dx = _trace_delta(x_cur, x_prev)
                     transition_cost = merge_smooth_lambda * (dx * dx)
                     if prev_state != state:
                         transition_cost += switch_penalty
@@ -3784,8 +3800,8 @@ def trace_curve_with_dp(
             valid1 = bool(candidate_valid[yy, 0])
             valid2 = bool(candidate_valid[yy, 1])
 
-            if valid1 and valid2 and abs(float(v1) - float(v2)) <= merge_tol:
-                xs[yy] = float(v1 + v2) * 0.5
+            if valid1 and valid2 and abs(_trace_delta(v1, v2)) <= merge_tol:
+                xs[yy] = _trace_midpoint(v1, v2)
                 confidence[yy] = float(candidate_conf[yy, 0] + candidate_conf[yy, 1]) * 0.5
                 continue
 
@@ -5897,7 +5913,25 @@ def refine_to_stroke_centerline(mask, xs, threshold_ratio=0.5, window_size=None)
     return xs_ref
 
 
-def guard_trace_outliers_rolling_median(xs, window=21, max_deviation=45.0):
+def _unwrap_trace_for_filtering(xs, wrap_width):
+    """Lift visible wrapped x positions onto a continuous coordinate axis."""
+    values = np.asarray(xs, dtype=np.float32).copy()
+    width = float(wrap_width or 0.0)
+    if width <= 1.0 or values.size < 2:
+        return values
+    previous = np.nan
+    for idx in range(values.size):
+        current = float(values[idx])
+        if not np.isfinite(current):
+            continue
+        if np.isfinite(previous):
+            current += round((float(previous) - current) / width) * width
+            values[idx] = current
+        previous = current
+    return values
+
+
+def guard_trace_outliers_rolling_median(xs, window=21, max_deviation=45.0, wrap_width=None):
     """NaN out trace points whose horizontal position is absurdly far from a
     rolling median, then linearly interpolate across them.
 
@@ -5919,7 +5953,7 @@ def guard_trace_outliers_rolling_median(xs, window=21, max_deviation=45.0):
     if xs is None or not hasattr(xs, "size") or xs.size < 5:
         return xs
     try:
-        s = pd.Series(xs.astype(np.float32))
+        s = pd.Series(_unwrap_trace_for_filtering(xs, wrap_width))
     except Exception:
         return xs
     win = max(5, int(window) | 1)  # force odd
@@ -5933,10 +5967,13 @@ def guard_trace_outliers_rolling_median(xs, window=21, max_deviation=45.0):
         return xs
     s[outliers] = np.nan
     s = s.interpolate(method="linear", limit_direction="both", limit=50)
-    return s.to_numpy(dtype=np.float32)
+    result = s.to_numpy(dtype=np.float32)
+    if wrap_width is not None and float(wrap_width) > 1.0:
+        result = np.mod(result, float(wrap_width)).astype(np.float32)
+    return result
 
 
-def guard_trace_velocity(xs, max_dx=6.0):
+def guard_trace_velocity(xs, max_dx=6.0, wrap_width=None):
     """Cap row-to-row horizontal displacement and interpolate across spikes.
 
     Micro-crests created by snap_black_trace_to_wide_darkest are typically
@@ -5947,7 +5984,7 @@ def guard_trace_velocity(xs, max_dx=6.0):
     if xs is None or not hasattr(xs, "size") or xs.size < 5:
         return xs
     try:
-        s = pd.Series(xs.astype(np.float32))
+        s = pd.Series(_unwrap_trace_for_filtering(xs, wrap_width))
     except Exception:
         return xs
     dx = s.diff().abs()
@@ -5956,7 +5993,10 @@ def guard_trace_velocity(xs, max_dx=6.0):
         return xs
     s[spikes] = np.nan
     s = s.interpolate(method="linear", limit_direction="both", limit=10)
-    return s.to_numpy(dtype=np.float32)
+    result = s.to_numpy(dtype=np.float32)
+    if wrap_width is not None and float(wrap_width) > 1.0:
+        result = np.mod(result, float(wrap_width)).astype(np.float32)
+    return result
 
 
 def snap_black_trace_to_wide_darkest(roi_bgr, xs, search_radius=55, min_darkness_gain=0.12, neighbor_consistency=25.0):
@@ -11310,6 +11350,7 @@ def digitize():
         right_px = int(c['right_px'])
         left_value = float(c['left_value'])
         right_value = float(c['right_value'])
+        wrap_enabled = bool(c.get('wrapped'))
         mode = c.get('mode', 'black')
         hot_side = c.get('hot_side')
         pixel_perfect = bool(c.get('pixel_perfect'))
@@ -11724,6 +11765,7 @@ def digitize():
                     smooth_lambda=dp_smooth_lambda,
                     curv_lambda=dp_curv_lambda,
                     hot_side=hot_side,
+                    wrap_enabled=wrap_enabled,
                 )
                 if xs_guide is not None and xs_guide.size > 0:
                     mask = score_and_suppress_black_components(mask, xs_guide, curve_type=curve_type)
@@ -11740,6 +11782,7 @@ def digitize():
                 smooth_lambda=dp_smooth_lambda,
                 curv_lambda=dp_curv_lambda,
                 hot_side=hot_side,
+                wrap_enabled=wrap_enabled,
             )
 
             # Snap the DP path toward obvious local maxima in the prob mask
@@ -11778,7 +11821,12 @@ def digitize():
             # deviation > ~45 px is almost never a real excursion on a log
             # track because legitimate peaks are curved, not instantaneous.
             try:
-                xs = guard_trace_outliers_rolling_median(xs, window=21, max_deviation=20.0)
+                xs = guard_trace_outliers_rolling_median(
+                    xs,
+                    window=21,
+                    max_deviation=20.0,
+                    wrap_width=mask.shape[1] if wrap_enabled else None,
+                )
             except Exception:
                 pass
 
@@ -11786,28 +11834,38 @@ def digitize():
             # line over several rows instead of the darkest single-row crest.
             # This avoids horizontal grid bars and filled blocks pulling the
             # trace into shelf artifacts.
-            try:
-                xs = refine_black_trace_to_continuous_line(
-                    roi,
-                    xs,
-                    search_radius=20,
-                    guide_window=31,
-                    vertical_window=13,
-                )
-            except Exception:
-                pass
+            if not wrap_enabled:
+                try:
+                    xs = refine_black_trace_to_continuous_line(
+                        roi,
+                        xs,
+                        search_radius=20,
+                        guide_window=31,
+                        vertical_window=13,
+                    )
+                except Exception:
+                    pass
 
             # Second outlier pass: the line-following pass is conservative,
             # but keep the tighter guard as protection against noisy scans.
             try:
-                xs = guard_trace_outliers_rolling_median(xs, window=15, max_deviation=15.0)
+                xs = guard_trace_outliers_rolling_median(
+                    xs,
+                    window=15,
+                    max_deviation=15.0,
+                    wrap_width=mask.shape[1] if wrap_enabled else None,
+                )
             except Exception:
                 pass
 
             # Velocity guard: micro-crests jump 10-20 px in 1-2 rows.
             # Real geology moves gradually. Cap |dx/dy| to ~6 px/row.
             try:
-                xs = guard_trace_velocity(xs, max_dx=6.0)
+                xs = guard_trace_velocity(
+                    xs,
+                    max_dx=6.0,
+                    wrap_width=mask.shape[1] if wrap_enabled else None,
+                )
             except Exception:
                 pass
 
@@ -11815,12 +11873,17 @@ def digitize():
             # the outlier guards. The colored pipeline already does this.
             try:
                 from scipy.signal import medfilt
-                xs_filled = xs.copy()
+                xs_filled = _unwrap_trace_for_filtering(
+                    xs,
+                    mask.shape[1] if wrap_enabled else None,
+                )
                 nan_mask = ~np.isfinite(xs_filled)
                 if nan_mask.any() and np.isfinite(xs_filled).any():
                     xs_filled[nan_mask] = np.nanmedian(xs_filled)
                 xs_smooth = medfilt(xs_filled, kernel_size=3)
                 valid_mask = np.isfinite(xs)
+                if wrap_enabled:
+                    xs_smooth = np.mod(xs_smooth, float(mask.shape[1]))
                 xs[valid_mask] = xs_smooth[valid_mask]
             except Exception:
                 pass
@@ -11848,7 +11911,7 @@ def digitize():
                 s = s.ffill(limit=max_gap).bfill(limit=max_gap)
             xs = s.to_numpy(dtype=np.float32)
 
-        if mode not in colored_modes:
+        if mode not in colored_modes and not wrap_enabled:
             try:
                 xs = suppress_black_grid_lock_runs(roi, xs, curve_type=curve_type)
             except Exception:
