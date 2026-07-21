@@ -5,6 +5,14 @@ import fast_tracer
 import web_app
 
 
+def test_black_sonic_curves_preserve_short_trace_excursions():
+    assert web_app.should_preserve_black_trace_detail("black", "DTC")
+    assert web_app.should_preserve_black_trace_detail("black", curve_name="DT")
+    assert web_app.should_preserve_black_trace_detail("black", "RHOB", preserve_wiggles=True)
+    assert not web_app.should_preserve_black_trace_detail("black", "RHOB")
+    assert not web_app.should_preserve_black_trace_detail("green", "DTC")
+
+
 def test_wrap_aware_viterbi_continues_across_track_boundary():
     height, width = 180, 64
     unwrapped = np.linspace(54.0, 78.0, height, dtype=np.float32)

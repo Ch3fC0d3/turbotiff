@@ -6013,6 +6013,23 @@ def guard_trace_velocity(xs, max_dx=6.0, wrap_width=None):
     return result
 
 
+def should_preserve_black_trace_detail(mode, curve_type=None, curve_name=None, preserve_wiggles=False):
+    """Return True for black sonic traces whose short excursions are signal.
+
+    The generic black cleanup assumes 10-20 pixel micro-crests are noise.  That
+    assumption is wrong for DTC/DT-style curves, especially on wrapped tracks,
+    where the printed line legitimately changes direction over only a few rows.
+    """
+    if str(mode or "").strip().lower() != "black":
+        return False
+    identifiers = {
+        str(curve_type or "").strip().upper(),
+        str(curve_name or "").strip().upper(),
+    }
+    sonic_names = {"DTC", "DT", "DTCO", "AC", "SONIC"}
+    return bool(preserve_wiggles or (identifiers & sonic_names))
+
+
 def snap_black_trace_to_wide_darkest(roi_bgr, xs, search_radius=55, min_darkness_gain=0.12, neighbor_consistency=25.0):
     """For each row, search a wide window around the current trace point for
     a darker pixel and snap to it if it is clearly darker AND the shift stays
@@ -11536,6 +11553,12 @@ def digitize():
 
         # NEW: Use DP-based smooth path tracing with plausibility checks
         curve_type = c.get('type', 'GR')  # Get curve type for plausibility
+        preserve_black_detail = should_preserve_black_trace_detail(
+            mode,
+            curve_type=curve_type,
+            curve_name=name,
+            preserve_wiggles=preserve_wiggles,
+        )
 
         # If viterbi is disabled, use a simple argmax over the mask
         if not enable_viterbi:
@@ -11883,73 +11906,78 @@ def digitize():
             # drew a horizontal line to the chart edge. Rolling-median
             # deviation > ~45 px is almost never a real excursion on a log
             # track because legitimate peaks are curved, not instantaneous.
-            try:
-                xs = guard_trace_outliers_rolling_median(
-                    xs,
-                    window=21,
-                    max_deviation=20.0,
-                    wrap_width=mask.shape[1] if wrap_enabled else None,
-                )
-            except Exception:
-                pass
+            if not preserve_black_detail:
+                try:
+                    xs = guard_trace_outliers_rolling_median(
+                        xs,
+                        window=21,
+                        max_deviation=20.0,
+                        wrap_width=mask.shape[1] if wrap_enabled else None,
+                    )
+                except Exception:
+                    pass
 
             # Second pass: follow nearby ink that behaves like a continuous
             # line over several rows instead of the darkest single-row crest.
             # This avoids horizontal grid bars and filled blocks pulling the
             # trace into shelf artifacts.
-            try:
-                xs = refine_black_trace_to_continuous_line(
-                    roi,
-                    xs,
-                    search_radius=20,
-                    guide_window=31,
-                    vertical_window=13,
-                    wrap_width=mask.shape[1] if wrap_enabled else None,
-                )
-            except Exception:
-                pass
+            if not preserve_black_detail:
+                try:
+                    xs = refine_black_trace_to_continuous_line(
+                        roi,
+                        xs,
+                        search_radius=20,
+                        guide_window=31,
+                        vertical_window=13,
+                        wrap_width=mask.shape[1] if wrap_enabled else None,
+                    )
+                except Exception:
+                    pass
 
             # Second outlier pass: the line-following pass is conservative,
             # but keep the tighter guard as protection against noisy scans.
-            try:
-                xs = guard_trace_outliers_rolling_median(
-                    xs,
-                    window=15,
-                    max_deviation=15.0,
-                    wrap_width=mask.shape[1] if wrap_enabled else None,
-                )
-            except Exception:
-                pass
+            if not preserve_black_detail:
+                try:
+                    xs = guard_trace_outliers_rolling_median(
+                        xs,
+                        window=15,
+                        max_deviation=15.0,
+                        wrap_width=mask.shape[1] if wrap_enabled else None,
+                    )
+                except Exception:
+                    pass
 
             # Velocity guard: micro-crests jump 10-20 px in 1-2 rows.
             # Real geology moves gradually. Cap |dx/dy| to ~6 px/row.
-            try:
-                xs = guard_trace_velocity(
-                    xs,
-                    max_dx=6.0,
-                    wrap_width=mask.shape[1] if wrap_enabled else None,
-                )
-            except Exception:
-                pass
+            if not preserve_black_detail:
+                try:
+                    xs = guard_trace_velocity(
+                        xs,
+                        max_dx=6.0,
+                        wrap_width=mask.shape[1] if wrap_enabled else None,
+                    )
+                except Exception:
+                    pass
 
             # Median filter: remove 1-3 row horizontal glitches that survive
             # the outlier guards. The colored pipeline already does this.
-            try:
-                from scipy.signal import medfilt
-                xs_filled = _unwrap_trace_for_filtering(
-                    xs,
-                    mask.shape[1] if wrap_enabled else None,
-                )
-                nan_mask = ~np.isfinite(xs_filled)
-                if nan_mask.any() and np.isfinite(xs_filled).any():
-                    xs_filled[nan_mask] = np.nanmedian(xs_filled)
-                xs_smooth = medfilt(xs_filled, kernel_size=3)
-                valid_mask = np.isfinite(xs)
-                if wrap_enabled:
-                    xs_smooth = np.mod(xs_smooth, float(mask.shape[1]))
-                xs[valid_mask] = xs_smooth[valid_mask]
-            except Exception:
-                pass
+            if not preserve_black_detail:
+                try:
+                    from scipy.signal import medfilt
+                    xs_filled = _unwrap_trace_for_filtering(
+                        xs,
+                        mask.shape[1] if wrap_enabled else None,
+                    )
+                    nan_mask = ~np.isfinite(xs_filled)
+                    if nan_mask.any() and np.isfinite(xs_filled).any():
+                        xs_filled[nan_mask] = np.nanmedian(xs_filled)
+                    xs_smooth = medfilt(xs_filled, kernel_size=3)
+                    valid_mask = np.isfinite(xs)
+                    if wrap_enabled:
+                        xs_smooth = np.mod(xs_smooth, float(mask.shape[1]))
+                    xs[valid_mask] = xs_smooth[valid_mask]
+                except Exception:
+                    pass
 
         # Do not run the old non-GR black smoother here. After the dark-run
         # recenter/hot-side bias pass, even light smoothing pulls RHOB/DT-type
@@ -11977,7 +12005,7 @@ def digitize():
             if wrap_enabled:
                 xs = np.mod(xs, float(width_px)).astype(np.float32)
 
-        if mode not in colored_modes:
+        if mode not in colored_modes and not preserve_black_detail:
             try:
                 xs = suppress_black_grid_lock_runs(
                     roi,
