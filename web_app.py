@@ -5781,7 +5781,7 @@ def ensure_gr_peak_crests(xs, prob_map, hot_side=None, min_prob=0.002, y_merge_w
     return xs_out
 
 
-def refine_to_stroke_centerline(mask, xs, threshold_ratio=0.5, window_size=None):
+def refine_to_stroke_centerline(mask, xs, threshold_ratio=0.5, window_size=None, wrap_width=None):
     """Refine trace to the centerline of the curve stroke width.
     
     Uses a half-maximum window (FWHM) to estimate stroke width and blends
@@ -5798,6 +5798,7 @@ def refine_to_stroke_centerline(mask, xs, threshold_ratio=0.5, window_size=None)
     
     prob = mask.astype(np.float32) / 255.0
     xs_ref = xs.copy()
+    circular = wrap_width is not None and float(wrap_width) > 1.0
     
     valid_rows = np.where(np.isfinite(xs_ref))[0]
     try:
@@ -5811,13 +5812,21 @@ def refine_to_stroke_centerline(mask, xs, threshold_ratio=0.5, window_size=None)
     for y in valid_rows:
         x_prev = float(xs_ref[y])
         x_c = int(round(x_prev))
-        if x_c < 0 or x_c >= w:
+        if circular:
+            x_c %= w
+        elif x_c < 0 or x_c >= w:
             continue
         
         row = prob[y]
-        x0 = max(0, x_c - search_radius)
-        x1 = min(w, x_c + search_radius + 1)
-        window = row[x0:x1]
+        if circular:
+            offsets = np.arange(-search_radius, search_radius + 1, dtype=np.int32)
+            sample_cols = (x_c + offsets) % w
+            window = row[sample_cols]
+            x0 = x_c - search_radius
+        else:
+            x0 = max(0, x_c - search_radius)
+            x1 = min(w, x_c + search_radius + 1)
+            window = row[x0:x1]
         if window.size == 0:
             continue
         
@@ -5850,7 +5859,7 @@ def refine_to_stroke_centerline(mask, xs, threshold_ratio=0.5, window_size=None)
         if in_seg:
             segs.append((int(seg_start), int(above.size) - 1))
 
-        x_rel = float(x_prev) - float(x0)
+        x_rel = float(search_radius) if circular else float(x_prev) - float(x0)
         chosen = None
         best_dist = None
         for (l, r) in segs:
@@ -5897,7 +5906,10 @@ def refine_to_stroke_centerline(mask, xs, threshold_ratio=0.5, window_size=None)
         except Exception:
             final_center = float(stroke_center)
 
-        x_new = float(x0 + final_center)
+        if circular:
+            x_new = float(x_prev) + (float(final_center) - float(search_radius))
+        else:
+            x_new = float(x0 + final_center)
 
         # Clamp and blend for stability
         max_shift = max(1.5, float(search_radius) * 0.6)
@@ -5909,6 +5921,8 @@ def refine_to_stroke_centerline(mask, xs, threshold_ratio=0.5, window_size=None)
 
         alpha = 0.85
         xs_ref[y] = float((1.0 - alpha) * x_prev + alpha * x_new)
+        if circular:
+            xs_ref[y] %= float(wrap_width)
     
     return xs_ref
 
@@ -6069,6 +6083,7 @@ def refine_black_trace_to_continuous_line(
     min_score_gain=0.04,
     trend_pull_pixels=3.0,
     distance_weight=0.025,
+    wrap_width=None,
 ):
     """Second pass for black traces: prefer continuous line support over row crests.
 
@@ -6094,9 +6109,11 @@ def refine_black_trace_to_continuous_line(
     valid = np.isfinite(xs_ref[:n])
     if not np.any(valid):
         return xs_ref
+    circular = wrap_width is not None and float(wrap_width) > 1.0
 
     try:
-        filled = pd.Series(xs_ref[:n]).interpolate(method="linear", limit_direction="both").ffill().bfill()
+        guide_values = _unwrap_trace_for_filtering(xs_ref[:n], wrap_width) if circular else xs_ref[:n]
+        filled = pd.Series(guide_values).interpolate(method="linear", limit_direction="both").ffill().bfill()
         if filled.isna().any():
             return xs_ref
         guide_win = max(9, int(guide_window) | 1)
@@ -6148,10 +6165,17 @@ def refine_black_trace_to_continuous_line(
     r = max(4, int(search_radius))
     offsets = np.arange(-r, r + 1, dtype=np.int32)
     rows = np.arange(n, dtype=np.int32)[:, None]
-    xi = np.clip(np.round(guide).astype(np.int32), 0, w - 1)
+    if circular:
+        xi = np.mod(np.round(guide).astype(np.int64), w).astype(np.int32)
+    else:
+        xi = np.clip(np.round(guide).astype(np.int32), 0, w - 1)
     raw_cols = xi[:, None] + offsets[None, :]
-    in_bounds = (raw_cols >= 0) & (raw_cols < w)
-    cols = np.clip(raw_cols, 0, w - 1)
+    if circular:
+        in_bounds = np.ones(raw_cols.shape, dtype=bool)
+        cols = np.mod(raw_cols, w)
+    else:
+        in_bounds = (raw_cols >= 0) & (raw_cols < w)
+        cols = np.clip(raw_cols, 0, w - 1)
 
     candidate_scores = line_score[rows, cols]
     distance_penalty = np.abs(offsets.astype(np.float32))[None, :] * float(distance_weight)
@@ -6160,7 +6184,10 @@ def refine_black_trace_to_continuous_line(
     best_idx = np.argmax(candidate_scores, axis=1)
     best_cols = cols[np.arange(n), best_idx]
     best_scores = candidate_scores[np.arange(n), best_idx]
-    raw_xi = np.clip(np.round(raw_guide).astype(np.int32), 0, w - 1)
+    if circular:
+        raw_xi = np.mod(np.round(raw_guide).astype(np.int64), w).astype(np.int32)
+    else:
+        raw_xi = np.clip(np.round(raw_guide).astype(np.int32), 0, w - 1)
     current_scores = line_score[np.arange(n), raw_xi]
     trend_delta = np.abs(raw_guide - guide)
 
@@ -6177,12 +6204,21 @@ def refine_black_trace_to_continuous_line(
     xs_out = xs_ref.copy()
     for y in np.where(accept)[0]:
         best_col = int(best_cols[y])
-        x0 = max(0, best_col - 2)
-        x1 = min(w, best_col + 3)
-        weights = np.clip(line_score[y, x0:x1], 0.0, 1.0) ** 2
+        if circular:
+            local_offsets = np.arange(-2, 3, dtype=np.int32)
+            local_cols = (best_col + local_offsets) % w
+            weights = np.clip(line_score[y, local_cols], 0.0, 1.0) ** 2
+        else:
+            x0 = max(0, best_col - 2)
+            x1 = min(w, best_col + 3)
+            weights = np.clip(line_score[y, x0:x1], 0.0, 1.0) ** 2
         if float(weights.sum()) > 1e-8:
-            xs_local = np.arange(x0, x1, dtype=np.float32)
-            xs_out[y] = float((xs_local * weights).sum() / weights.sum())
+            if circular:
+                offset = float((local_offsets.astype(np.float32) * weights).sum() / weights.sum())
+                xs_out[y] = float((best_col + offset) % w)
+            else:
+                xs_local = np.arange(x0, x1, dtype=np.float32)
+                xs_out[y] = float((xs_local * weights).sum() / weights.sum())
         else:
             xs_out[y] = float(best_col)
 
@@ -6392,7 +6428,7 @@ def refine_black_trace_to_dark_run_center(
     return xs_ref
 
 
-def recenter_black_trace_post_dp(roi_bgr, xs):
+def recenter_black_trace_post_dp(roi_bgr, xs, wrap_width=None):
     """
     A purely mathematical post-processing step to center an edge-hugging black trace.
     It looks at the dark ink immediately around the existing trace and shifts the 
@@ -6412,6 +6448,7 @@ def recenter_black_trace_post_dp(roi_bgr, xs):
 
     h, w = ink_mask.shape
     xs_centered = xs.copy()
+    circular = wrap_width is not None and float(wrap_width) > 1.0
     
     for y in range(min(h, xs.size)):
         x_current = xs[y]
@@ -6419,7 +6456,9 @@ def recenter_black_trace_post_dp(roi_bgr, xs):
             continue
             
         ix = int(round(float(x_current)))
-        if ix < 0 or ix >= w:
+        if circular:
+            ix %= w
+        elif ix < 0 or ix >= w:
             continue
             
         # Only center if the current point is actually on ink
@@ -6427,36 +6466,52 @@ def recenter_black_trace_post_dp(roi_bgr, xs):
             # Search nearby for ink (up to 15px since thick traces can be quite far from the center)
             found_ink = False
             for offset in range(1, 16):
-                if ix - offset >= 0 and ink_mask[y, ix - offset] > 0:
-                    ix = ix - offset
+                left_ix = (ix - offset) % w if circular else ix - offset
+                right_ix = (ix + offset) % w if circular else ix + offset
+                if (circular or left_ix >= 0) and ink_mask[y, left_ix] > 0:
+                    ix = left_ix
                     found_ink = True
                     break
-                if ix + offset < w and ink_mask[y, ix + offset] > 0:
-                    ix = ix + offset
+                if (circular or right_ix < w) and ink_mask[y, right_ix] > 0:
+                    ix = right_ix
                     found_ink = True
                     break
             if not found_ink:
                 continue
                 
         # We are on ink. Find the left and right boundaries of this continuous ink blob.
-        left_bound = ix
-        while left_bound > 0 and ink_mask[y, left_bound - 1] > 0:
-            left_bound -= 1
-            
-        right_bound = ix
-        while right_bound < w - 1 and ink_mask[y, right_bound + 1] > 0:
-            right_bound += 1
-            
-        blob_width = right_bound - left_bound + 1
+        if circular:
+            left_steps = 0
+            while left_steps < w - 1 and ink_mask[y, (ix - left_steps - 1) % w] > 0:
+                left_steps += 1
+            right_steps = 0
+            while right_steps < w - left_steps - 1 and ink_mask[y, (ix + right_steps + 1) % w] > 0:
+                right_steps += 1
+            blob_width = left_steps + right_steps + 1
+        else:
+            left_bound = ix
+            while left_bound > 0 and ink_mask[y, left_bound - 1] > 0:
+                left_bound -= 1
+
+            right_bound = ix
+            while right_bound < w - 1 and ink_mask[y, right_bound + 1] > 0:
+                right_bound += 1
+
+            blob_width = right_bound - left_bound + 1
         
         # If the blob is reasonably thick but not obviously a massive grid intersection, center it
         if 3 <= blob_width <= 40:
             # Shift towards the center, but don't move more than 15 pixels to avoid wild jumps
-            target_center = float(left_bound + right_bound) / 2.0
+            if circular:
+                target_center = float(x_current) + 0.5 * float(right_steps - left_steps)
+            else:
+                target_center = float(left_bound + right_bound) / 2.0
             max_shift = 15.0
             dx = target_center - x_current
             dx = max(-max_shift, min(max_shift, dx))
             xs_centered[y] = x_current + dx
+            if circular:
+                xs_centered[y] %= float(wrap_width)
         elif blob_width > 40:
             # It's a grid intersection. Don't center on the whole track.
             # Mark as NaN so we can interpolate through it
@@ -6465,7 +6520,8 @@ def recenter_black_trace_post_dp(roi_bgr, xs):
     # Apply interpolation to fill the grid intersection gaps
     try:
         import pandas as pd
-        s = pd.Series(xs_centered)
+        values = _unwrap_trace_for_filtering(xs_centered, wrap_width) if circular else xs_centered
+        s = pd.Series(values)
         s = s.interpolate(method='linear', limit_direction='both', limit=20)
         xs_centered = s.to_numpy()
         
@@ -6474,13 +6530,15 @@ def recenter_black_trace_post_dp(roi_bgr, xs):
         s2 = s2.rolling(window=5, center=True, min_periods=1).median()
         s2 = s2.rolling(window=3, center=True, min_periods=1).mean()
         xs_centered = s2.to_numpy()
+        if circular:
+            xs_centered = np.mod(xs_centered, float(wrap_width))
     except Exception:
         pass
         
     return xs_centered
 
 
-def suppress_black_grid_lock_runs(roi_bgr, xs, curve_type=None):
+def suppress_black_grid_lock_runs(roi_bgr, xs, curve_type=None, wrap_width=None):
     """Remove suspicious black-mode lock-ons to grid-like columns.
 
     If the trace sits on the same x-column for several rows while the residual
@@ -6524,6 +6582,8 @@ def suppress_black_grid_lock_runs(roi_bgr, xs, curve_type=None):
     valid = np.isfinite(xs_ref)
     if not np.any(valid):
         return xs_ref
+    circular = wrap_width is not None and float(wrap_width) > 1.0
+    xs_metric = _unwrap_trace_for_filtering(xs_ref, wrap_width) if circular else xs_ref
 
     curve_type_upper = str(curve_type or "").upper()
     residual_thr = 0.10 if curve_type_upper == "GR" else 0.08
@@ -6544,8 +6604,8 @@ def suppress_black_grid_lock_runs(roi_bgr, xs, curve_type=None):
             continue
         rv = float(rvals[y])
         gv = float(gvals[y])
-        dx_prev = abs(float(xs_ref[y] - xs_ref[y - 1]))
-        dx_next = abs(float(xs_ref[y + 1] - xs_ref[y]))
+        dx_prev = abs(float(xs_metric[y] - xs_metric[y - 1]))
+        dx_next = abs(float(xs_metric[y + 1] - xs_metric[y]))
         if rv < residual_thr and gv > 0.90 and dx_prev <= 1.0 and dx_next <= 1.0:
             bad[y] = True
 
@@ -6559,7 +6619,7 @@ def suppress_black_grid_lock_runs(roi_bgr, xs, curve_type=None):
         sl = slice(y - band_radius, y + band_radius + 1)
         if not np.all(valid[sl]):
             continue
-        window_x = xs_ref[sl]
+        window_x = xs_metric[sl]
         if float(np.nanmax(window_x) - np.nanmin(window_x)) > max_band_span:
             continue
         if (
@@ -6585,16 +6645,19 @@ def suppress_black_grid_lock_runs(roi_bgr, xs, curve_type=None):
     if not spans:
         return xs_ref
 
+    interp_values = xs_metric.copy() if circular else xs_ref
     for s, e in spans:
-        xs_ref[s:e + 1] = np.nan
+        interp_values[s:e + 1] = np.nan
 
     try:
-        xs_ref = pd.Series(xs_ref).interpolate(
+        xs_ref = pd.Series(interp_values).interpolate(
             method='linear',
             limit_direction='both',
             limit=max(25, int(xs_ref.size * 0.03)),
             limit_area=None,
         ).to_numpy(dtype=np.float32)
+        if circular:
+            xs_ref = np.mod(xs_ref, float(wrap_width)).astype(np.float32)
     except Exception:
         pass
 
@@ -11834,17 +11897,17 @@ def digitize():
             # line over several rows instead of the darkest single-row crest.
             # This avoids horizontal grid bars and filled blocks pulling the
             # trace into shelf artifacts.
-            if not wrap_enabled:
-                try:
-                    xs = refine_black_trace_to_continuous_line(
-                        roi,
-                        xs,
-                        search_radius=20,
-                        guide_window=31,
-                        vertical_window=13,
-                    )
-                except Exception:
-                    pass
+            try:
+                xs = refine_black_trace_to_continuous_line(
+                    roi,
+                    xs,
+                    search_radius=20,
+                    guide_window=31,
+                    vertical_window=13,
+                    wrap_width=mask.shape[1] if wrap_enabled else None,
+                )
+            except Exception:
+                pass
 
             # Second outlier pass: the line-following pass is conservative,
             # but keep the tighter guard as protection against noisy scans.
@@ -11899,7 +11962,8 @@ def digitize():
         # Aggressive grid removal can leave small gaps where the curve crossed a grid line.
         # We linearly interpolate these gaps to ensure continuity.
         if xs.size > 0:
-            s = pd.Series(xs)
+            gap_values = _unwrap_trace_for_filtering(xs, width_px) if wrap_enabled else xs
+            s = pd.Series(gap_values)
             h_mask, w_mask = mask.shape
             if mode in colored_modes:
                 max_gap = max(25, int(h_mask * 0.02))
@@ -11910,10 +11974,17 @@ def digitize():
             if s.isna().any():
                 s = s.ffill(limit=max_gap).bfill(limit=max_gap)
             xs = s.to_numpy(dtype=np.float32)
+            if wrap_enabled:
+                xs = np.mod(xs, float(width_px)).astype(np.float32)
 
-        if mode not in colored_modes and not wrap_enabled:
+        if mode not in colored_modes:
             try:
-                xs = suppress_black_grid_lock_runs(roi, xs, curve_type=curve_type)
+                xs = suppress_black_grid_lock_runs(
+                    roi,
+                    xs,
+                    curve_type=curve_type,
+                    wrap_width=width_px if wrap_enabled else None,
+                )
             except Exception:
                 pass
 
@@ -11922,12 +11993,22 @@ def digitize():
                 # does: re-center after the grid-lock cleanup, not before it.
                 # This keeps the line on the middle of the visible black ink
                 # instead of on the stroke edge or a nearby rail.
-                xs = refine_to_stroke_centerline(mask, xs, threshold_ratio=0.45, window_size=16)
+                xs = refine_to_stroke_centerline(
+                    mask,
+                    xs,
+                    threshold_ratio=0.45,
+                    window_size=16,
+                    wrap_width=width_px if wrap_enabled else None,
+                )
             except Exception:
                 pass
 
             try:
-                xs = recenter_black_trace_post_dp(roi, xs)
+                xs = recenter_black_trace_post_dp(
+                    roi,
+                    xs,
+                    wrap_width=width_px if wrap_enabled else None,
+                )
             except Exception:
                 pass
 
