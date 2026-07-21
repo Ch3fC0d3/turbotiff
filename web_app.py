@@ -2513,7 +2513,30 @@ def score_and_suppress_black_components(mask, xs_guide, curve_type=None):
         _, binary = cv2.threshold(mask, 15, 255, cv2.THRESH_BINARY)
         n_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(binary, 8)
         
-        out_mask = mask.copy()
+        # Compute component-to-guide distances in one image pass.  The old
+        # implementation used ``labels == label`` for every component (and did
+        # it a second time while applying the score), making runtime O(pixels *
+        # components).  A noisy full-height log can contain thousands of small
+        # components, turning this stage into a 15-20 minute operation.
+        distance_sums = np.zeros(n_labels, dtype=np.float64)
+        distance_counts = np.zeros(n_labels, dtype=np.int64)
+        x_coords = np.arange(w_mask, dtype=np.float32)[None, :]
+        chunk_rows = 512
+        for y0 in range(0, h_mask, chunk_rows):
+            y1 = min(h_mask, y0 + chunk_rows)
+            label_chunk = labels[y0:y1]
+            guide_chunk = np.asarray(xs_guide_filled[y0:y1], dtype=np.float32)
+            valid_rows = np.isfinite(guide_chunk)
+            if not np.any(valid_rows):
+                continue
+            valid_labels = label_chunk[valid_rows].reshape(-1)
+            distances = np.abs(x_coords - guide_chunk[valid_rows, None]).reshape(-1)
+            distance_sums += np.bincount(
+                valid_labels, weights=distances, minlength=n_labels
+            )
+            distance_counts += np.bincount(valid_labels, minlength=n_labels)
+
+        score_by_label = np.ones(n_labels, dtype=np.float32)
         for label in range(1, n_labels):
             x, y, w, h, area = [int(v) for v in stats[label]]
             if area <= 0:
@@ -2523,20 +2546,12 @@ def score_and_suppress_black_components(mask, xs_guide, curve_type=None):
             aspect = float(w) / float(max(1, h))
             avg_width = float(area) / float(max(1, h))
 
-            # 1. Proximity to guide line
-            # Get pixels belonging to this component
-            pts = np.argwhere(labels == label)
-            ys = pts[:, 0]
-            xs_pts = pts[:, 1]
-            guide_vals = xs_guide_filled[ys]
-            
-            # Since xs_guide_filled is fully interpolated, all guide_vals should be finite.
-            # Just in case, double check.
-            valid_guide = np.isfinite(guide_vals)
-            if np.any(valid_guide):
-                mean_dist = float(np.mean(np.abs(xs_pts[valid_guide] - guide_vals[valid_guide])))
+            # 1. Proximity to guide line. Background pixels are included in the
+            # aggregation above but ignored here (component labels start at 1).
+            if distance_counts[label] > 0:
+                mean_dist = float(distance_sums[label] / distance_counts[label])
             else:
-                mean_dist = float(np.mean(np.abs(xs_pts - w_mask / 2.0)))
+                mean_dist = abs(float(centroids[label][0]) - w_mask / 2.0)
 
             # 2. Rejection of horizontal grid lines / shelves
             # Horizontal lines have high aspect ratio (w/h) and a wide horizontal span
@@ -2577,10 +2592,18 @@ def score_and_suppress_black_components(mask, xs_guide, curve_type=None):
             score_mult = horiz_penalty * text_penalty * dist_penalty * continuity_boost
             score_mult = np.clip(score_mult, 0.005, 1.3)
 
-            # Suppress component in the output mask
             if score_mult < 0.99 or score_mult > 1.01:
-                label_mask = labels == label
-                out_mask[label_mask] = np.clip(mask[label_mask] * score_mult, 0, 255).astype(np.uint8)
+                score_by_label[label] = score_mult
+
+        # Apply the per-component scores in bounded-memory row chunks. This is
+        # another single image pass instead of one full label scan per component.
+        out_mask = mask.copy()
+        for y0 in range(0, h_mask, chunk_rows):
+            y1 = min(h_mask, y0 + chunk_rows)
+            multipliers = score_by_label[labels[y0:y1]]
+            out_mask[y0:y1] = np.clip(
+                mask[y0:y1].astype(np.float32) * multipliers, 0, 255
+            ).astype(np.uint8)
 
         return out_mask
     except Exception as e:
