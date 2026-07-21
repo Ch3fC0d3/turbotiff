@@ -6083,6 +6083,7 @@ def refine_black_sonic_trace_to_hot_ink(
     xs,
     hot_side="right",
     search_radius=None,
+    wrap_enabled=False,
 ):
     """Follow the hot edge of the *same* nearby sonic stroke.
 
@@ -6122,7 +6123,8 @@ def refine_black_sonic_trace_to_hot_ink(
         (row_window, 1),
     )
 
-    radius = int(search_radius) if search_radius is not None else int(round(w * 0.75))
+    default_radius = w * (0.40 if wrap_enabled else 0.75)
+    radius = int(search_radius) if search_radius is not None else int(round(default_radius))
     radius = max(24, min(w - 1, radius))
     result = np.asarray(xs, dtype=np.float32).copy()
     n = min(h, result.size)
@@ -6138,7 +6140,10 @@ def refine_black_sonic_trace_to_hot_ink(
         if float(np.mean(dark[y])) >= 0.72:
             continue
         center = int(round(current))
-        if choose_right:
+        if wrap_enabled:
+            lo = 0
+            hi = w
+        elif choose_right:
             lo = max(0, center - 5)
             hi = min(w, center + radius + 1)
         else:
@@ -6162,11 +6167,20 @@ def refine_black_sonic_trace_to_hot_ink(
             run_slice = slice(run_left, run_right + 1)
             support_peak = float(np.max(support[y, run_slice]))
             rail_occupancy = float(np.mean(long_column_occupancy[y, run_slice]))
-            if choose_right:
+            if wrap_enabled:
+                run_midpoint = 0.5 * float(run_left + run_right)
+                row_choose_right = run_midpoint >= (0.5 * w)
+                selected_edge = run_right if row_choose_right else run_left
+                direct_distance = abs(float(selected_edge) - current)
+                distance = min(direct_distance, float(w) - direct_distance)
+                if distance > radius:
+                    continue
+            elif choose_right:
+                selected_edge = run_right
                 distance = max(0.0, float(run_left) - current)
             else:
+                selected_edge = run_left
                 distance = max(0.0, current - float(run_right))
-            selected_edge = run_right if choose_right else run_left
             edge_like_rail = (
                 selected_edge <= int(round(w * 0.08))
                 or selected_edge >= int(round(w * 0.78))
@@ -6176,7 +6190,7 @@ def refine_black_sonic_trace_to_hot_ink(
             score = (
                 support_peak
                 - 1.5 * rail_occupancy
-                - 0.0005 * distance
+                - (0.003 if wrap_enabled else 0.0005) * distance
                 + 0.01 * min(run_width, 30)
             )
             if score > 0.0:
@@ -6194,7 +6208,7 @@ def refine_black_sonic_trace_to_hot_ink(
             max(1, min(crest_max_step, w - 1)),
             0.003,
             0.0003,
-            False,
+            bool(wrap_enabled),
         )
         finite_fraction = float(np.mean(np.isfinite(candidate_path)))
         if finite_fraction >= 0.60:
@@ -12172,6 +12186,7 @@ def digitize():
                         roi,
                         xs,
                         hot_side=hot_side,
+                        wrap_enabled=wrap_enabled,
                     )
                 except Exception:
                     pass

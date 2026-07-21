@@ -64,6 +64,33 @@ def test_sonic_hot_ink_refinement_prefers_curve_over_vertical_rail():
     assert float(np.max(np.abs(np.diff(reacquired)))) < 12.0
 
 
+def test_wrapped_sonic_refinement_switches_crest_side_with_visible_branch():
+    height, width = 210, 120
+    rows = np.arange(height, dtype=np.float32)
+    left_branch = 14.0 + 4.0 * np.sin(rows / 13.0)
+    right_branch = 105.0 + 4.0 * np.sin(rows / 13.0)
+    expected = left_branch.copy()
+    expected[70:145] = right_branch[70:145]
+
+    roi = np.full((height, width, 3), 255, dtype=np.uint8)
+    for branch in (left_branch, right_branch):
+        points = np.column_stack((np.rint(branch).astype(np.int32), rows.astype(np.int32)))
+        cv2.polylines(roi, [points.reshape(-1, 1, 2)], False, (0, 0, 0), 2, cv2.LINE_AA)
+    for y in range(15, height, 30):
+        cv2.line(roi, (0, y), (width - 1, y), (80, 80, 80), 1)
+
+    refined = web_app.refine_black_sonic_trace_to_hot_ink(
+        roi,
+        expected.astype(np.float32),
+        hot_side="left",
+        wrap_enabled=True,
+    )
+
+    assert float(np.median(refined[:65])) < width * 0.30
+    assert float(np.median(refined[78:138])) > width * 0.70
+    assert float(np.median(refined[155:])) < width * 0.30
+
+
 def test_wrap_aware_viterbi_continues_across_track_boundary():
     height, width = 180, 64
     unwrapped = np.linspace(54.0, 78.0, height, dtype=np.float32)
