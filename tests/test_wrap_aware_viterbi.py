@@ -13,6 +13,13 @@ def test_black_sonic_curves_preserve_short_trace_excursions():
     assert not web_app.should_preserve_black_trace_detail("green", "DTC")
 
 
+def test_sonic_hot_side_points_toward_lower_travel_time_value():
+    assert web_app.resolve_curve_hot_side(None, 30.0, 110.0, "DTC") == "left"
+    assert web_app.resolve_curve_hot_side(None, 140.0, 40.0, "DT") == "right"
+    assert web_app.resolve_curve_hot_side(None, 0.0, 150.0, "GR") == "right"
+    assert web_app.resolve_curve_hot_side("right", 30.0, 110.0, "DTC") == "right"
+
+
 def test_sonic_hot_ink_refinement_prefers_curve_over_vertical_rail():
     height, width = 180, 120
     rows = np.arange(height, dtype=np.float32)

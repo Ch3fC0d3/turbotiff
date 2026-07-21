@@ -6046,6 +6046,38 @@ def should_preserve_black_trace_detail(mode, curve_type=None, curve_name=None, p
     return bool(preserve_wiggles or (identifiers & sonic_names))
 
 
+def resolve_curve_hot_side(
+    hot_side,
+    left_value,
+    right_value,
+    curve_type=None,
+    curve_name=None,
+):
+    """Resolve crest direction using the curve family's scale convention."""
+    explicit = str(hot_side or "").strip().lower()
+    if explicit in {"left", "right"}:
+        return explicit
+
+    identifiers = {
+        str(curve_type or "").strip().upper(),
+        str(curve_name or "").strip().upper(),
+    }
+    sonic_names = {"DTC", "DT", "DTCO", "AC", "SONIC"}
+    try:
+        left = float(left_value)
+        right = float(right_value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(left) or not np.isfinite(right):
+        return None
+
+    if identifiers & sonic_names:
+        # Sonic travel-time crests point toward the lower slowness value.  The
+        # common 30 -> 110 us/ft layout therefore crests to the left.
+        return "left" if left <= right else "right"
+    return "right" if right >= left else "left"
+
+
 def refine_black_sonic_trace_to_hot_ink(
     roi_bgr,
     xs,
@@ -11575,8 +11607,13 @@ def digitize():
             curve_name=name,
             preserve_wiggles=preserve_wiggles,
         )
-        if not hot_side and np.isfinite(left_value) and np.isfinite(right_value):
-            hot_side = 'right' if right_value >= left_value else 'left'
+        hot_side = resolve_curve_hot_side(
+            hot_side,
+            left_value,
+            right_value,
+            curve_type=curve_type,
+            curve_name=name,
+        )
 
         # Defensive ROI bounds check: avoid empty slices that crash OpenCV ops.
         # (This can happen if the UI sends left/right reversed, or values are out of range.)
