@@ -11423,15 +11423,15 @@
                         }
 
                         // Add as a new curve overlay
-                        if (!window.mlPredictedCurves) {
-                            window.mlPredictedCurves = [];
-                        }
-                        
-                        window.mlPredictedCurves.push({
-                            name: `ML_CURVE_${window.mlPredictedCurves.length + 1}`,
+                        // This is a temporary preview, not another digitized
+                        // curve layer. Re-running prediction must replace the
+                        // prior preview or the canvas shows multiple magenta
+                        // traces for one configured (including wrapped) curve.
+                        window.mlPredictedCurves = [{
+                            name: 'ML_CURVE_PREVIEW',
                             points: curvePoints,
                             color: '#FF00FF'  // Magenta for ML curves
-                        });
+                        }];
 
                         // Redraw canvas to show the predicted curve
                         if (lastCurveTraces) {
@@ -14670,6 +14670,10 @@
                 if (data.success) {
                     const previousCurves = lastDigitizedCurves;
                     const previousTraces = lastCurveTraces;
+                    // ML predictions are transient setup previews. Once the
+                    // backend returns the authoritative trace, remove them so
+                    // one wrapped curve cannot appear as two magenta lines.
+                    window.mlPredictedCurves = [];
                     // Store digitized data for cursor readout and later download
                     lastDigitizedDepth = Array.isArray(data.digitized_depth) ? data.digitized_depth : null;
                     lastDigitizedCurves = data.digitized_curves || null;
