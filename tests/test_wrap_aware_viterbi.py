@@ -52,6 +52,17 @@ def test_sonic_hot_ink_refinement_prefers_curve_over_vertical_rail():
     assert float(np.median(refined[73:78] - expected[73:78])) > 20.0
     assert float(np.median(np.abs(refined - 105.0))) > 30.0
 
+    # When the incoming decoder starts on the far-right annotation column, a
+    # left-crest sonic pass must reacquire the curve as one continuous path.
+    far_right_initial = np.full(height, 105.0, dtype=np.float32)
+    reacquired = web_app.refine_black_sonic_trace_to_hot_ink(
+        roi,
+        far_right_initial,
+        hot_side="left",
+    )
+    assert float(np.median(np.abs(reacquired - expected))) < 4.0
+    assert float(np.max(np.abs(np.diff(reacquired)))) < 12.0
+
 
 def test_wrap_aware_viterbi_continues_across_track_boundary():
     height, width = 180, 64

@@ -6122,11 +6122,12 @@ def refine_black_sonic_trace_to_hot_ink(
         (row_window, 1),
     )
 
-    radius = int(search_radius) if search_radius is not None else int(round(w * 0.25))
-    radius = max(24, min(220, radius))
+    radius = int(search_radius) if search_radius is not None else int(round(w * 0.75))
+    radius = max(24, min(400, radius))
     result = np.asarray(xs, dtype=np.float32).copy()
     n = min(h, result.size)
     choose_right = str(hot_side or "right").strip().lower() != "left"
+    candidate_prob = np.full((n, w), 1e-5, dtype=np.float32)
 
     for y in range(n):
         current = float(xs[y])
@@ -6135,6 +6136,7 @@ def refine_black_sonic_trace_to_hot_ink(
         # A nearly full row is a grid rule, page border, or filled block.  Hold
         # the incoming path through it instead of choosing either edge.
         if float(np.mean(dark[y])) >= 0.72:
+            candidate_prob[y, int(np.clip(round(current), 0, w - 1))] = 0.02
             continue
         center = int(round(current))
         if choose_right:
@@ -6152,7 +6154,7 @@ def refine_black_sonic_trace_to_hot_ink(
         changes = np.diff(np.r_[False, eligible, False].astype(np.int8))
         starts = np.flatnonzero(changes == 1)
         ends = np.flatnonzero(changes == -1) - 1
-        best = None
+        added_candidate = False
         for start, end in zip(starts, ends):
             run_left = int(lo + start)
             run_right = int(lo + end)
@@ -6169,23 +6171,38 @@ def refine_black_sonic_trace_to_hot_ink(
             score = (
                 support_peak
                 - rail_occupancy
-                - 0.001 * distance
+                - 0.0005 * distance
                 + 0.01 * min(run_width, 30)
             )
             selected_edge = run_right if choose_right else run_left
-            candidate = (score, selected_edge)
-            if best is None or candidate > best:
-                best = candidate
-        if best is not None and best[0] > 0.0:
-            result[y] = float(best[1])
+            if score > 0.0:
+                candidate_prob[y, selected_edge] = max(
+                    candidate_prob[y, selected_edge],
+                    min(1.0, float(score)),
+                )
+                added_candidate = True
+        if not added_candidate:
+            candidate_prob[y, int(np.clip(round(current), 0, w - 1))] = 0.02
 
     try:
-        smooth_window = 5
-        result[:n] = pd.Series(result[:n]).rolling(
-            smooth_window,
-            center=True,
-            min_periods=1,
-        ).median().to_numpy(dtype=np.float32)
+        candidate_cost = -np.log(np.clip(candidate_prob, 1e-6, 1.0))
+        candidate_path, _ = fast_tracer.run_viterbi(
+            candidate_cost.astype(np.float32),
+            candidate_prob,
+            max(1, min(100, w - 1)),
+            0.003,
+            0.0003,
+            False,
+        )
+        finite_fraction = float(np.mean(np.isfinite(candidate_path)))
+        if finite_fraction >= 0.60:
+            result[:n] = pd.Series(candidate_path).interpolate(
+                limit_direction="both",
+            ).rolling(
+                5,
+                center=True,
+                min_periods=1,
+            ).median().to_numpy(dtype=np.float32)
     except Exception:
         pass
     return result
@@ -12006,27 +12023,25 @@ def digitize():
                 pass
             
         else:
-            # 1. Run a first-pass DP tracer to establish a guide line (baseline)
-            try:
-                xs_guide, _ = trace_curve_with_dp(
-                    mask,
-                    scale_min=left_value,
-                    scale_max=right_value,
-                    curve_type=curve_type,
-                    max_step=max_step_dp,
-                    smooth_lambda=dp_smooth_lambda,
-                    curv_lambda=dp_curv_lambda,
-                    hot_side=hot_side,
-                    wrap_enabled=wrap_enabled,
-                )
-                if (
-                    not preserve_black_detail
-                    and xs_guide is not None
-                    and xs_guide.size > 0
-                ):
-                    mask = score_and_suppress_black_components(mask, xs_guide, curve_type=curve_type)
-            except Exception as e:
-                print(f"⚠️ score_and_suppress_black_components failed: {e}")
+            # 1. Run a first-pass guide only when component suppression uses it.
+            # Sonic detail mode performs its own crest-aware whole-path pass.
+            if not preserve_black_detail:
+                try:
+                    xs_guide, _ = trace_curve_with_dp(
+                        mask,
+                        scale_min=left_value,
+                        scale_max=right_value,
+                        curve_type=curve_type,
+                        max_step=max_step_dp,
+                        smooth_lambda=dp_smooth_lambda,
+                        curv_lambda=dp_curv_lambda,
+                        hot_side=hot_side,
+                        wrap_enabled=wrap_enabled,
+                    )
+                    if xs_guide is not None and xs_guide.size > 0:
+                        mask = score_and_suppress_black_components(mask, xs_guide, curve_type=curve_type)
+                except Exception as e:
+                    print(f"⚠️ score_and_suppress_black_components failed: {e}")
 
             # For black/other modes, use DP with smoothness constraints (using filtered mask!)
             xs, confidence = trace_curve_with_dp(
