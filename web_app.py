@@ -6123,7 +6123,7 @@ def refine_black_sonic_trace_to_hot_ink(
     )
 
     radius = int(search_radius) if search_radius is not None else int(round(w * 0.75))
-    radius = max(24, min(400, radius))
+    radius = max(24, min(w - 1, radius))
     result = np.asarray(xs, dtype=np.float32).copy()
     n = min(h, result.size)
     choose_right = str(hot_side or "right").strip().lower() != "left"
@@ -6136,7 +6136,6 @@ def refine_black_sonic_trace_to_hot_ink(
         # A nearly full row is a grid rule, page border, or filled block.  Hold
         # the incoming path through it instead of choosing either edge.
         if float(np.mean(dark[y])) >= 0.72:
-            candidate_prob[y, int(np.clip(round(current), 0, w - 1))] = 0.02
             continue
         center = int(round(current))
         if choose_right:
@@ -6154,7 +6153,6 @@ def refine_black_sonic_trace_to_hot_ink(
         changes = np.diff(np.r_[False, eligible, False].astype(np.int8))
         starts = np.flatnonzero(changes == 1)
         ends = np.flatnonzero(changes == -1) - 1
-        added_candidate = False
         for start, end in zip(starts, ends):
             run_left = int(lo + start)
             run_right = int(lo + end)
@@ -6168,28 +6166,32 @@ def refine_black_sonic_trace_to_hot_ink(
                 distance = max(0.0, float(run_left) - current)
             else:
                 distance = max(0.0, current - float(run_right))
+            selected_edge = run_right if choose_right else run_left
+            edge_like_rail = (
+                selected_edge <= int(round(w * 0.08))
+                or selected_edge >= int(round(w * 0.78))
+            ) and rail_occupancy > 0.35
+            if edge_like_rail:
+                continue
             score = (
                 support_peak
-                - rail_occupancy
+                - 1.5 * rail_occupancy
                 - 0.0005 * distance
                 + 0.01 * min(run_width, 30)
             )
-            selected_edge = run_right if choose_right else run_left
             if score > 0.0:
                 candidate_prob[y, selected_edge] = max(
                     candidate_prob[y, selected_edge],
                     min(1.0, float(score)),
                 )
-                added_candidate = True
-        if not added_candidate:
-            candidate_prob[y, int(np.clip(round(current), 0, w - 1))] = 0.02
 
     try:
         candidate_cost = -np.log(np.clip(candidate_prob, 1e-6, 1.0))
+        crest_max_step = max(100, min(240, int(round(w * 0.45))))
         candidate_path, _ = fast_tracer.run_viterbi(
             candidate_cost.astype(np.float32),
             candidate_prob,
-            max(1, min(100, w - 1)),
+            max(1, min(crest_max_step, w - 1)),
             0.003,
             0.0003,
             False,
