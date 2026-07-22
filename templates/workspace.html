@@ -2573,15 +2573,23 @@
                 return;
             }
             // Add Wrap is the opt-in action. Keep both configuration surfaces in sync.
+            const step5Checkbox = document.getElementById('s5TrackWrapped');
+            const step2Checkbox = Number.isInteger(ctx.index) ? document.getElementById(`wrapped${ctx.index}`) : null;
+            const foundBefore = findDigitizedCurveEntry(ctx.curveKey);
+            const originalWrapConfig = {
+                trackWrapped: !!ctx.track.wrapped,
+                step5Checked: step5Checkbox ? !!step5Checkbox.checked : null,
+                step2Checked: step2Checkbox ? !!step2Checkbox.checked : null,
+                hadWrapLayer: !!(foundBefore && foundBefore.entry && foundBefore.entry.wrapLayer),
+            };
             if (!ctx.track.wrapped) {
-                const step5Checkbox = document.getElementById('s5TrackWrapped');
                 if (step5Checkbox) step5Checkbox.checked = true;
                 ctx.track.wrapped = true;
                 s5UpdateTrackWrapped({ deferCurveMutation: true });
             }
             pendingWrapPair = {
                 curveKey: ctx.curveKey, track: ctx.track, candidate: null,
-                datasetGeneration: committedDatasetGeneration,
+                datasetGeneration: committedDatasetGeneration, originalWrapConfig,
                 sourceRevision: getCurveLayerRevision(ctx.curveKey, 'main'),
             };
             updateWrapPairControls();
@@ -2724,9 +2732,11 @@
             ordered[1] = { ...ordered[1], cycle: oldCycle + direction, pair_role: 'entry' };
             const nextMarkers = originalMarkers.concat(ordered).sort((a, b) => a.depthIndex - b.depthIndex || a.createdAt - b.createdAt);
             const nextValues = buildWrapAdjustedValues(pendingWrapPair.curveKey, context.values, pendingWrapPair.track, nextMarkers);
-            editUndoStack.push({ type: 'wrap_pair_transform', curveId: pendingWrapPair.curveKey, curveKey: pendingWrapPair.curveKey, dragLayer: 'main', traceKey, originalMarkers, originalValues, originalTracePoints });
+            const markersChanged = stablePersistenceStringify(originalMarkers) !== stablePersistenceStringify(nextMarkers);
+            editUndoStack.push({ type: 'wrap_pair_transform', curveId: pendingWrapPair.curveKey, curveKey: pendingWrapPair.curveKey, dragLayer: 'main', traceKey, originalMarkers, originalValues, originalTracePoints, originalWrapConfig: pendingWrapPair.originalWrapConfig });
             setWrapMarkersForCurve(pendingWrapPair.curveKey, nextMarkers);
-            const commitResult = commitCurveLayerValues(pendingWrapPair.curveKey, 'main', nextValues, { clearWrapMarkers: false, rebuildTrace: true, reason: 'wrap_pair_confirm' });
+            let commitResult = commitCurveLayerValues(pendingWrapPair.curveKey, 'main', nextValues, { clearWrapMarkers: false, rebuildTrace: true, reason: 'wrap_pair_confirm' });
+            if (!commitResult.changed && markersChanged) commitResult = commitInPlaceCurveLayerMutation(pendingWrapPair.curveKey, 'main', true, { clearWrapMarkers: false, rebuildTrace: true, reason: 'wrap_pair_marker_commit' });
             if (!commitResult.changed) { setWrapMarkersForCurve(pendingWrapPair.curveKey, originalMarkers); editUndoStack.pop(); return; }
             // Finish the deferred Step 2 wrapped-mode mutation only now.
             const curveIndex = findCurveCardIndex(pendingWrapPair.curveKey);
@@ -2741,6 +2751,16 @@
         }
 
         function s5CancelWrapPair() {
+            const pending = pendingWrapPair;
+            if (pending && pending.originalWrapConfig && pending.track) {
+                const original = pending.originalWrapConfig;
+                pending.track.wrapped = original.trackWrapped;
+                const curveIndex = findCurveCardIndex(pending.curveKey);
+                const step5 = document.getElementById('s5TrackWrapped');
+                const step2 = curveIndex >= 0 ? document.getElementById(`wrapped${curveIndex}`) : null;
+                if (step5 && original.step5Checked != null) step5.checked = original.step5Checked;
+                if (step2 && original.step2Checked != null) step2.checked = original.step2Checked;
+            }
             pendingWrapPair = null;
             updateWrapPairControls();
             if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
@@ -2750,9 +2770,7 @@
 
         function cancelPendingWrapPair(reason = 'workspace_changed') {
             if (!pendingWrapPair) return false;
-            pendingWrapPair = null;
-            updateWrapPairControls();
-            if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
+            s5CancelWrapPair();
             return true;
         }
 
@@ -2781,9 +2799,11 @@
             const originalTracePoints = lastCurveTraces && Array.isArray(lastCurveTraces[traceKey]) ? lastCurveTraces[traceKey].map(point => Array.isArray(point) ? point.slice() : point) : [];
             const nextMarkers = originalMarkers.filter(marker => marker.wrap_pair_id !== closest.wrap_pair_id);
             const nextValues = buildWrapAdjustedValues(ctx.curveKey, context.values, ctx.track, nextMarkers);
+            const markersChanged = stablePersistenceStringify(originalMarkers) !== stablePersistenceStringify(nextMarkers);
             editUndoStack.push({ type: 'wrap_pair_transform', curveId: ctx.curveKey, curveKey: ctx.curveKey, dragLayer: 'main', traceKey, originalMarkers, originalValues, originalTracePoints });
             setWrapMarkersForCurve(ctx.curveKey, nextMarkers);
-            const commitResult = commitCurveLayerValues(ctx.curveKey, 'main', nextValues, { clearWrapMarkers: false, rebuildTrace: true, reason: 'wrap_pair_delete' });
+            let commitResult = commitCurveLayerValues(ctx.curveKey, 'main', nextValues, { clearWrapMarkers: false, rebuildTrace: true, reason: 'wrap_pair_delete' });
+            if (!commitResult.changed && markersChanged) commitResult = commitInPlaceCurveLayerMutation(ctx.curveKey, 'main', true, { clearWrapMarkers: false, rebuildTrace: true, reason: 'wrap_pair_marker_delete' });
             if (!commitResult.changed) { setWrapMarkersForCurve(ctx.curveKey, originalMarkers); editUndoStack.pop(); return; }
             updateScaleWrapStatus(ctx.curveKey);
             if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
@@ -8626,6 +8646,15 @@
                 const context = getCurveLayerContext(last.curveId, 'main');
                 if (!context || !Array.isArray(last.originalValues)) return;
                 setWrapMarkersForCurve(last.curveId, last.originalMarkers || []);
+                const track = findTrackByCurveId(last.curveId);
+                if (last.originalWrapConfig && track) {
+                    track.wrapped = !!last.originalWrapConfig.trackWrapped;
+                    const index = findCurveCardIndex(last.curveId);
+                    const step5 = document.getElementById('s5TrackWrapped');
+                    const step2 = index >= 0 ? document.getElementById(`wrapped${index}`) : null;
+                    if (step5 && last.originalWrapConfig.step5Checked != null) step5.checked = last.originalWrapConfig.step5Checked;
+                    if (step2 && last.originalWrapConfig.step2Checked != null) step2.checked = last.originalWrapConfig.step2Checked;
+                }
                 commitCurveLayerValues(last.curveId, 'main', last.originalValues, {
                     clearWrapMarkers: false, rebuildTrace: true, cancelInteraction: true, reason: 'undo_wrap_pair_transform',
                 });
