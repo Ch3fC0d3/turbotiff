@@ -49,12 +49,30 @@ from app import corrections_store
 from app import header_layout
 from app import track_analysis
 import app.config as config
-from curve_model.integration import PHASE1_MODES, build_phase1_probability
-from curve_model.phase2_decode import decode_phase2_path
-from curve_model.phase2_integration import PHASE2_MODES, build_phase2_probability
-from curve_model.phase2_score import Phase2ScoreConfig, phase2_confidence
-from curve_decoder import CurveEvidence, DecoderConfig, decode_curve_path
-from curve_decoder.scale import ScaleConfig as TopologyScaleConfig, path_to_values
+# Phase 1-3 packages are optional production enhancements.  Keep the core
+# application bootable when a deployment contains the web app but not the
+# experimental model packages (for example, a partial rollout on Railway).
+try:
+    from curve_model.integration import PHASE1_MODES, build_phase1_probability
+    from curve_model.phase2_decode import decode_phase2_path
+    from curve_model.phase2_integration import PHASE2_MODES, build_phase2_probability
+    from curve_model.phase2_score import Phase2ScoreConfig, phase2_confidence
+    from curve_decoder import CurveEvidence, DecoderConfig, decode_curve_path
+    from curve_decoder.scale import ScaleConfig as TopologyScaleConfig, path_to_values
+    OPTIONAL_CURVE_PIPELINES_AVAILABLE = True
+except ImportError as optional_curve_pipeline_error:
+    _optional_curve_pipeline_error_message = str(optional_curve_pipeline_error)
+    PHASE1_MODES = frozenset()
+    PHASE2_MODES = frozenset()
+    CurveEvidence = DecoderConfig = TopologyScaleConfig = None
+    OPTIONAL_CURVE_PIPELINES_AVAILABLE = False
+
+    def build_phase1_probability(roi, classic_mask, **_kwargs):
+        return classic_mask, {
+            'tracing_mode': 'classic',
+            'fallback_occurred': True,
+            'fallback_reason': f'Optional curve pipeline unavailable: {_optional_curve_pipeline_error_message}',
+        }
 from werkzeug.security import generate_password_hash, check_password_hash
 import stripe
 import secrets

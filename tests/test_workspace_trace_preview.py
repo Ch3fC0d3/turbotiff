@@ -2320,6 +2320,15 @@ def test_zip_export_endpoint_rejects_dimension_and_numeric_corruption():
     assert "min_len = min(" not in endpoint
 
 
+def test_optional_curve_pipeline_imports_cannot_prevent_core_app_boot():
+    source = WEB_APP.read_text(encoding="utf-8")
+
+    assert "try:\n    from curve_model.integration" in source
+    assert "except ImportError as optional_curve_pipeline_error:" in source
+    assert "OPTIONAL_CURVE_PIPELINES_AVAILABLE = False" in source
+    assert "def build_phase1_probability(roi, classic_mask, **_kwargs):" in source
+
+
 def test_project_load_validates_and_restores_authoritative_layers_pins_and_clean_state():
     source = WORKSPACE_TEMPLATE.read_text(encoding="utf-8")
     load_source = _function_source(source, "ensureDigitizedFromLas", "buildLasFromDigitized")
