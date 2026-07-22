@@ -2354,6 +2354,56 @@ def test_overlay_breaks_on_any_missing_trace_row():
     assert "const jumpBreakMaxRowGap = 1.0;" in overlay_source
 
 
+def test_linked_wrap_pair_tool_validates_edges_and_preserves_render_breaks():
+    source = WORKSPACE_TEMPLATE.read_text(encoding="utf-8")
+    validation_start = source.index("function validateWrapPair(")
+    validation_end = source.index("function getWrapEvidencePoint(", validation_start)
+    validation_source = source[validation_start:validation_end]
+    renderer_source = _function_source(source, "renderCurveTraceOverlays", "clearDepthOverlays")
+
+    assert "Add Wrap" in source
+    assert "Confirm" in source
+    assert "Cancel" in source
+    assert "Delete Wrap" in source
+    assert "wrap_pair_id" in source
+    assert "Wrap points must be on opposite sides of the track." in validation_source
+    assert "s5AddWrapPairAtImageCoords(xImg, yImg)" in source
+    assert "if (isScaleWrapBoundaryForPoints(curveId, prevPoint, currPoint)) return true;" in source
+    assert "ctx.moveTo(xDom, yDom);" in renderer_source
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required for the linked wrap-pair validation harness")
+    harness = r"""
+const assert = require('assert');
+const track = { leftX: 100, rightX: 300 };
+const valid = validateWrapPair(track,
+  { edge: 'right', xImg: 300, depthIndex: 40 },
+  { edge: 'left', xImg: 100, depthIndex: 42 }, 4);
+assert.strictEqual(valid.valid, true);
+const sameSide = validateWrapPair(track,
+  { edge: 'left', xImg: 100, depthIndex: 40 },
+  { edge: 'left', xImg: 100, depthIndex: 42 }, 4);
+assert.strictEqual(sameSide.valid, false);
+assert.strictEqual(sameSide.message, 'Wrap points must be on opposite sides of the track.');
+const nearby = validateWrapPair(track,
+  { edge: 'right', xImg: 240, depthIndex: 40 },
+  { edge: 'left', xImg: 180, depthIndex: 42 }, 4);
+assert.strictEqual(nearby.valid, false);
+const farDepth = validateWrapPair(track,
+  { edge: 'right', xImg: 300, depthIndex: 40 },
+  { edge: 'left', xImg: 100, depthIndex: 50 }, 4);
+assert.strictEqual(farDepth.valid, false);
+"""
+    result = subprocess.run(
+        [node, "-"],
+        input=(validation_source + "\n" + harness).encode("utf-8"),
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+
+
 def test_project_load_validates_and_restores_authoritative_layers_pins_and_clean_state():
     source = WORKSPACE_TEMPLATE.read_text(encoding="utf-8")
     load_source = _function_source(source, "ensureDigitizedFromLas", "buildLasFromDigitized")

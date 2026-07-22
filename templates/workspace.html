@@ -1954,13 +1954,12 @@
                                         <div class="field" style="grid-column:1/-1;">
                                             <label>Scale Wrap Assist</label>
                                             <div class="scale-wrap-controls" style="display:flex; gap:4px;">
-                                                <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5AddWrapMarkerDelta(1)">+ cycle</button>
-                                                <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5AddWrapMarkerDelta(-1)">- cycle</button>
-                                                <input type="number" id="s5wrapCycleManual" step="1" value="1" title="Absolute wrap cycle" style="width:40px; padding:4px; border-radius:4px; border:1px solid #475569; background:#1e293b; color:#f8fafc;">
-                                                <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5AddWrapMarkerFromInput()">Set</button>
-                                                <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5ClearWrapMarkerNearMouse()">Clear marker</button>
+                                                <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5BeginAddWrapPair()">Add Wrap</button>
+                                                <button type="button" class="btn" id="s5ConfirmWrapBtn" style="padding:3px 6px;font-size:0.75em;" onclick="s5ConfirmWrapPair()" disabled>Confirm</button>
+                                                <button type="button" class="btn" id="s5CancelWrapBtn" style="padding:3px 6px;font-size:0.75em;" onclick="s5CancelWrapPair()" disabled>Cancel</button>
+                                                <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5DeleteWrapPairNearMouse()">Delete Wrap</button>
                                             </div>
-                                            <div id="s5WrapStatus" class="scale-wrap-status">No wrap markers.</div>
+                                            <div id="s5WrapStatus" class="scale-wrap-status">Click Add Wrap, then click the curve where it reaches either track edge.</div>
                                         </div>
                                         <div class="field" style="grid-column:1/-1;">
                                             <label>LAS mnemonic / unit</label>
@@ -2098,7 +2097,8 @@
         let workspaceHasUnsavedCommittedChanges = true;
         let curveIndexToTraceKey = null; // { [curveIndex:number]: string } mapping from UI curve index to curve_traces key
         let editUndoStack = [];          // stack of { curveKey, idx, oldValue, oldTraceX } for Ctrl+Z
-        let curveWrapMarkers = {};       // { [curveKey]: [{ depthIndex, cycle, edge, xImg, createdAt }] }
+        let curveWrapMarkers = {};       // { [curveKey]: [{ depthIndex, cycle, edge, xImg, wrap_pair_id, createdAt }] }
+        let pendingWrapPair = null;      // one-click candidate awaiting Confirm / Cancel
         let lastDigitizeRequestConfig = null;
         let lastDigitizePreviewFilters = null;
         let lastDigitizeHeaderMetadata = null;
@@ -2344,13 +2344,16 @@
             if (!key || !curveWrapMarkers || typeof curveWrapMarkers !== 'object') return [];
             const markers = Array.isArray(curveWrapMarkers[key]) ? curveWrapMarkers[key] : [];
             return markers
-                .filter(m => m && Number.isFinite(Number(m.depthIndex)) && Number.isFinite(Number(m.cycle)))
+                .filter(m => m && Number.isFinite(Number(m.depthIndex)) &&
+                    (Number.isFinite(Number(m.cycle)) || (typeof m.wrap_pair_id === 'string' && m.wrap_pair_id)))
                 .map(m => ({
                     curveKey: key,
                     depthIndex: Math.max(0, Math.round(Number(m.depthIndex))),
-                    cycle: Math.round(Number(m.cycle)),
+                    cycle: Number.isFinite(Number(m.cycle)) ? Math.round(Number(m.cycle)) : 0,
                     edge: m.edge === 'left' ? 'left' : 'right',
                     xImg: Number(m.xImg),
+                    wrap_pair_id: typeof m.wrap_pair_id === 'string' ? m.wrap_pair_id : null,
+                    pair_role: m.pair_role === 'entry' ? 'entry' : (m.pair_role === 'exit' ? 'exit' : null),
                     createdAt: Number(m.createdAt) || Date.now(),
                 }))
                 .sort((a, b) => a.depthIndex - b.depthIndex || a.createdAt - b.createdAt);
@@ -2363,13 +2366,16 @@
             const previousMarkers = stablePersistenceStringify(curveWrapMarkers[key] || []);
             const clean = Array.isArray(markers)
                 ? markers
-                    .filter(m => m && Number.isFinite(Number(m.depthIndex)) && Number.isFinite(Number(m.cycle)))
+                    .filter(m => m && Number.isFinite(Number(m.depthIndex)) &&
+                        (Number.isFinite(Number(m.cycle)) || (typeof m.wrap_pair_id === 'string' && m.wrap_pair_id)))
                     .map(m => ({
                         curveKey: key,
                         depthIndex: Math.max(0, Math.round(Number(m.depthIndex))),
-                        cycle: Math.round(Number(m.cycle)),
+                        cycle: Number.isFinite(Number(m.cycle)) ? Math.round(Number(m.cycle)) : 0,
                         edge: m.edge === 'left' ? 'left' : 'right',
                         xImg: Number.isFinite(Number(m.xImg)) ? Number(m.xImg) : null,
+                        wrap_pair_id: typeof m.wrap_pair_id === 'string' ? m.wrap_pair_id : null,
+                        pair_role: m.pair_role === 'entry' ? 'entry' : (m.pair_role === 'exit' ? 'exit' : null),
                         createdAt: Number(m.createdAt) || Date.now(),
                     }))
                     .sort((a, b) => a.depthIndex - b.depthIndex || a.createdAt - b.createdAt)
@@ -2382,6 +2388,189 @@
             if (stablePersistenceStringify(curveWrapMarkers[key] || []) !== previousMarkers) {
                 workspaceHasUnsavedCommittedChanges = true;
             }
+        }
+
+        function getNextWrapPairId(curveId) {
+            const used = new Set(getWrapMarkersForCurve(curveId)
+                .map(marker => marker.wrap_pair_id)
+                .filter(Boolean));
+            let number = 1;
+            while (used.has(`W${number}`)) number += 1;
+            return `W${number}`;
+        }
+
+        function getWrapPairToleranceRows() {
+            return Array.isArray(lastDigitizedDepth)
+                ? Math.max(3, Math.min(30, Math.round(lastDigitizedDepth.length * 0.01)))
+                : 12;
+        }
+
+        function validateWrapPair(track, first, second, toleranceRows = getWrapPairToleranceRows()) {
+            if (!track || !first || !second || first.edge === second.edge) {
+                return { valid: false, message: 'Wrap points must be on opposite sides of the track.' };
+            }
+            const left = Math.min(Number(track.leftX), Number(track.rightX));
+            const right = Math.max(Number(track.leftX), Number(track.rightX));
+            const width = right - left;
+            const separation = Math.abs(Number(first.xImg) - Number(second.xImg));
+            if (!Number.isFinite(width) || width <= 0 || separation < width * 0.70) {
+                return { valid: false, message: 'Wrap points must be on opposite sides of the track.' };
+            }
+            if (Math.abs(Number(first.depthIndex) - Number(second.depthIndex)) > toleranceRows) {
+                return { valid: false, message: 'Wrap points are too far apart in depth.' };
+            }
+            return { valid: true, message: '' };
+        }
+
+        function getWrapEvidencePoint(curveKey, track, edge, targetDepthIndex) {
+            const traceKey = resolveTraceKeyForCurveId(curveKey) || curveKey;
+            const points = lastCurveTraces && Array.isArray(lastCurveTraces[traceKey]) ? lastCurveTraces[traceKey] : [];
+            const left = Math.min(Number(track.leftX), Number(track.rightX));
+            const right = Math.max(Number(track.leftX), Number(track.rightX));
+            const width = right - left;
+            const edgeZone = Math.max(8, width * 0.20);
+            const toleranceRows = getWrapPairToleranceRows();
+            let best = null;
+            for (const point of points) {
+                if (!Array.isArray(point) || !Number.isFinite(Number(point[0])) || !Number.isInteger(point[2])) continue;
+                const depthDelta = Math.abs(point[2] - targetDepthIndex);
+                if (depthDelta > toleranceRows) continue;
+                const x = Number(point[0]);
+                const edgeDistance = edge === 'left' ? x - left : right - x;
+                if (edgeDistance < -2 || edgeDistance > edgeZone) continue;
+                const score = depthDelta * 10 + Math.max(0, edgeDistance);
+                if (!best || score < best.score) best = { depthIndex: point[2], xImg: x, score };
+            }
+            const boundaryX = edge === 'left' ? left : right;
+            return best
+                ? { depthIndex: best.depthIndex, xImg: edge === 'left' ? Math.min(left + edgeZone, Math.max(left, best.xImg)) : Math.max(right - edgeZone, Math.min(right, best.xImg)) }
+                : { depthIndex: targetDepthIndex, xImg: boundaryX };
+        }
+
+        function updateWrapPairControls() {
+            const confirm = document.getElementById('s5ConfirmWrapBtn');
+            const cancel = document.getElementById('s5CancelWrapBtn');
+            if (confirm) confirm.disabled = !(pendingWrapPair && pendingWrapPair.candidate);
+            if (cancel) cancel.disabled = !pendingWrapPair;
+        }
+
+        function s5BeginAddWrapPair() {
+            const ctx = getSelectedWrapCurveContext();
+            if (!ctx || !ctx.track || !ctx.curveKey || !ctx.track.wrapped) {
+                showStatus('Select a wrapped digitized curve before adding a wrap.', 'info');
+                return;
+            }
+            pendingWrapPair = { curveKey: ctx.curveKey, track: ctx.track, candidate: null };
+            updateWrapPairControls();
+            updateScaleWrapStatus(ctx.curveKey);
+            showStatus('Click the curve near either track edge to mark the wrap.', 'info');
+        }
+
+        function s5AddWrapPairAtImageCoords(xImg, yImg) {
+            if (!pendingWrapPair || !pendingWrapPair.track) return false;
+            const { curveKey, track } = pendingWrapPair;
+            const depthIndex = getDepthIndexAtImageY(yImg);
+            if (!Number.isInteger(depthIndex) || depthIndex < 0) {
+                showStatus('The wrap needs a valid depth row.', 'warning');
+                return true;
+            }
+            const left = Math.min(Number(track.leftX), Number(track.rightX));
+            const right = Math.max(Number(track.leftX), Number(track.rightX));
+            const width = right - left;
+            const edgeZone = Math.max(8, width * 0.25);
+            if (!Number.isFinite(width) || width <= 0 || xImg < left || xImg > right || Math.min(xImg - left, right - xImg) > edgeZone) {
+                showStatus('Click the curve where it reaches either track edge.', 'warning');
+                return true;
+            }
+            const exitEdge = (xImg - left) <= (right - xImg) ? 'left' : 'right';
+            const entryEdge = exitEdge === 'left' ? 'right' : 'left';
+            // A second click near either tentative marker adjusts that linked
+            // side vertically while keeping it inside its boundary zone. This
+            // is the lightweight alternative to exposing entry/exit controls.
+            if (Array.isArray(pendingWrapPair.candidate)) {
+                const markerIndex = pendingWrapPair.candidate.findIndex(marker => marker.edge === exitEdge);
+                if (markerIndex >= 0) {
+                    const adjusted = getWrapEvidencePoint(curveKey, track, exitEdge, depthIndex);
+                    pendingWrapPair.candidate[markerIndex] = {
+                        ...pendingWrapPair.candidate[markerIndex],
+                        depthIndex: adjusted.depthIndex,
+                        xImg: adjusted.xImg,
+                    };
+                    const validation = validateWrapPair(track, pendingWrapPair.candidate[0], pendingWrapPair.candidate[1]);
+                    if (!validation.valid) {
+                        showStatus(validation.message, 'warning');
+                        return true;
+                    }
+                    if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
+                    showStatus(`${pendingWrapPair.candidate[markerIndex].wrap_pair_id} adjusted. Confirm when correct.`, 'info');
+                    return true;
+                }
+            }
+            const exitEvidence = getWrapEvidencePoint(curveKey, track, exitEdge, depthIndex);
+            const entryEvidence = getWrapEvidencePoint(curveKey, track, entryEdge, depthIndex);
+            const pairId = getNextWrapPairId(curveKey);
+            const currentCycle = getWrapCycleForDepth(curveKey, Math.min(exitEvidence.depthIndex, entryEvidence.depthIndex));
+            const cycleDelta = exitEdge === 'right' ? 1 : -1;
+            const first = { depthIndex: exitEvidence.depthIndex, edge: exitEdge, xImg: exitEvidence.xImg, cycle: currentCycle, wrap_pair_id: pairId, pair_role: 'exit', createdAt: Date.now() };
+            const second = { depthIndex: entryEvidence.depthIndex, edge: entryEdge, xImg: entryEvidence.xImg, cycle: currentCycle + cycleDelta, wrap_pair_id: pairId, pair_role: 'entry', createdAt: Date.now() + 1 };
+            const validation = validateWrapPair(track, first, second);
+            if (!validation.valid) {
+                showStatus(validation.message, 'warning');
+                return true;
+            }
+            pendingWrapPair.candidate = [first, second];
+            updateWrapPairControls();
+            if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
+            showStatus(`${pairId} found. Confirm it or Cancel and click again.`, 'info');
+            return true;
+        }
+
+        function s5ConfirmWrapPair() {
+            if (!pendingWrapPair || !pendingWrapPair.candidate) return;
+            const validation = validateWrapPair(pendingWrapPair.track, pendingWrapPair.candidate[0], pendingWrapPair.candidate[1]);
+            if (!validation.valid) {
+                showStatus(validation.message, 'warning');
+                return;
+            }
+            setWrapMarkersForCurve(pendingWrapPair.curveKey, getWrapMarkersForCurve(pendingWrapPair.curveKey).concat(pendingWrapPair.candidate));
+            normalizeCurveValuesToWrapMarkers(pendingWrapPair.curveKey);
+            rebuildCurveTraceFromDigitized(pendingWrapPair.curveKey);
+            const pairId = pendingWrapPair.candidate[0].wrap_pair_id;
+            pendingWrapPair = null;
+            updateWrapPairControls();
+            updateScaleWrapStatus();
+            if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
+            showStatus(`${pairId} confirmed. The trace is split at this wrap.`, 'success');
+        }
+
+        function s5CancelWrapPair() {
+            pendingWrapPair = null;
+            updateWrapPairControls();
+            if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
+            updateScaleWrapStatus();
+            showStatus('Wrap cancelled.', 'info');
+        }
+
+        function s5DeleteWrapPairNearMouse() {
+            const ctx = getSelectedWrapCurveContext();
+            const dIdx = getWrapDepthIndexFromMouse();
+            if (!ctx || !ctx.curveKey || !Number.isInteger(dIdx)) return;
+            const markers = getWrapMarkersForCurve(ctx.curveKey).filter(marker => marker.wrap_pair_id);
+            if (!markers.length) {
+                showStatus('No linked wraps to delete.', 'info');
+                return;
+            }
+            const closest = markers.reduce((best, marker) => !best || Math.abs(marker.depthIndex - dIdx) < Math.abs(best.depthIndex - dIdx) ? marker : best, null);
+            if (!closest || Math.abs(closest.depthIndex - dIdx) > getWrapPairToleranceRows()) {
+                showStatus('Move over a wrap marker before deleting it.', 'info');
+                return;
+            }
+            setWrapMarkersForCurve(ctx.curveKey, getWrapMarkersForCurve(ctx.curveKey).filter(marker => marker.wrap_pair_id !== closest.wrap_pair_id));
+            normalizeCurveValuesToWrapMarkers(ctx.curveKey);
+            rebuildCurveTraceFromDigitized(ctx.curveKey);
+            updateScaleWrapStatus(ctx.curveKey);
+            if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
+            showStatus(`${closest.wrap_pair_id} deleted.`, 'success');
         }
 
         function getWrapCycleForDepth(curveId, depthIndex) {
@@ -2665,12 +2854,18 @@
         function renderScaleWrapMarkersOnCanvas(ctx, scaleX, scaleY, tracks) {
             if (!ctx || !curveWrapMarkers || typeof curveWrapMarkers !== 'object') return;
             const keys = Object.keys(curveWrapMarkers);
+            if (pendingWrapPair && pendingWrapPair.curveKey && !keys.some(key => normalizeCurveKey(key) === normalizeCurveKey(pendingWrapPair.curveKey))) {
+                keys.push(pendingWrapPair.curveKey);
+            }
             if (!keys.length) return;
             ctx.save();
             ctx.font = '700 9px system-ui, -apple-system, Segoe UI, sans-serif';
             ctx.textBaseline = 'middle';
             for (const key of keys) {
-                const markers = getWrapMarkersForCurve(key);
+                let markers = getWrapMarkersForCurve(key);
+                if (pendingWrapPair && normalizeCurveKey(pendingWrapPair.curveKey) === normalizeCurveKey(key) && Array.isArray(pendingWrapPair.candidate)) {
+                    markers = markers.concat(pendingWrapPair.candidate.map(marker => ({ ...marker, pending: true })));
+                }
                 if (!markers.length) continue;
                 const track = findTrackByCurveId(key) ||
                     (Array.isArray(tracks) ? tracks.find(t => t && normalizeCurveKey(t.id) === normalizeCurveKey(key)) : null);
@@ -2683,7 +2878,9 @@
                     const x = xImg * scaleX;
                     const y = yImg * scaleY;
                     const cycleText = formatWrapCycle(marker.cycle);
-                    const label = cycleText;
+                    const label = marker.wrap_pair_id
+                        ? (marker.edge === 'left' ? `← ${marker.wrap_pair_id}` : `${marker.wrap_pair_id} →`)
+                        : cycleText;
                     const labelOnRight = marker.edge === 'left';
                     const textW = ctx.measureText(label).width;
                     const boxW = Math.max(20, textW + 8);
@@ -2694,8 +2891,8 @@
                         : x - boxW - edgePad;
                     const boxY = y - boxH - 4;
 
-                    ctx.strokeStyle = '#f97316';
-                    ctx.fillStyle = '#f97316';
+                    ctx.strokeStyle = marker.pending ? '#facc15' : '#f97316';
+                    ctx.fillStyle = marker.pending ? '#facc15' : '#f97316';
                     ctx.lineWidth = 1.5;
                     ctx.beginPath();
                     ctx.moveTo(x, y - 9);
@@ -10643,6 +10840,17 @@
             const yNorm = Math.max(0, Math.min(1, y / rect.height));
             const xImg = Math.round(xNorm * (imageWidth - 1));
             const yImg = Math.round(yNorm * (imageHeight - 1));
+
+            // One-click linked wrap tool takes precedence over curve dragging.
+            // It deliberately accepts only an edge-side click and creates the
+            // opposite-side candidate for confirmation.
+            if (event.button === 0 && pendingWrapPair) {
+                if (s5AddWrapPairAtImageCoords(xImg, yImg)) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    return;
+                }
+            }
 
             // When edit mode is enabled, clicks/drag adjust the selected curve
             // instead of starting new selections.
