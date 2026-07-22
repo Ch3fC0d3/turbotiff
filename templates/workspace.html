@@ -2702,6 +2702,28 @@
             return true;
         }
 
+        function commitWrapPairTransform(operation) {
+            const context = getCurveLayerContext(operation.curveId, 'main');
+            if (!context) return { changed: false, reason: 'curve_unavailable' };
+            const markerChanged = stablePersistenceStringify(operation.originalMarkers) !== stablePersistenceStringify(operation.nextMarkers);
+            const wrapLayerBefore = context.entry.wrapLayer ? clonePersistenceValue(context.entry.wrapLayer) : null;
+            try {
+                setWrapMarkersForCurve(operation.curveId, operation.nextMarkers);
+                let result = commitCurveLayerValues(operation.curveId, 'main', operation.nextValues, { clearWrapMarkers: false, rebuildTrace: true, reason: operation.reason });
+                if (!result.changed && markerChanged) result = commitInPlaceCurveLayerMutation(operation.curveId, 'main', true, { clearWrapMarkers: false, rebuildTrace: true, reason: `${operation.reason}_markers` });
+                if (!result.changed) { setWrapMarkersForCurve(operation.curveId, operation.originalMarkers); return result; }
+                editUndoStack.push({ type: 'wrap_pair_transform', curveId: operation.curveId, curveKey: operation.curveId, dragLayer: 'main', traceKey: operation.traceKey, originalMarkers: operation.originalMarkers, originalValues: operation.originalValues, originalTracePoints: operation.originalTracePoints, originalWrapConfig: operation.originalWrapConfig, originalWrapLayer: wrapLayerBefore });
+                return result;
+            } catch (error) {
+                setWrapMarkersForCurve(operation.curveId, operation.originalMarkers);
+                commitCurveLayerValues(operation.curveId, 'main', operation.originalValues, { clearWrapMarkers: false, rebuildTrace: false, reason: `${operation.reason}_rollback` });
+                if (wrapLayerBefore) context.entry.wrapLayer = wrapLayerBefore; else delete context.entry.wrapLayer;
+                rebuildCurveTraceFromDigitized(operation.curveId, 'main', { preserveBezierCache: true });
+                showStatus(`Wrap was not applied: ${error.message}`, 'error');
+                return { changed: false, reason: 'transaction_failed' };
+            }
+        }
+
         function s5ConfirmWrapPair() {
             if (!pendingWrapPair || !pendingWrapPair.candidate) return;
             if (pendingWrapPair.datasetGeneration !== committedDatasetGeneration ||
@@ -2733,11 +2755,8 @@
             const nextMarkers = originalMarkers.concat(ordered).sort((a, b) => a.depthIndex - b.depthIndex || a.createdAt - b.createdAt);
             const nextValues = buildWrapAdjustedValues(pendingWrapPair.curveKey, context.values, pendingWrapPair.track, nextMarkers);
             const markersChanged = stablePersistenceStringify(originalMarkers) !== stablePersistenceStringify(nextMarkers);
-            editUndoStack.push({ type: 'wrap_pair_transform', curveId: pendingWrapPair.curveKey, curveKey: pendingWrapPair.curveKey, dragLayer: 'main', traceKey, originalMarkers, originalValues, originalTracePoints, originalWrapConfig: pendingWrapPair.originalWrapConfig });
-            setWrapMarkersForCurve(pendingWrapPair.curveKey, nextMarkers);
-            let commitResult = commitCurveLayerValues(pendingWrapPair.curveKey, 'main', nextValues, { clearWrapMarkers: false, rebuildTrace: true, reason: 'wrap_pair_confirm' });
-            if (!commitResult.changed && markersChanged) commitResult = commitInPlaceCurveLayerMutation(pendingWrapPair.curveKey, 'main', true, { clearWrapMarkers: false, rebuildTrace: true, reason: 'wrap_pair_marker_commit' });
-            if (!commitResult.changed) { setWrapMarkersForCurve(pendingWrapPair.curveKey, originalMarkers); editUndoStack.pop(); return; }
+            const commitResult = commitWrapPairTransform({ curveId: pendingWrapPair.curveKey, track: pendingWrapPair.track, nextMarkers, nextValues, originalMarkers, originalValues, originalTracePoints, traceKey, originalWrapConfig: pendingWrapPair.originalWrapConfig, reason: 'wrap_pair_confirm' });
+            if (!commitResult.changed) return;
             // Finish the deferred Step 2 wrapped-mode mutation only now.
             const curveIndex = findCurveCardIndex(pendingWrapPair.curveKey);
             const step2Checkbox = curveIndex >= 0 ? document.getElementById(`wrapped${curveIndex}`) : null;
@@ -2800,11 +2819,8 @@
             const nextMarkers = originalMarkers.filter(marker => marker.wrap_pair_id !== closest.wrap_pair_id);
             const nextValues = buildWrapAdjustedValues(ctx.curveKey, context.values, ctx.track, nextMarkers);
             const markersChanged = stablePersistenceStringify(originalMarkers) !== stablePersistenceStringify(nextMarkers);
-            editUndoStack.push({ type: 'wrap_pair_transform', curveId: ctx.curveKey, curveKey: ctx.curveKey, dragLayer: 'main', traceKey, originalMarkers, originalValues, originalTracePoints });
-            setWrapMarkersForCurve(ctx.curveKey, nextMarkers);
-            let commitResult = commitCurveLayerValues(ctx.curveKey, 'main', nextValues, { clearWrapMarkers: false, rebuildTrace: true, reason: 'wrap_pair_delete' });
-            if (!commitResult.changed && markersChanged) commitResult = commitInPlaceCurveLayerMutation(ctx.curveKey, 'main', true, { clearWrapMarkers: false, rebuildTrace: true, reason: 'wrap_pair_marker_delete' });
-            if (!commitResult.changed) { setWrapMarkersForCurve(ctx.curveKey, originalMarkers); editUndoStack.pop(); return; }
+            const commitResult = commitWrapPairTransform({ curveId: ctx.curveKey, track: ctx.track, nextMarkers, nextValues, originalMarkers, originalValues, originalTracePoints, traceKey, reason: 'wrap_pair_delete' });
+            if (!commitResult.changed) return;
             updateScaleWrapStatus(ctx.curveKey);
             if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
             showStatus(`${closest.wrap_pair_id} deleted.`, 'success');
@@ -8655,6 +8671,8 @@
                     if (step5 && last.originalWrapConfig.step5Checked != null) step5.checked = last.originalWrapConfig.step5Checked;
                     if (step2 && last.originalWrapConfig.step2Checked != null) step2.checked = last.originalWrapConfig.step2Checked;
                 }
+                if (last.originalWrapLayer) context.entry.wrapLayer = clonePersistenceValue(last.originalWrapLayer);
+                else if (last.originalWrapConfig && last.originalWrapConfig.hadWrapLayer === false) delete context.entry.wrapLayer;
                 commitCurveLayerValues(last.curveId, 'main', last.originalValues, {
                     clearWrapMarkers: false, rebuildTrace: true, cancelInteraction: true, reason: 'undo_wrap_pair_transform',
                 });
