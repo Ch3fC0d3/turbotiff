@@ -2329,6 +2329,29 @@ def test_optional_curve_pipeline_imports_cannot_prevent_core_app_boot():
     assert "def build_phase1_probability(roi, classic_mask, **_kwargs):" in source
 
 
+def test_trace_continuity_gate_keeps_missing_evidence_as_gaps_not_bridges():
+    source = WEB_APP.read_text(encoding="utf-8")
+    gate_start = source.index("def enforce_local_trace_continuity(")
+    gate_end = source.index("def should_preserve_black_trace_detail(", gate_start)
+    gate_source = source[gate_start:gate_end]
+    digitize_start = source.index("# Final evidence/continuity gate.")
+    display_start = source.index("# Preserve trace gaps in the display")
+    display_end = source.index("curve_traces[name] = trace_points", display_start)
+
+    assert "vertical_support = cv2.blur(prob, (3, 5))" in gate_source
+    assert "gap_rows += 1" in gate_source
+    assert "result[y] = candidate" in gate_source
+    assert "xs = enforce_local_trace_continuity(" in source[digitize_start:display_start]
+    assert ".interpolate(" not in source[display_start:display_end]
+
+
+def test_overlay_breaks_on_any_missing_trace_row():
+    source = WORKSPACE_TEMPLATE.read_text(encoding="utf-8")
+    overlay_source = _function_source(source, "renderCurveTraceOverlays", "clearDepthOverlays")
+
+    assert "const jumpBreakMaxRowGap = 1.0;" in overlay_source
+
+
 def test_project_load_validates_and_restores_authoritative_layers_pins_and_clean_state():
     source = WORKSPACE_TEMPLATE.read_text(encoding="utf-8")
     load_source = _function_source(source, "ensureDigitizedFromLas", "buildLasFromDigitized")

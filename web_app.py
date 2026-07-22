@@ -6054,6 +6054,115 @@ def guard_trace_velocity(xs, max_dx=6.0, wrap_width=None):
     return result
 
 
+def enforce_local_trace_continuity(
+    curve_mask,
+    xs,
+    max_step=7.0,
+    search_radius=None,
+    min_evidence=0.075,
+    wrap_width=None,
+):
+    """Keep a trace on nearby, supported ink and leave uncertain rows blank.
+
+    The dynamic-programming path always returns a coordinate, even when a row
+    contains only grid residue or no usable curve pixel.  It is unsafe to turn
+    that coordinate into a visible bridge.  This final gate only accepts a
+    candidate from a small window around the last supported point.  A missing
+    row stays ``NaN``; after a gap we reacquire only a nearby candidate whose
+    direction is compatible with the recent path.
+    """
+    if curve_mask is None or xs is None or not hasattr(xs, "size") or xs.size < 2:
+        return xs
+    try:
+        prob = np.asarray(curve_mask, dtype=np.float32)
+        if prob.ndim != 2:
+            return xs
+        if float(np.nanmax(prob)) > 1.0:
+            prob /= 255.0
+    except Exception:
+        return xs
+
+    h, w = prob.shape
+    n = min(h, xs.size)
+    if n < 2 or w < 2:
+        return xs
+    circular = wrap_width is not None and float(wrap_width) > 1.0
+    width = float(wrap_width) if circular else float(w)
+    step_limit = max(2.0, min(float(max_step), max(2.0, width * 0.06)))
+    radius = int(round(search_radius)) if search_radius is not None else int(round(step_limit + 3.0))
+    radius = max(3, min(radius, max(3, int(round(width * 0.08)))))
+    # A real curve pixel normally persists over several rows.  This modest
+    # vertical score rejects isolated grid intersections without demanding a
+    # perfectly continuous scan.
+    vertical_support = cv2.blur(prob, (3, 5))
+    result = np.full(xs.size, np.nan, dtype=np.float32)
+    last_x = None
+    last_delta = 0.0
+    gap_rows = 0
+
+    def _wrapped_delta(current, previous):
+        delta = float(current) - float(previous)
+        if circular:
+            delta -= round(delta / width) * width
+        return delta
+
+    for y in range(n):
+        if last_x is None:
+            proposed = float(xs[y]) if np.isfinite(xs[y]) else np.nan
+            if not np.isfinite(proposed):
+                continue
+            center = int(round(proposed))
+            if circular:
+                cols = np.mod(np.arange(center - 1, center + 2), w)
+            else:
+                cols = np.arange(max(0, center - 1), min(w, center + 2))
+            if cols.size == 0:
+                continue
+            scores = 0.65 * prob[y, cols] + 0.35 * vertical_support[y, cols]
+            best = int(np.argmax(scores))
+            if float(prob[y, cols[best]]) < float(min_evidence) or float(scores[best]) < float(min_evidence):
+                continue
+            last_x = float(cols[best])
+            result[y] = last_x
+            continue
+
+        predicted = float(last_x + last_delta * min(gap_rows + 1, 3))
+        center = int(round(predicted))
+        if circular:
+            cols = np.mod(np.arange(center - radius, center + radius + 1), w)
+        else:
+            cols = np.arange(max(0, center - radius), min(w, center + radius + 1))
+        if cols.size == 0:
+            gap_rows += 1
+            continue
+        scores = 0.65 * prob[y, cols] + 0.35 * vertical_support[y, cols]
+        best = int(np.argmax(scores))
+        candidate = float(cols[best])
+        candidate_score = float(scores[best])
+        candidate_evidence = float(prob[y, cols[best]])
+        delta = _wrapped_delta(candidate, last_x)
+        # Reacquisition is deliberately stricter than an ordinary adjacent
+        # point.  It must be close to the recent trend, not merely to a distant
+        # high-probability grid mark.
+        trend_error = abs(delta - last_delta)
+        allowed_delta = step_limit if gap_rows == 0 else max(step_limit, step_limit * 1.25)
+        allowed_trend_error = step_limit * (1.25 if gap_rows == 0 else 0.9)
+        if (
+            candidate_evidence < float(min_evidence)
+            or candidate_score < float(min_evidence)
+            or abs(delta) > allowed_delta
+            or trend_error > allowed_trend_error
+        ):
+            gap_rows += 1
+            continue
+        last_delta = 0.65 * last_delta + 0.35 * delta
+        last_x = candidate
+        result[y] = candidate
+        gap_rows = 0
+
+    return result
+
+
 def should_preserve_black_trace_detail(mode, curve_type=None, curve_name=None, preserve_wiggles=False):
     """Return True for black sonic traces whose short excursions are signal.
 
@@ -12448,24 +12557,20 @@ def digitize():
 
         width_px = mask.shape[1]
 
-        # UNIVERSAL GAP FILLING:
-        # Aggressive grid removal can leave small gaps where the curve crossed a grid line.
-        # We linearly interpolate these gaps to ensure continuity.
+        # Final evidence/continuity gate.  Do this after all optional snapping
+        # passes, because those passes can otherwise select a distant grid bar
+        # for a single row.  Gaps are intentional: neither LAS nor the overlay
+        # is allowed to invent a long cross-track bridge.
         if xs.size > 0:
-            gap_values = _unwrap_trace_for_filtering(xs, width_px) if wrap_enabled else xs
-            s = pd.Series(gap_values)
-            h_mask, w_mask = mask.shape
-            if mode in colored_modes:
-                max_gap = max(25, int(h_mask * 0.02))
-            else:
-                max_gap = max(25, int(h_mask * 0.02))  # Strict for dashed black curves
-            s = s.interpolate(method='linear', limit_direction='both', limit=max_gap, limit_area=None)
-            # Handle edge cases
-            if s.isna().any():
-                s = s.ffill(limit=max_gap).bfill(limit=max_gap)
-            xs = s.to_numpy(dtype=np.float32)
-            if wrap_enabled:
-                xs = np.mod(xs, float(width_px)).astype(np.float32)
+            try:
+                xs = enforce_local_trace_continuity(
+                    mask,
+                    xs,
+                    max_step=max(4.0, min(8.0, float(width_px) * 0.025)),
+                    wrap_width=width_px if wrap_enabled else None,
+                )
+            except Exception:
+                pass
 
         if mode not in colored_modes and not phase2_active and not topology_active and not preserve_black_detail:
             try:
@@ -12639,24 +12744,15 @@ def digitize():
         vals_out = np.where(np.isnan(vals), null_val, vals).astype(np.float32)
         curve_data[name] = {'unit': unit, 'values': vals_out}
 
-        # Build a continuous display trace for the UI overlay. The exported LAS
-        # values can still contain nulls, but the visible editing line should
-        # remain continuous rather than showing gaps.
+        # Preserve trace gaps in the display as well as in LAS values.  Filling
+        # the points here would make the cyan overlay draw an invented bridge
+        # even when the evidence gate correctly rejected a row.
         trace_points = []
         if xs.size > 0:
-            try:
-                xs_display = pd.Series(xs.astype(np.float32)).interpolate(
-                    method='linear',
-                    limit_direction='both',
-                    limit_area=None,
-                ).to_numpy(dtype=np.float32)
-            except Exception:
-                xs_display = xs
-
-            valid_rows = np.where(~np.isnan(xs_display))[0]
+            valid_rows = np.where(np.isfinite(xs))[0]
             if valid_rows.size > 0:
                 for row_idx in valid_rows:
-                    x_val = xs_display[row_idx]
+                    x_val = xs[row_idx]
                     x_img = float(left_px) + float(x_val)
                     y_img = float(top + row_idx)
                     trace_points.append([x_img, y_img])

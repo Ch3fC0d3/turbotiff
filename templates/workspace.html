@@ -14959,7 +14959,9 @@
             const jumpBreakDomPx = Math.max(28, rect.width * 0.032);
             const jumpBreakSlope = 10.0;
             const jumpBreakMinYDomPx = 26.0;
-            const jumpBreakMaxRowGap = 4.0;
+            // Trace gaps are evidence failures, not samples to be bridged.
+            // Only consecutive raster rows may be joined by the display line.
+            const jumpBreakMaxRowGap = 1.0;
             const jumpBreakMinImgDx = Math.max(10.0, w * 0.012);
             const jumpBreakImgSlope = 6.5;
             const shelfNeighborImgDx = Math.max(5.0, w * 0.0065);
