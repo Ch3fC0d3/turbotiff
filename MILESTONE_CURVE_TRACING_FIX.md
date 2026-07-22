@@ -1,6 +1,13 @@
 # Curve Tracing Fix & Optimization Milestone
 **Date:** December 8, 2025
-**Status:** ✅ Solved
+**Status:** Historical snapshot (superseded)
+
+> This document records the December 2025 experiment and is not a description
+> of the current production tracer. The live pipeline no longer erases vertical
+> morphology or uses the 2% rail threshold / 10,000 rail penalty described
+> below. Current behavior is defined by `compute_prob_map()` and
+> `trace_curve_with_dp()` in `web_app.py`, plus `run_viterbi()` in
+> `fast_tracer.py`.
 
 ## Problem Description
 The curve tracer was exhibiting two main issues, particularly with jagged Gamma Ray (GR) logs:
@@ -39,6 +46,9 @@ Instead of a single tracer, we now use a hybrid approach for colored modes:
     4.  **Sub-pixel Parabola:** Fit curve to intensity profile for sub-pixel accuracy.
 
 ## How to Maintain
+The settings below are historical guidance for reproducing this milestone, not
+current tuning recommendations.
+
 *   **Do not re-enable** aggressive peak snapping (search radius > 10px) for colored modes without ensuring the probability map is perfectly clean.
 *   **Keep Rail Penalties High:** The "2% threshold / 10k penalty" is the primary guardrail preventing artifact lock-on.
 *   **Numba is Required:** Ensure `requirements.txt` always includes `numba`.

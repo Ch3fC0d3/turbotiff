@@ -38,6 +38,20 @@ verification_results.txt
 user_preferences.json
 corrections/
 *.ckpt.pt
+*.pt
+*.pth
+*.onnx
+models/curve_phase1/
+models/curve_phase2/
+data/synthetic_logs/
+evaluation/golden/images/
+evaluation/golden/traces/
+evaluation/golden/metadata/
+evaluation/golden/reports/
+# Generated evaluation datasets, preview rasters, and model runs are local
+# evidence artifacts. The reproducible builders and their documentation live
+# in training/, curve_model/, and docs/.
+evaluation/
 
 # User-uploaded / sample data files
 *.tiff

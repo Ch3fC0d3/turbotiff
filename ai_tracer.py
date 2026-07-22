@@ -38,9 +38,7 @@ class CurveTraceNet(nn.Module if nn is not None else object):
     def forward(self, x):
         h = self.enc(x)
         logits = self.dec(h).squeeze(1)
-        prob = torch.softmax(logits, dim=-1)
-        x_positions = torch.linspace(0.0, 1.0, logits.shape[-1], device=logits.device)
-        return (prob * x_positions).sum(dim=-1)
+        return torch.softmax(logits, dim=-1)
 
 
 def _prediction_to_normalized_x(prediction: np.ndarray) -> np.ndarray:
@@ -51,15 +49,10 @@ def _prediction_to_normalized_x(prediction: np.ndarray) -> np.ndarray:
     if pred.ndim != 2 or pred.shape[1] < 1:
         raise ValueError(f"Unexpected AI trace output shape: {pred.shape}")
 
-    weights = np.clip(pred, 0.0, None)
-    row_sums = weights.sum(axis=1, keepdims=True)
-    empty_rows = row_sums[:, 0] <= 1e-8
-    row_sums[empty_rows] = 1.0
-    x_positions = np.linspace(0.0, 1.0, pred.shape[1], dtype=np.float32)
-    coords = (weights * x_positions[None, :]).sum(axis=1) / row_sums[:, 0]
-    if np.any(empty_rows):
-        coords[empty_rows] = np.argmax(pred[empty_rows], axis=1) / max(1, pred.shape[1] - 1)
-    return np.clip(coords.astype(np.float32), 0.0, 1.0)
+    # Preserve discrete candidate peaks. An expected coordinate can land in
+    # blank space when two curves have similar probability in the same row.
+    peak_indices = np.argmax(pred, axis=1).astype(np.float32)
+    return peak_indices / max(1, pred.shape[1] - 1)
 
 
 class AITracer:
@@ -95,42 +88,48 @@ class AITracer:
     def is_available(self):
         return self.model is not None
 
+    def predict_probability_map(self, roi_bgr: np.ndarray) -> np.ndarray:
+        """Return the model's curve heatmap at the original ROI resolution."""
+        if self.model is None:
+            raise RuntimeError("AI model not loaded.")
+
+        orig_h, orig_w = roi_bgr.shape[:2]
+        if orig_h == 0 or orig_w == 0:
+            return np.zeros((orig_h, orig_w), dtype=np.float32)
+
+        roi_gray = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
+        roi_resized = cv2.resize(roi_gray, (self.input_w, self.input_h), interpolation=cv2.INTER_AREA)
+        x_tensor = torch.from_numpy(roi_resized).float().unsqueeze(0).unsqueeze(0) / 255.0
+        x_tensor = x_tensor.to(self.device)
+
+        with torch.no_grad():
+            prediction = self.model(x_tensor).cpu().numpy()
+
+        pred = np.asarray(prediction, dtype=np.float32).squeeze()
+        if pred.ndim == 1:
+            # Backward compatibility for a custom model that still emits one
+            # normalized coordinate per row.
+            coords = np.clip(pred, 0.0, 1.0)
+            heatmap = np.zeros((coords.size, self.input_w), dtype=np.float32)
+            indices = np.rint(coords * max(1, self.input_w - 1)).astype(np.int32)
+            heatmap[np.arange(coords.size), np.clip(indices, 0, self.input_w - 1)] = 1.0
+        elif pred.ndim == 2:
+            heatmap = np.clip(pred, 0.0, None)
+        else:
+            raise ValueError(f"Unexpected AI heatmap output shape: {pred.shape}")
+
+        heatmap = cv2.resize(heatmap, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
+        row_max = heatmap.max(axis=1, keepdims=True)
+        row_max[row_max <= 1e-8] = 1.0
+        return np.clip(heatmap / row_max, 0.0, 1.0).astype(np.float32)
+
     def trace(self, roi_bgr: np.ndarray) -> np.ndarray:
         """
         Runs the AI model on a cropped BGR image of the curve track.
         Returns a 1D numpy array of x-coordinates for each row in the original roi.
         """
-        if self.model is None:
-            raise RuntimeError("AI model not loaded.")
-            
         orig_h, orig_w = roi_bgr.shape[:2]
         if orig_h == 0 or orig_w == 0:
             return np.array([])
-
-        # Preprocess: convert to grayscale, resize to expected input size, normalize to 0-1
-        roi_gray = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
-        roi_resized = cv2.resize(roi_gray, (self.input_w, self.input_h), interpolation=cv2.INTER_AREA)
-        
-        # Add batch and channel dimensions: [1, 1, H, W]
-        x_tensor = torch.from_numpy(roi_resized).float().unsqueeze(0).unsqueeze(0) / 255.0
-        x_tensor = x_tensor.to(self.device)
-
-        # Predict
-        with torch.no_grad():
-            pred_tensor = self.model(x_tensor) # Shape: [1, input_h]
-        pred_norm = _prediction_to_normalized_x(pred_tensor.cpu().numpy())
-        if pred_norm.size != self.input_h:
-            raise ValueError(
-                f"AI trace returned {pred_norm.size} rows; expected {self.input_h}"
-            )
-
-        # Scale prediction back to original image coordinates
-        # 1. Scale width from [0,1] to [0, orig_w - 1]
-        pred_x_small = pred_norm * max(0, orig_w - 1)
-        
-        # 2. Interpolate from input_h back to orig_h
-        y_small = np.linspace(0, orig_h - 1, self.input_h)
-        y_orig = np.arange(orig_h)
-        pred_x_orig = np.interp(y_orig, y_small, pred_x_small)
-
-        return pred_x_orig
+        heatmap = self.predict_probability_map(roi_bgr)
+        return np.argmax(heatmap, axis=1).astype(np.float32)

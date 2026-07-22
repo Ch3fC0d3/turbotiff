@@ -1,0 +1,5 @@
+# Optional offline training/inference dependencies for Neural Curve Phase 1.
+# The current main environment already includes these for legacy AI/OCR paths.
+torch>=2.0.0
+torchvision>=0.15.0
+

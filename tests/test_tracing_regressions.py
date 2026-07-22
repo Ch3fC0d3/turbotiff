@@ -28,6 +28,34 @@ class ViterbiRegressionTests(unittest.TestCase):
         self.assertEqual(xs[-1], 1.0)
         self.assertTrue(np.all(np.isfinite(xs)))
 
+    def test_wrapped_path_crosses_from_right_edge_to_left_edge(self):
+        width = 8
+        expected = np.array([5, 6, 7, 0, 1, 2], dtype=np.float32)
+        cost = np.full((expected.size, width), 20.0, dtype=np.float32)
+        probability = np.full_like(cost, 0.01)
+        for row, x in enumerate(expected.astype(np.int32)):
+            cost[row, x] = 0.0
+            probability[row, x] = 1.0
+
+        runner = getattr(fast_tracer.run_viterbi, 'py_func', fast_tracer.run_viterbi)
+        xs, confidence = runner(cost, probability, 1, 0.05, 0.0, True)
+
+        np.testing.assert_array_equal(xs, expected)
+        self.assertTrue(np.all(confidence > 0.9))
+
+    def test_confidence_excludes_selected_pixel_and_never_goes_negative(self):
+        cost = np.full((3, 4), 10.0, dtype=np.float32)
+        cost[:, 1] = 0.0
+        probability = np.full((3, 4), 0.1, dtype=np.float32)
+        probability[:, 1] = 0.4
+        probability[:, 2] = 0.9
+
+        runner = getattr(fast_tracer.run_viterbi, 'py_func', fast_tracer.run_viterbi)
+        xs, confidence = runner(cost, probability, 1, 0.0, 0.0)
+
+        np.testing.assert_array_equal(xs, np.ones(3, dtype=np.float32))
+        np.testing.assert_array_equal(confidence, np.zeros(3, dtype=np.float32))
+
 
 class NeuralTraceRegressionTests(unittest.TestCase):
     def test_probability_map_decodes_to_one_coordinate_per_row(self):
@@ -46,13 +74,26 @@ class NeuralTraceRegressionTests(unittest.TestCase):
         coords = ai_tracer._prediction_to_normalized_x(prediction)
         np.testing.assert_allclose(coords, [0.1, 0.5, 0.9])
 
+    def test_bimodal_probability_row_selects_a_real_peak(self):
+        prediction = np.zeros((2, 9), dtype=np.float32)
+        prediction[:, 1] = 0.9
+        prediction[:, 7] = 0.8
+
+        coords = ai_tracer._prediction_to_normalized_x(prediction)
+
+        np.testing.assert_allclose(coords, [0.125, 0.125])
+
     def test_failed_ai_trace_falls_back_to_dp(self):
         roi = np.zeros((4, 6, 3), dtype=np.uint8)
         mask = np.zeros((4, 6), dtype=np.uint8)
         expected_x = np.array([1, 2, 3, 4], dtype=np.float32)
         expected_confidence = np.full(4, 0.5, dtype=np.float32)
 
-        with patch.object(web_app.ai_tracer, 'trace', side_effect=RuntimeError('bad output')):
+        with patch.object(
+            web_app.ai_tracer,
+            'predict_probability_map',
+            side_effect=RuntimeError('bad output'),
+        ):
             with patch.object(
                 web_app,
                 'trace_curve_with_dp',
@@ -65,6 +106,59 @@ class NeuralTraceRegressionTests(unittest.TestCase):
         np.testing.assert_array_equal(xs, expected_x)
         np.testing.assert_array_equal(confidence, expected_confidence)
         dp.assert_called_once()
+
+
+class ProbabilityMapRegressionTests(unittest.TestCase):
+    def test_red_hue_mask_spans_both_ends_of_opencv_hue_range(self):
+        hsv = np.array([[[179, 200, 200], [1, 200, 200], [90, 200, 200]]], dtype=np.uint8)
+
+        mask = web_app._circular_hue_mask(hsv, center=0.0, band=4.0)
+
+        np.testing.assert_array_equal(mask[0], [255, 255, 0])
+        center = web_app._circular_hue_center(np.array([179, 0, 1], dtype=np.uint8))
+        self.assertTrue(center <= 2.0 or center >= 178.0)
+
+    def test_pipeline_skeletonization_preserves_soft_noncenter_evidence(self):
+        mask = np.zeros((9, 9), dtype=np.uint8)
+        mask[2:7, 2:7] = 80
+
+        result = web_app.pipeline_skeletonize(mask)
+
+        self.assertGreater(result[2, 2], 0)
+        self.assertGreaterEqual(int(result.max()), 80)
+
+    def test_ai_heatmap_is_decoded_by_dp_with_wrap_configuration(self):
+        roi = np.zeros((4, 6, 3), dtype=np.uint8)
+        mask = np.zeros((4, 6), dtype=np.uint8)
+        heatmap = np.zeros((4, 6), dtype=np.float32)
+        heatmap[:, 2] = 1.0
+        expected_x = np.full(4, 2.0, dtype=np.float32)
+        expected_confidence = np.full(4, 0.7, dtype=np.float32)
+
+        with patch.object(web_app.ai_tracer, 'predict_probability_map', return_value=heatmap):
+            with patch.object(
+                web_app,
+                'trace_curve_with_dp',
+                return_value=(expected_x, expected_confidence),
+            ) as dp:
+                xs, confidence = web_app._trace_ai_with_dp_fallback(
+                    roi,
+                    mask,
+                    'RT',
+                    0.2,
+                    20.0,
+                    'RT',
+                    3,
+                    0.01,
+                    0.0,
+                    'right',
+                    True,
+                )
+
+        np.testing.assert_array_equal(xs, expected_x)
+        np.testing.assert_array_equal(confidence, expected_confidence)
+        self.assertTrue(dp.call_args.kwargs['wrap_enabled'])
+        self.assertGreater(int(dp.call_args.args[0][:, 2].min()), 0)
 
 
 class FusionRegressionTests(unittest.TestCase):
