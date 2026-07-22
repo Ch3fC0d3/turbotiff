@@ -2821,25 +2821,22 @@
             return 0;
         }
 
-        function normalizeCurveValuesToWrapMarkers(curveId) {
+        function normalizeCurveValuesToWrapMarkers(curveId, options = {}) {
             const curveKey = getCurveKeyForWrap(curveId);
             if (!curveKey) return false;
             const found = findDigitizedCurveEntry(curveKey);
             const track = findTrackByCurveId(curveKey) || findTrackByCurveId(curveId);
-            const range = getTrackScaleRange(track);
-            if (!found || !found.entry || !Array.isArray(found.entry.values) || !Number.isFinite(range)) {
+            if (!found || !found.entry || !Array.isArray(found.entry.values) || !track) {
                 return false;
             }
-
-            const values = found.entry.values;
-            for (let i = 0; i < values.length; i++) {
-                const v = values[i];
-                if (isMissingDigitizedValue(v)) continue;
-                const visibleValue = getVisibleTrackValue(v, track);
-                const cycle = getWrapCycleForDepth(curveKey, i);
-                values[i] = visibleValue + cycle * range;
-            }
-            return true;
+            if (isLayerLocked('main', found.entry)) return false;
+            const nextValues = buildWrapAdjustedValues(curveKey, found.entry.values, track, getWrapMarkersForCurve(curveKey));
+            const result = commitCurveLayerValues(curveKey, 'main', nextValues, {
+                clearWrapMarkers: false,
+                rebuildTrace: options.rebuildTrace !== false,
+                reason: options.reason || 'normalize_wrap_markers',
+            });
+            return !!result.changed;
         }
 
         function buildWrapAdjustedValues(curveId, sourceValues, track, markers) {
@@ -7302,6 +7299,7 @@
                 });
                 showStatus(`Edit mode on for curve ${id}. Click inside its track to nudge values at the nearest depth.`, 'info');
             } else {
+                cancelPendingWrapPair('edit_mode_closed');
                 editMode = false;
                 editCurveId = null;
                 editCurveDataKey = null;
@@ -16682,6 +16680,7 @@
                         panel.innerHTML = existing + aiBlock;
                     }
                     populateEditCurveSelectFromConfig(config.curves);
+                    cancelPendingWrapPair('redigitized');
                     editMode = false;
                     editCurveId = null;
                     editUndoStack = [];  // Clear undo history for fresh digitization
