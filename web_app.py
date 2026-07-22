@@ -12559,16 +12559,28 @@ def digitize():
 
         # Final evidence/continuity gate.  Do this after all optional snapping
         # passes, because those passes can otherwise select a distant grid bar
-        # for a single row.  Gaps are intentional: neither LAS nor the overlay
-        # is allowed to invent a long cross-track bridge.
+        # for a single row.  Wrapped sonic traces deliberately move between
+        # chart branches, so a one-branch local gate would reject their real
+        # excursions and pin them to a rail.  Keep their established cyclic
+        # interpolation path until they use the topology decoder end-to-end.
         if xs.size > 0:
             try:
-                xs = enforce_local_trace_continuity(
-                    mask,
-                    xs,
-                    max_step=max(4.0, min(8.0, float(width_px) * 0.025)),
-                    wrap_width=width_px if wrap_enabled else None,
-                )
+                if wrap_enabled and preserve_black_detail:
+                    gap_values = _unwrap_trace_for_filtering(xs, width_px)
+                    xs = pd.Series(gap_values).interpolate(
+                        method='linear',
+                        limit_direction='both',
+                        limit=25,
+                        limit_area=None,
+                    ).ffill(limit=25).bfill(limit=25).to_numpy(dtype=np.float32)
+                    xs = np.mod(xs, float(width_px)).astype(np.float32)
+                else:
+                    xs = enforce_local_trace_continuity(
+                        mask,
+                        xs,
+                        max_step=max(4.0, min(8.0, float(width_px) * 0.025)),
+                        wrap_width=width_px if wrap_enabled else None,
+                    )
             except Exception:
                 pass
 

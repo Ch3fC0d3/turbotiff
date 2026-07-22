@@ -2342,6 +2342,8 @@ def test_trace_continuity_gate_keeps_missing_evidence_as_gaps_not_bridges():
     assert "gap_rows += 1" in gate_source
     assert "result[y] = candidate" in gate_source
     assert "xs = enforce_local_trace_continuity(" in source[digitize_start:display_start]
+    assert "if wrap_enabled and preserve_black_detail:" in source[digitize_start:display_start]
+    assert "gap_values = _unwrap_trace_for_filtering(xs, width_px)" in source[digitize_start:display_start]
     assert ".interpolate(" not in source[display_start:display_end]
 
 
