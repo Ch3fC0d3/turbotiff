@@ -2085,6 +2085,7 @@
         let editDragState = null;        // { curveId, curveKey, pointIndex, depthIndex, yImg }
         let nextCurveDragInteractionId = 1;
         let lastCurveTraces = null;      // last curve_traces overlay returned from backend
+        let canonicalCurveTraces = {};   // { curveKey: { unwrapped_x, wrap_cycle, explicit_breaks, track_width } }
         const curveLayerRevisions = new Map();
         const curveLayerTraceRevisions = new Map();
         let committedDatasetGeneration = 0;
@@ -2127,6 +2128,52 @@
         function normalizeCurveKey(curveId) {
             const key = (curveId || '').toString().trim();
             return key ? key.toUpperCase() : '';
+        }
+
+        function normalizeCanonicalTrace(trace, track = null) {
+            if (!trace || !Array.isArray(trace.unwrapped_x)) return null;
+            const unwrapped = trace.unwrapped_x.map(value => Number.isFinite(Number(value)) ? Number(value) : null);
+            const width = Number(trace.track_width || (track && Math.abs(track.rightX - track.leftX)));
+            if (!Number.isFinite(width) || width <= 1) return null;
+            const cycles = Array.isArray(trace.wrap_cycle) ? trace.wrap_cycle : [];
+            const wrapCycle = unwrapped.map((value, row) => Number.isInteger(cycles[row])
+                ? cycles[row]
+                : (value == null ? 0 : Math.floor(value / width)));
+            const explicitBreaks = Array.from(new Set((Array.isArray(trace.explicit_breaks) ? trace.explicit_breaks : [])
+                .filter(row => Number.isInteger(row) && row > 0 && row < unwrapped.length))).sort((a, b) => a - b);
+            for (let row = 1; row < unwrapped.length; row++) {
+                if (unwrapped[row - 1] == null || unwrapped[row] == null) explicitBreaks.push(row);
+            }
+            return {
+                unwrapped_x: unwrapped,
+                wrap_cycle: wrapCycle,
+                explicit_breaks: Array.from(new Set(explicitBreaks)).sort((a, b) => a - b),
+                track_width: width,
+                track_left_px: Number.isFinite(Number(trace.track_left_px)) ? Number(trace.track_left_px) : (track ? Math.min(track.leftX, track.rightX) : 0),
+            };
+        }
+
+        function canonicalTraceToOverlayPoints(trace, curveId) {
+            const track = findTrackByCurveId(curveId);
+            const canonical = normalizeCanonicalTrace(trace, track);
+            if (!canonical) return [];
+            const left = canonical.track_left_px;
+            const points = [];
+            canonical.unwrapped_x.forEach((unwrapped, row) => {
+                if (!Number.isFinite(unwrapped)) return;
+                const cycle = canonical.wrap_cycle[row] || 0;
+                const yImg = getPixelYForDepthIndex(row);
+                if (!Number.isFinite(yImg)) return;
+                const visibleX = unwrapped - cycle * canonical.track_width;
+                points.push([left + visibleX, yImg, row, 'canonical', Date.now(), unwrapped, cycle]);
+            });
+            return points;
+        }
+
+        function getCanonicalTraceForCurve(curveId) {
+            if (!canonicalCurveTraces || typeof canonicalCurveTraces !== 'object') return null;
+            const key = getCurveKeyForWrap(curveId) || normalizeCurveKey(curveId);
+            return canonicalCurveTraces[key] || canonicalCurveTraces[curveId] || null;
         }
 
         function normalizeTraceAliasKey(value) {
@@ -2422,29 +2469,94 @@
             return { valid: true, message: '' };
         }
 
-        function getWrapEvidencePoint(curveKey, track, edge, targetDepthIndex) {
-            const traceKey = resolveTraceKeyForCurveId(curveKey) || curveKey;
-            const points = lastCurveTraces && Array.isArray(lastCurveTraces[traceKey]) ? lastCurveTraces[traceKey] : [];
+        // Wrap proposals must be based on the source scan, never on lastCurveTraces.
+        // That trace is exactly what this editor is intended to correct.
+        function findBlackCurveEvidence(track, edge, targetX, targetY, options = {}) {
+            const img = document.getElementById('imagePreview');
+            if (!img || !img.complete || !Number.isFinite(targetX) || !Number.isFinite(targetY)) return null;
             const left = Math.min(Number(track.leftX), Number(track.rightX));
             const right = Math.max(Number(track.leftX), Number(track.rightX));
             const width = right - left;
-            const edgeZone = Math.max(8, width * 0.20);
-            const toleranceRows = getWrapPairToleranceRows();
-            let best = null;
-            for (const point of points) {
-                if (!Array.isArray(point) || !Number.isFinite(Number(point[0])) || !Number.isInteger(point[2])) continue;
-                const depthDelta = Math.abs(point[2] - targetDepthIndex);
-                if (depthDelta > toleranceRows) continue;
-                const x = Number(point[0]);
-                const edgeDistance = edge === 'left' ? x - left : right - x;
-                if (edgeDistance < -2 || edgeDistance > edgeZone) continue;
-                const score = depthDelta * 10 + Math.max(0, edgeDistance);
-                if (!best || score < best.score) best = { depthIndex: point[2], xImg: x, score };
+            if (!Number.isFinite(width) || width <= 0) return null;
+
+            const edgeZone = Math.max(8, width * (options.edgeFraction || 0.20));
+            const xMin = Math.max(0, Math.floor(edge === 'left' ? left : right - edgeZone));
+            const xMax = Math.min(imageWidth - 1, Math.ceil(edge === 'left' ? left + edgeZone : right));
+            const radiusX = Math.max(2, Math.round(options.radiusX || edgeZone));
+            const radiusY = Math.max(3, Math.round(options.radiusY || 16));
+            const sx = Math.max(xMin, Math.floor(targetX - radiusX));
+            const ex = Math.min(xMax, Math.ceil(targetX + radiusX));
+            const sy = Math.max(0, Math.floor(targetY - radiusY));
+            const ey = Math.min(imageHeight - 1, Math.ceil(targetY + radiusY));
+            if (ex < sx || ey < sy) return null;
+
+            try {
+                const canvas = document.createElement('canvas');
+                const context = canvas.getContext('2d', { willReadFrequently: true });
+                canvas.width = ex - sx + 1;
+                canvas.height = ey - sy + 1;
+                context.drawImage(img, sx, sy, canvas.width, canvas.height, 0, 0, canvas.width, canvas.height);
+                const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+                const darknessAt = (x, y) => {
+                    if (x < 0 || y < 0 || x >= canvas.width || y >= canvas.height) return 0;
+                    const offset = (y * canvas.width + x) * 4;
+                    return 255 - Math.max(pixels[offset], pixels[offset + 1], pixels[offset + 2]);
+                };
+                let best = null;
+                for (let y = 1; y + 1 < canvas.height; y++) {
+                    for (let x = 1; x + 1 < canvas.width; x++) {
+                        const darkness = darknessAt(x, y);
+                        if (darkness < 85) continue;
+                        const neighborhood = darknessAt(x - 1, y) + darknessAt(x + 1, y) + darknessAt(x, y - 1) + darknessAt(x, y + 1);
+                        if (neighborhood < 230) continue;
+                        // A uniform vertical column is normally a grid/track rail, not curve ink.
+                        let verticalRun = 0;
+                        for (let yy = Math.max(0, y - 4); yy <= Math.min(canvas.height - 1, y + 4); yy++) {
+                            if (darknessAt(x, yy) > 85) verticalRun += 1;
+                        }
+                        if (verticalRun >= 8) continue;
+                        const distance = Math.hypot((sx + x) - targetX, (sy + y) - targetY);
+                        const score = darkness + neighborhood * 0.22 - distance * 8;
+                        if (!best || score > best.score) best = { xImg: sx + x, yImg: sy + y, score };
+                    }
+                }
+                return best && best.score >= (options.minimumScore || 120) ? best : null;
+            } catch (error) {
+                // Cross-origin or not-yet-decoded images simply use the explicit two-click flow.
+                return null;
             }
-            const boundaryX = edge === 'left' ? left : right;
-            return best
-                ? { depthIndex: best.depthIndex, xImg: edge === 'left' ? Math.min(left + edgeZone, Math.max(left, best.xImg)) : Math.max(right - edgeZone, Math.min(right, best.xImg)) }
-                : { depthIndex: targetDepthIndex, xImg: boundaryX };
+        }
+
+        function snapWrapClickToImageEvidence(track, edge, xImg, yImg) {
+            const evidence = findBlackCurveEvidence(track, edge, xImg, yImg, {
+                edgeFraction: 0.25,
+                radiusX: 5,
+                radiusY: 5,
+                minimumScore: 135,
+            });
+            return evidence ? { xImg: evidence.xImg, yImg: evidence.yImg } : { xImg, yImg };
+        }
+
+        function getWrapEvidencePoint(curveKey, track, edge, targetDepthIndex) {
+            const targetY = getPixelYForDepthIndex(targetDepthIndex);
+            const left = Math.min(Number(track.leftX), Number(track.rightX));
+            const right = Math.max(Number(track.leftX), Number(track.rightX));
+            const width = right - left;
+            if (!Number.isFinite(targetY) || !Number.isFinite(width) || width <= 0) return null;
+            const toleranceRows = getWrapPairToleranceRows();
+            const adjacentY = getPixelYForDepthIndex(Math.min(lastDigitizedDepth.length - 1, targetDepthIndex + toleranceRows));
+            const verticalWindow = Math.max(12, Math.min(72, Math.abs((adjacentY ?? targetY) - targetY)));
+            const targetX = edge === 'left' ? left + Math.max(4, width * 0.10) : right - Math.max(4, width * 0.10);
+            const evidence = findBlackCurveEvidence(track, edge, targetX, targetY, {
+                edgeFraction: 0.20,
+                radiusX: Math.max(8, width * 0.20),
+                radiusY: verticalWindow,
+                minimumScore: 150,
+            });
+            if (!evidence) return null;
+            const depthIndex = getDepthIndexAtImageY(evidence.yImg);
+            if (!Number.isInteger(depthIndex) || Math.abs(depthIndex - targetDepthIndex) > toleranceRows) return null;
+            return { depthIndex, xImg: evidence.xImg, yImg: evidence.yImg };
         }
 
         function updateWrapPairControls() {
@@ -2456,9 +2568,16 @@
 
         function s5BeginAddWrapPair() {
             const ctx = getSelectedWrapCurveContext();
-            if (!ctx || !ctx.track || !ctx.curveKey || !ctx.track.wrapped) {
-                showStatus('Select a wrapped digitized curve before adding a wrap.', 'info');
+            if (!ctx || !ctx.track || !ctx.curveKey) {
+                showStatus('Select a digitized curve before adding a wrap.', 'info');
                 return;
+            }
+            // Add Wrap is the opt-in action. Keep both configuration surfaces in sync.
+            if (!ctx.track.wrapped) {
+                const step5Checkbox = document.getElementById('s5TrackWrapped');
+                if (step5Checkbox) step5Checkbox.checked = true;
+                ctx.track.wrapped = true;
+                s5UpdateTrackWrapped({ deferCurveMutation: true });
             }
             pendingWrapPair = { curveKey: ctx.curveKey, track: ctx.track, candidate: null };
             updateWrapPairControls();
@@ -2482,7 +2601,35 @@
                 showStatus('Click the curve where it reaches either track edge.', 'warning');
                 return true;
             }
-            const exitEdge = (xImg - left) <= (right - xImg) ? 'left' : 'right';
+            const clickedEdge = (xImg - left) <= (right - xImg) ? 'left' : 'right';
+
+            // When image evidence was not strong enough for an automatic proposal,
+            // the only valid follow-up click is on the opposite side of the same track.
+            if (pendingWrapPair.mode === 'await_second_click') {
+                if (clickedEdge !== pendingWrapPair.expectedEdge) {
+                    showStatus('Wrap points must be on opposite sides of the track.', 'warning');
+                    return true;
+                }
+                const snapped = snapWrapClickToImageEvidence(track, clickedEdge, xImg, yImg);
+                const second = {
+                    depthIndex: getDepthIndexAtImageY(snapped.yImg), edge: clickedEdge, xImg: snapped.xImg,
+                    cycle: pendingWrapPair.first.cycle + (pendingWrapPair.first.edge === 'right' ? 1 : -1),
+                    wrap_pair_id: pendingWrapPair.first.wrap_pair_id, pair_role: 'entry', createdAt: Date.now(),
+                };
+                const validation = validateWrapPair(track, pendingWrapPair.first, second);
+                if (!validation.valid) {
+                    showStatus(validation.message, 'warning');
+                    return true;
+                }
+                pendingWrapPair.candidate = [pendingWrapPair.first, second];
+                pendingWrapPair.mode = 'proposed';
+                updateWrapPairControls();
+                if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
+                showStatus(`${second.wrap_pair_id} proposed. Confirm it or Cancel and click again.`, 'info');
+                return true;
+            }
+
+            const exitEdge = clickedEdge;
             const entryEdge = exitEdge === 'left' ? 'right' : 'left';
             // A second click near either tentative marker adjusts that linked
             // side vertically while keeping it inside its boundary zone. This
@@ -2490,7 +2637,8 @@
             if (Array.isArray(pendingWrapPair.candidate)) {
                 const markerIndex = pendingWrapPair.candidate.findIndex(marker => marker.edge === exitEdge);
                 if (markerIndex >= 0) {
-                    const adjusted = getWrapEvidencePoint(curveKey, track, exitEdge, depthIndex);
+                    const snapped = snapWrapClickToImageEvidence(track, exitEdge, xImg, yImg);
+                    const adjusted = { depthIndex: getDepthIndexAtImageY(snapped.yImg), xImg: snapped.xImg };
                     pendingWrapPair.candidate[markerIndex] = {
                         ...pendingWrapPair.candidate[markerIndex],
                         depthIndex: adjusted.depthIndex,
@@ -2506,12 +2654,29 @@
                     return true;
                 }
             }
-            const exitEvidence = getWrapEvidencePoint(curveKey, track, exitEdge, depthIndex);
+            // Preserve the user's initial click. It may be nudged only inside a
+            // five-pixel image-evidence neighbourhood, never replaced by a trace point.
+            const clickedEvidence = snapWrapClickToImageEvidence(track, exitEdge, xImg, yImg);
+            const clickedDepthIndex = getDepthIndexAtImageY(clickedEvidence.yImg);
+            if (!Number.isInteger(clickedDepthIndex) || clickedDepthIndex < 0) {
+                showStatus('The wrap needs a valid depth row.', 'warning');
+                return true;
+            }
             const entryEvidence = getWrapEvidencePoint(curveKey, track, entryEdge, depthIndex);
             const pairId = getNextWrapPairId(curveKey);
-            const currentCycle = getWrapCycleForDepth(curveKey, Math.min(exitEvidence.depthIndex, entryEvidence.depthIndex));
+            const currentCycle = getWrapCycleForDepth(curveKey, clickedDepthIndex);
             const cycleDelta = exitEdge === 'right' ? 1 : -1;
-            const first = { depthIndex: exitEvidence.depthIndex, edge: exitEdge, xImg: exitEvidence.xImg, cycle: currentCycle, wrap_pair_id: pairId, pair_role: 'exit', createdAt: Date.now() };
+            const first = { depthIndex: clickedDepthIndex, edge: exitEdge, xImg: clickedEvidence.xImg, cycle: currentCycle, wrap_pair_id: pairId, pair_role: 'exit', createdAt: Date.now() };
+            if (!entryEvidence) {
+                pendingWrapPair.first = first;
+                pendingWrapPair.expectedEdge = entryEdge;
+                pendingWrapPair.mode = 'await_second_click';
+                pendingWrapPair.candidate = null;
+                updateWrapPairControls();
+                if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
+                showStatus('Could not find the opposite wrap point. Click where the curve resumes on the other side.', 'warning');
+                return true;
+            }
             const second = { depthIndex: entryEvidence.depthIndex, edge: entryEdge, xImg: entryEvidence.xImg, cycle: currentCycle + cycleDelta, wrap_pair_id: pairId, pair_role: 'entry', createdAt: Date.now() + 1 };
             const validation = validateWrapPair(track, first, second);
             if (!validation.valid) {
@@ -2532,6 +2697,11 @@
                 showStatus(validation.message, 'warning');
                 return;
             }
+            // Finish the deferred Step 2 wrapped-mode mutation only now, at
+            // the same transaction boundary as the linked marker commit.
+            const curveIndex = findCurveCardIndex(pendingWrapPair.curveKey);
+            const step2Checkbox = curveIndex >= 0 ? document.getElementById(`wrapped${curveIndex}`) : null;
+            if (step2Checkbox && step2Checkbox.checked) step2Checkbox.dispatchEvent(new Event('change'));
             setWrapMarkersForCurve(pendingWrapPair.curveKey, getWrapMarkersForCurve(pendingWrapPair.curveKey).concat(pendingWrapPair.candidate));
             normalizeCurveValuesToWrapMarkers(pendingWrapPair.curveKey);
             rebuildCurveTraceFromDigitized(pendingWrapPair.curveKey);
@@ -2863,8 +3033,11 @@
             ctx.textBaseline = 'middle';
             for (const key of keys) {
                 let markers = getWrapMarkersForCurve(key);
-                if (pendingWrapPair && normalizeCurveKey(pendingWrapPair.curveKey) === normalizeCurveKey(key) && Array.isArray(pendingWrapPair.candidate)) {
-                    markers = markers.concat(pendingWrapPair.candidate.map(marker => ({ ...marker, pending: true })));
+                if (pendingWrapPair && normalizeCurveKey(pendingWrapPair.curveKey) === normalizeCurveKey(key)) {
+                    const pendingMarkers = Array.isArray(pendingWrapPair.candidate)
+                        ? pendingWrapPair.candidate
+                        : (pendingWrapPair.first ? [pendingWrapPair.first] : []);
+                    markers = markers.concat(pendingMarkers.map(marker => ({ ...marker, pending: true })));
                 }
                 if (!markers.length) continue;
                 const track = findTrackByCurveId(key) ||
@@ -4650,7 +4823,7 @@
             }
         }
 
-        function s5UpdateTrackWrapped() {
+        function s5UpdateTrackWrapped(options = {}) {
             const cb = document.getElementById('s5TrackWrapped');
             if (!cb) return;
             
@@ -4670,11 +4843,13 @@
                 const step2Cb = document.getElementById(`wrapped${idx}`);
                 if (step2Cb && step2Cb.checked !== cb.checked) {
                     step2Cb.checked = cb.checked;
-                    step2Cb.dispatchEvent(new Event('change'));
+                    // Add Wrap only stages a proposal. Do not create a wrap
+                    // layer or rebuild curve data until its Confirm action.
+                    if (!options.deferCurveMutation) step2Cb.dispatchEvent(new Event('change'));
                 }
             }
             
-            s5SyncTraceLayers(targetCurve);
+            if (!options.deferCurveMutation) s5SyncTraceLayers(targetCurve);
             if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
         }
 
@@ -5610,6 +5785,7 @@
                     config: clonePersistenceValue(configSource),
                     pinnedDepthIndices: serializePinnedDepthIndicesForProject(),
                     curveWrapMarkers: clonePersistenceValue(curveWrapMarkers || {}),
+                    canonicalCurveTraces: clonePersistenceValue(typeof canonicalCurveTraces !== 'undefined' ? canonicalCurveTraces : {}),
                     regions: {
                         primary: clonePersistenceValue(primaryRegion),
                         header: clonePersistenceValue(headerRegion),
@@ -5632,6 +5808,7 @@
                     depthConfig: candidate.depthConfig,
                     pinnedDepthIndices: candidate.pinnedDepthIndices,
                     curveWrapMarkers: candidate.curveWrapMarkers,
+                    canonicalCurveTraces: candidate.canonicalCurveTraces,
                     regions: candidate.regions,
                 });
                 candidate.validation = validateCommittedDatasetSnapshot(candidate);
@@ -6073,62 +6250,23 @@
                 displayXs[depthIndex] = rawX; // Temporarily store rawX
             }
 
-            let firstValid = -1;
-            let prevValid = -1;
-            for (let depthIndex = 0; depthIndex < count; depthIndex++) {
-                const rawX = displayXs[depthIndex];
-                if (!Number.isFinite(rawX)) continue;
-                if (firstValid < 0) {
-                    firstValid = depthIndex;
-                    for (let fillIdx = 0; fillIdx < depthIndex; fillIdx++) {
-                        displayXs[fillIdx] = rawX;
-                    }
-                } else if (prevValid >= 0 && depthIndex - prevValid > 1) {
-                    const startX = Number(displayXs[prevValid]);
-                    const endX = rawX;
-                    const span = depthIndex - prevValid;
-                    
-                    const tWidth = Math.abs(track.rightX - track.leftX);
-                    const dx = Math.abs(endX - startX);
-                    const edgeMargin = Math.max(6, tWidth * 0.35);
-                    const leftBoundary = Math.min(track.leftX, track.rightX);
-                    const rightBoundary = Math.max(track.leftX, track.rightX);
-                    const nearLeft0 = startX <= leftBoundary + edgeMargin;
-                    const nearRight0 = startX >= rightBoundary - edgeMargin;
-                    const nearLeft1 = endX <= leftBoundary + edgeMargin;
-                    const nearRight1 = endX >= rightBoundary - edgeMargin;
-                    const oppositeEdges = (nearLeft0 && nearRight1) || (nearRight0 && nearLeft1);
-                    
-                    // Do not interpolate if it spans across the track (wrap jump), otherwise it defeats wrap detection
-                    // and makes the eraser tool appear to not work because the gap instantly fills back in.
-                    let isWrapJump = tWidth > 0 && ((oppositeEdges && dx >= tWidth * 0.40) || dx >= tWidth * 0.80);
-
-                    // Also do not interpolate if the wrap layer has data in this gap
-                    if (!isWrapJump && found.entry.wrapLayer && Array.isArray(found.entry.wrapLayer.values)) {
-                        for (let fillIdx = prevValid + 1; fillIdx < depthIndex; fillIdx++) {
-                            if (!isMissingDigitizedValue(found.entry.wrapLayer.values[fillIdx])) {
-                                isWrapJump = true;
-                                break;
-                            }
-                        }
-                    }
-
-                    if (!isWrapJump) {
-                        for (let fillIdx = prevValid + 1; fillIdx < depthIndex; fillIdx++) {
-                            const t = (fillIdx - prevValid) / Math.max(1, span);
-                            displayXs[fillIdx] = startX + (endX - startX) * t;
-                        }
-                    }
-                }
-                prevValid = depthIndex;
-            }
-
-            if (firstValid >= 0 && prevValid >= 0) {
-                const tailX = Number(displayXs[prevValid]);
-                for (let fillIdx = prevValid + 1; fillIdx < count; fillIdx++) {
-                    displayXs[fillIdx] = tailX;
-                }
-            }
+            // Missing rows are unsupported evidence, not an invitation to fill
+            // a visible bridge. Build the canonical model directly from the
+            // unwrapped raw coordinate produced by the calibrated values.
+            const trackWidth = Math.abs(track.rightX - track.leftX);
+            const canonicalUnwrapped = displayXs.map(rawX => Number.isFinite(rawX) ? rawX - leftBound : null);
+            const priorCanonical = typeof getCanonicalTraceForCurve === 'function'
+                ? getCanonicalTraceForCurve(traceKey) : null;
+            const preservedBreaks = priorCanonical && Array.isArray(priorCanonical.explicit_breaks)
+                ? priorCanonical.explicit_breaks : [];
+            const canonical = typeof normalizeCanonicalTrace === 'function' ? normalizeCanonicalTrace({
+                unwrapped_x: canonicalUnwrapped,
+                wrap_cycle: canonicalUnwrapped.map(value => Number.isFinite(value) && trackWidth > 0 ? Math.floor(value / trackWidth) : 0),
+                explicit_breaks: preservedBreaks,
+                track_width: trackWidth,
+                track_left_px: leftBound,
+            }, track) : null;
+            if (canonical && explicitLayer !== 'wrap' && typeof canonicalCurveTraces !== 'undefined') canonicalCurveTraces[traceKey] = canonical;
 
             for (let depthIndex = 0; depthIndex < count; depthIndex++) {
                 const rawX = displayXs[depthIndex];
@@ -6137,7 +6275,8 @@
                 // Output points: [displayX, displayY, depthIndex, type, timestamp, rawX]
                 // We must emulate the [5] index as rawX so rendering can use it for wrap lines
                 const displayX = track.wrapped ? wrapRawXToTrack(rawX, track) : clamp(rawX, leftBound, rightBound);
-                points.push([displayX, yImg, depthIndex, 'manual', Date.now(), rawX]);
+                const cycle = canonical && Number.isInteger(canonical.wrap_cycle[depthIndex]) ? canonical.wrap_cycle[depthIndex] : 0;
+                points.push([displayX, yImg, depthIndex, 'manual', Date.now(), rawX, cycle]);
             }
 
             let wrapPoints = null;
@@ -15553,6 +15692,18 @@
                                 }
                             }
                         }
+                        const canonicalTrace = getCanonicalTraceForCurve(name);
+                        const canonicalBreakRows = new Set(canonicalTrace && Array.isArray(canonicalTrace.explicit_breaks)
+                            ? canonicalTrace.explicit_breaks : []);
+                        const canonicalCycles = canonicalTrace && Array.isArray(canonicalTrace.wrap_cycle)
+                            ? canonicalTrace.wrap_cycle : null;
+                        const isCanonicalSegmentBreak = (previous, current) => {
+                            const previousRow = Array.isArray(previous) ? previous[2] : null;
+                            const currentRow = Array.isArray(current) ? current[2] : null;
+                            if (!Number.isInteger(previousRow) || !Number.isInteger(currentRow)) return false;
+                            if (canonicalBreakRows.has(currentRow)) return true;
+                            return !!(canonicalCycles && canonicalCycles[previousRow] !== canonicalCycles[currentRow]);
+                        };
 
                         let accumulatedWrapPhase = 0;
                         if (wrapActive && trackMeta) {
@@ -15602,7 +15753,7 @@
 
                             // Topology DP returns authoritative visible segments. Never
                             // draw the artificial connector across a cylindrical wrap.
-                            if (explicitBreakYs.has(Number(currPoint[1]).toFixed(3))) {
+                            if (explicitBreakYs.has(Number(currPoint[1]).toFixed(3)) || isCanonicalSegmentBreak(prevPoint, currPoint)) {
                                 ctx.moveTo(xDom, yDom);
                                 continue;
                             }
@@ -15701,6 +15852,7 @@
                         // Break if jump is implausible or if vertical gap is too large (true missing data)
                         if (
                             Math.abs(dy) > maxGapYImg || 
+                            (Number.isInteger(p0[6]) && Number.isInteger(p1[6]) && p0[6] !== p1[6]) ||
                             shouldBreakVisualBridge(p0, p1, sortedPoints, i, i + 1)
                         ) continue;
                         const domDist = Math.hypot(domDx, domDy);
@@ -16338,6 +16490,9 @@
 
                     if (data.curve_traces && typeof data.curve_traces === 'object') {
                         const traces = data.curve_traces;
+                        canonicalCurveTraces = (data.canonical_traces && typeof data.canonical_traces === 'object')
+                            ? clonePersistenceValue(data.canonical_traces)
+                            : {};
                         window.lastCurveTraceMetadata = (data.curve_trace_metadata && typeof data.curve_trace_metadata === 'object')
                             ? data.curve_trace_metadata
                             : {};
@@ -16350,7 +16505,13 @@
                         if (window.lastCurveTraceDebug) {
                             console.info('[trace debug]', window.lastCurveTraceDebug);
                         }
+                        // The legacy point arrays are now a rendering projection only.
+                        // Prefer canonical unwrapped paths whenever the server supplied them.
                         lastCurveTraces = traces;
+                        Object.entries(canonicalCurveTraces).forEach(([curveKey, trace]) => {
+                            const projected = canonicalTraceToOverlayPoints(trace, curveKey);
+                            if (projected.length) lastCurveTraces[curveKey] = projected;
+                        });
                         if (typeof ensureTracePointsHaveDepthIndex === 'function') {
                             Object.keys(traces || {}).forEach(k => ensureTracePointsHaveDepthIndex(k));
                         }
@@ -17407,6 +17568,9 @@
                     }
                     if (stateBlob.curveWrapMarkers && typeof stateBlob.curveWrapMarkers === 'object') {
                         curveWrapMarkers = clonePersistenceValue(stateBlob.curveWrapMarkers);
+                    }
+                    if (stateBlob.canonicalCurveTraces && typeof stateBlob.canonicalCurveTraces === 'object') {
+                        canonicalCurveTraces = clonePersistenceValue(stateBlob.canonicalCurveTraces);
                     }
                     if (stateBlob.regions && typeof stateBlob.regions === 'object') {
                         if (stateBlob.regions.primary) primaryRegion = stateBlob.regions.primary;

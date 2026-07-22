@@ -2359,6 +2359,12 @@ def test_linked_wrap_pair_tool_validates_edges_and_preserves_render_breaks():
     validation_start = source.index("function validateWrapPair(")
     validation_end = source.index("function getWrapEvidencePoint(", validation_start)
     validation_source = source[validation_start:validation_end]
+    evidence_start = source.index("function findBlackCurveEvidence(")
+    evidence_end = source.index("function updateWrapPairControls(", evidence_start)
+    evidence_source = source[evidence_start:evidence_end]
+    add_wrap_source = _function_source(source, "s5AddWrapPairAtImageCoords", "s5ConfirmWrapPair")
+    begin_wrap_source = _function_source(source, "s5BeginAddWrapPair", "s5AddWrapPairAtImageCoords")
+    display_builder_source = _function_source(source, "buildDisplayTracePointsFromDigitized", "rebuildCurveTraceFromDigitized")
     renderer_source = _function_source(source, "renderCurveTraceOverlays", "clearDepthOverlays")
 
     assert "Add Wrap" in source
@@ -2370,6 +2376,14 @@ def test_linked_wrap_pair_tool_validates_edges_and_preserves_render_breaks():
     assert "s5AddWrapPairAtImageCoords(xImg, yImg)" in source
     assert "if (isScaleWrapBoundaryForPoints(curveId, prevPoint, currPoint)) return true;" in source
     assert "ctx.moveTo(xDom, yDom);" in renderer_source
+    assert "lastCurveTraces" not in evidence_source
+    assert "imagePreview" in evidence_source
+    assert "Could not find the opposite wrap point. Click where the curve resumes on the other side." in add_wrap_source
+    assert "await_second_click" in add_wrap_source
+    assert "snapWrapClickToImageEvidence" in add_wrap_source
+    assert "s5UpdateTrackWrapped({ deferCurveMutation: true });" in begin_wrap_source
+    assert "canonicalUnwrapped" in display_builder_source
+    assert "Missing rows are unsupported evidence" in display_builder_source
 
     node = shutil.which("node")
     if not node:

@@ -90,7 +90,7 @@ import json
 from io import BytesIO, StringIO
 import base64
 import zipfile
-from typing import Any, Dict, List, Tuple, Optional
+from typing import Any, Dict, List, Tuple, Optional, Iterable
 import tempfile
 from datetime import datetime
 import uuid
@@ -5986,6 +5986,125 @@ def _unwrap_trace_for_filtering(xs, wrap_width):
     return values
 
 
+def build_canonical_trace(
+    visible_x: np.ndarray,
+    track_width: int,
+    *,
+    wrapped: bool,
+    unwrapped_x: Optional[np.ndarray] = None,
+    wrap_cycle: Optional[np.ndarray] = None,
+    explicit_breaks: Optional[Iterable[int]] = None,
+) -> Dict[str, Any]:
+    """Return the single authoritative trace representation.
+
+    ``visible_x`` is deliberately a derived compatibility field.  All numeric
+    processing and exports use ``unwrapped_x``.  A missing row always starts a
+    new section, and callers may add explicit break rows where evidence says a
+    line must never be connected.
+    """
+    visible = np.asarray(visible_x, dtype=np.float32).copy()
+    width = float(track_width)
+    if width <= 1:
+        raise ValueError("track_width must be greater than one")
+
+    if unwrapped_x is None:
+        continuous = _unwrap_trace_for_filtering(visible, width) if wrapped else visible.copy()
+    else:
+        continuous = np.asarray(unwrapped_x, dtype=np.float32).copy()
+        if continuous.shape != visible.shape:
+            raise ValueError("unwrapped_x must match visible_x")
+
+    if wrap_cycle is None:
+        cycles = np.zeros(continuous.shape, dtype=np.int32)
+        valid = np.isfinite(continuous)
+        if wrapped:
+            cycles[valid] = np.floor(continuous[valid] / width).astype(np.int32)
+    else:
+        cycles = np.asarray(wrap_cycle, dtype=np.int32).copy()
+        if cycles.shape != continuous.shape:
+            raise ValueError("wrap_cycle must match unwrapped_x")
+
+    # Canonical projection is authoritative even when a legacy detector gave
+    # us a stale visible coordinate.
+    projected_visible = np.full(continuous.shape, np.nan, dtype=np.float32)
+    valid = np.isfinite(continuous)
+    projected_visible[valid] = continuous[valid] - cycles[valid].astype(np.float32) * width
+
+    breaks = {int(row) for row in (explicit_breaks or []) if 0 < int(row) < continuous.size}
+    for row in range(1, continuous.size):
+        if not (np.isfinite(continuous[row - 1]) and np.isfinite(continuous[row])):
+            breaks.add(row)
+    return {
+        "unwrapped_x": [float(value) if np.isfinite(value) else None for value in continuous],
+        "wrap_cycle": cycles.tolist(),
+        "explicit_breaks": sorted(breaks),
+        "visible_x": [float(value) if np.isfinite(value) else None for value in projected_visible],
+        "track_width": int(track_width),
+    }
+
+
+def canonical_trace_to_values(
+    trace: Dict[str, Any],
+    *,
+    left_value: float,
+    right_value: float,
+    scale_type: str,
+    track_width: int,
+) -> np.ndarray:
+    """Calibrate directly from unwrapped x; display wrapping never affects LAS."""
+    unwrapped = np.asarray([
+        np.nan if value is None else value
+        for value in trace.get("unwrapped_x", [])
+    ], dtype=np.float64)
+    values = np.full(unwrapped.shape, np.nan, dtype=np.float64)
+    valid = np.isfinite(unwrapped)
+    if not valid.any():
+        return values.astype(np.float32)
+    fraction = unwrapped[valid] / max(1.0, float(track_width - 1))
+    kind = str(scale_type or "linear").lower()
+    if kind == "log" and left_value > 0 and right_value > 0:
+        values[valid] = np.power(10.0, np.log10(left_value) + fraction * (np.log10(right_value) - np.log10(left_value)))
+    else:
+        values[valid] = left_value + fraction * (right_value - left_value)
+    return values.astype(np.float32)
+
+
+def resample_values_by_continuous_sections(
+    source_depth: np.ndarray,
+    source_values: np.ndarray,
+    target_depth: np.ndarray,
+    *,
+    explicit_breaks: Iterable[int],
+    null_value: float,
+) -> np.ndarray:
+    """Resample only within supported canonical sections, never across a gap."""
+    depths = np.asarray(source_depth, dtype=np.float64)
+    values = np.asarray(source_values, dtype=np.float64)
+    target = np.asarray(target_depth, dtype=np.float64)
+    result = np.full(target.shape, float(null_value), dtype=np.float32)
+    breaks = {int(row) for row in explicit_breaks if 0 < int(row) < values.size}
+    start = 0
+    for end in range(1, values.size + 1):
+        boundary = end == values.size or end in breaks or not (np.isfinite(values[end - 1]) and np.isfinite(values[end]))
+        if not boundary:
+            continue
+        section = slice(start, end)
+        valid = np.isfinite(values[section])
+        if valid.any():
+            x = depths[section][valid]
+            y = values[section][valid]
+            if x.size == 1:
+                nearest = np.isclose(target, x[0])
+                result[nearest] = y[0]
+            else:
+                order = np.argsort(x)
+                low, high = x[order][0], x[order][-1]
+                inside = (target >= low) & (target <= high)
+                result[inside] = np.interp(target[inside], x[order], y[order]).astype(np.float32)
+        start = end
+    return result
+
+
 def guard_trace_outliers_rolling_median(xs, window=21, max_deviation=45.0, wrap_width=None):
     """NaN out trace points whose horizontal position is absurdly far from a
     rolling median, then linearly interpolate across them.
@@ -11761,6 +11880,7 @@ def digitize():
     
     curve_data = {}
     curve_traces = {}
+    canonical_traces = {}
     curve_trace_segments = {}
     curve_trace_debug = {}
     curve_trace_metadata = {}
@@ -12723,28 +12843,36 @@ def digitize():
                 if std_x < std_threshold:
                     xs[:] = np.nan
 
-        if topology_result is not None:
-            topology_scale_type = str(c.get('scale_type') or 'linear').lower().strip()
-            if topology_scale_type not in {'linear', 'log'}:
-                topology_scale_type = 'linear'
-            vals = path_to_values(
-                xs,
-                topology_result.wrap_index_by_row,
-                TopologyScaleConfig(
-                    track_width=width_px,
-                    left_value=left_value,
-                    right_value=right_value,
-                    scale_type=topology_scale_type,
-                ),
-            )
-            scale_meta = {
-                'auto_wrapped': False,
-                'wrap_enabled': topology == 'cylindrical',
-                'scale_type': topology_scale_type,
-                'wrap_source': 'topology_decoder',
-            }
-        else:
-            vals, scale_meta = _scale_trace_values(c, xs, width_px)
+        topology_scale_type = str(c.get('scale_type') or 'linear').lower().strip()
+        if topology_scale_type not in {'linear', 'log', 'centered'}:
+            topology_scale_type = 'linear'
+        canonical_trace = build_canonical_trace(
+            xs,
+            width_px,
+            wrapped=wrap_enabled,
+            unwrapped_x=(topology_result.unwrapped_x_by_row if topology_result is not None else None),
+            wrap_cycle=(topology_result.wrap_index_by_row if topology_result is not None else None),
+        )
+        canonical_trace.update({
+            'track_left_px': int(left_px),
+            'track_right_px': int(right_px),
+            'source': 'topology_decoder' if topology_result is not None else 'legacy_migrated',
+            'scale_type': topology_scale_type,
+        })
+        canonical_traces[name] = canonical_trace
+        vals = canonical_trace_to_values(
+            canonical_trace,
+            left_value=left_value,
+            right_value=right_value,
+            scale_type=topology_scale_type,
+            track_width=width_px,
+        )
+        scale_meta = {
+            'auto_wrapped': False,
+            'wrap_enabled': wrap_enabled,
+            'scale_type': topology_scale_type,
+            'wrap_source': 'topology_decoder' if topology_result is not None else 'canonical_legacy_migration',
+        }
 
         if scale_meta['auto_wrapped']:
             curve_warnings.append({
@@ -12760,11 +12888,12 @@ def digitize():
         # the points here would make the cyan overlay draw an invented bridge
         # even when the evidence gate correctly rejected a row.
         trace_points = []
-        if xs.size > 0:
-            valid_rows = np.where(np.isfinite(xs))[0]
+        visible_x = np.asarray(canonical_trace['visible_x'], dtype=np.float32)
+        if visible_x.size > 0:
+            valid_rows = np.where(np.isfinite(visible_x))[0]
             if valid_rows.size > 0:
                 for row_idx in valid_rows:
-                    x_val = xs[row_idx]
+                    x_val = visible_x[row_idx]
                     x_img = float(left_px) + float(x_val)
                     y_img = float(top + row_idx)
                     trace_points.append([x_img, y_img])
@@ -12824,18 +12953,15 @@ def digitize():
         las_curve_data = {}
         for name, meta in curve_data.items():
             vals = meta["values"].astype(np.float32)
-            valid_mask = vals != null_val
-
-            if not np.any(valid_mask):
-                new_vals = np.full(las_depth.shape, null_val, dtype=np.float32)
-            else:
-                depth_valid = base_depth[valid_mask]
-                vals_valid = vals[valid_mask]
-                order = np.argsort(depth_valid)
-                depth_sorted = depth_valid[order]
-                vals_sorted = vals_valid[order]
-                interp_vals = np.interp(las_depth, depth_sorted, vals_sorted, left=null_val, right=null_val)
-                new_vals = interp_vals.astype(np.float32)
+            canonical = canonical_traces.get(name) or {}
+            source_values = np.where(vals == null_val, np.nan, vals)
+            new_vals = resample_values_by_continuous_sections(
+                base_depth,
+                source_values,
+                las_depth,
+                explicit_breaks=canonical.get('explicit_breaks') or [],
+                null_value=null_val,
+            )
 
             las_curve_data[name] = {"unit": meta.get("unit", ""), "values": new_vals}
 
@@ -12905,6 +13031,7 @@ def digitize():
         'depth_warnings': depth_warnings,
         'curve_warnings': curve_warnings,
         'curve_traces': curve_traces,
+        'canonical_traces': canonical_traces,
         'curve_trace_segments': curve_trace_segments,
         'curve_trace_metadata': curve_trace_metadata,
         'curve_trace_debug': curve_trace_debug if trace_debug_export else {},
