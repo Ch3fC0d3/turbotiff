@@ -1,3 +1,4 @@
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -6,6 +7,7 @@ import pytest
 
 
 WORKSPACE_TEMPLATE = Path(__file__).resolve().parents[1] / "templates" / "workspace.html"
+WEB_APP = Path(__file__).resolve().parents[1] / "web_app.py"
 
 
 def _drag_source(source):
@@ -78,16 +80,22 @@ def test_curve_drag_propagates_rejection_from_stationary_destinations():
 def test_curve_drag_commits_resolved_moves_atomically_and_preserves_swaps():
     source = WORKSPACE_TEMPLATE.read_text(encoding="utf-8")
     drag_source = _drag_source(source)
+    commit_start = source.index("function commitCurveDrag")
+    commit_end = source.index("async function finishCurveEditDrag", commit_start)
+    commit_source = source[commit_start:commit_end]
 
     calculate = drag_source.index("const proposals = neighbors.map(n =>")
     resolve = drag_source.index("resolveDepthMoveProposals(proposals, originalValues, compareProposalPriority);", calculate)
     snapshot = drag_source.index("const nextValues = originalValues.slice();", resolve)
     clear_source = drag_source.index("nextValues[proposal.sourceDepthIndex] = null;", snapshot)
     write_destination = drag_source.index("nextValues[proposal.destinationDepthIndex] = proposal.newValue;", clear_source)
-    commit_values = drag_source.index("activeValues[i] = nextValues[i];", write_destination)
-    commit_depth = drag_source.index("proposal.neighbor.depthIndex = proposal.accepted", commit_values)
+    store_preview = drag_source.index("state.previewValues = nextValues;", write_destination)
 
-    assert calculate < resolve < snapshot < clear_source < write_destination < commit_values < commit_depth
+    assert calculate < resolve < snapshot < clear_source < write_destination < store_preview
+    assert "commitCurveLayerValues(" in commit_source
+    assert "activeValues[idx] = state.previewValues[idx];" not in commit_source
+    assert "activeValues[" not in drag_source
+    assert "proposal.neighbor.depthIndex" not in drag_source
     assert "activeValues[previousDepthIndex] = n.originalValue" not in drag_source
 
 
@@ -214,6 +222,13 @@ function wrapRawXToTrack(x) { return x; }
 function findBestPointIndexForDepth(pts, depthIdx) { return pts.findIndex(pt => pt[2] === depthIdx); }
 function findEditablePointIndex() { return { pointIndex: -1 }; }
 function renderCurveTraceOverlays() {}
+function markCurveLayerTraceRevision() {}
+function commitInPlaceCurveLayerMutation(curveId, layer, changed, options = {}) {
+    if (changed && options.rebuildTrace !== false && typeof rebuildCurveTraceFromDigitized === 'function') {
+        rebuildCurveTraceFromDigitized(curveId, layer);
+    }
+    return { changed };
+}
 
 function reset(layer, options = {}) {
     desiredLayer = layer;
@@ -385,7 +400,7 @@ def test_edit_interactions_store_pass_and_clear_frozen_layers():
     assert "getActiveCurveTracePoints(editCurveId, selectedLayer)" in begin_source
     assert "getActiveLayerValues(entry, selectedLayer)" in begin_source
     assert "getActiveLayerValues(entry, state.dragLayer)" in drag_source
-    assert "getActiveLayerTrackConfig(entry, targetTrack, activeLayer)" in drag_source
+    assert "getActiveLayerTrackConfig(entry, previewTrack, activeLayer)" in drag_source
     assert "drawStrokeLayer = targetLayer;" in pointer_source
     assert "paintStrokeLayer = targetLayer;" in pointer_source
     assert "smoothStrokeLayer = targetLayer;" in pointer_source
@@ -541,6 +556,10 @@ function findNearestDepthIndex() { return 0; }
 function fillDeletedDepthSpan() {}
 function rebuildCurveTraceFromDigitized() {}
 function renderCurveTraceOverlays() {}
+function commitInPlaceCurveLayerMutation(curveId, layer, changed, options = {}) {
+    if (changed && options.rebuildTrace !== false) rebuildCurveTraceFromDigitized(curveId, layer);
+    return { changed };
+}
 
 const snapshot = () => JSON.stringify({ curves: lastDigitizedCurves, traces: lastCurveTraces });
 let before = snapshot();
@@ -647,10 +666,10 @@ def test_drag_hit_authorization_precedes_trace_mutation_and_undo():
     layer_check = regular_source.index("if (isLayerLocked(selectedLayer, entry))", hit)
     pin_check = regular_source.index("isDepthIndexPinned(editCurveId, centerDepthIdx)", layer_check)
     point_check = regular_source.index("isPointLocked(activeValues[centerDepthIdx]", pin_check)
-    trace_write = regular_source.index("lastCurveTraces[traceKey] = pts;", point_check)
-    drag_state = regular_source.index("editDragState = {", trace_write)
+    drag_state = regular_source.index("editDragState = {", point_check)
 
-    assert hit < layer_check < pin_check < point_check < trace_write < drag_state
+    assert hit < layer_check < pin_check < point_check < drag_state
+    assert "lastCurveTraces[traceKey] = pts;" not in regular_source
     assert "pts = pts.map(pt => Array.isArray(pt) ? pt.slice() : pt);" in regular_source
     assert "No editable curve point found near the cursor." in regular_source
 
@@ -870,6 +889,10 @@ function perturbIfEqual() {}
 function rebuildCurveTraceFromDigitized() {}
 function renderCurveTraceOverlays() {}
 function showStatus(message) { statuses.push(message); }
+function commitInPlaceCurveLayerMutation(curveId, layer, changed, options = {}) {
+    if (changed && options.rebuildTrace !== false) rebuildCurveTraceFromDigitized(curveId, layer);
+    return { changed };
+}
 
 const mainBefore = entry.values.slice();
 const wrapBefore = JSON.stringify({ values: entry.wrapLayer.values, trace: traces.C_wrap });
@@ -952,6 +975,14 @@ function getTrackCalibrationsSnapshot() { return [{ index: 0, id: 'C', leftX: 0,
 function findDigitizedCurveEntry() { return { key: 'C', entry }; }
 function _getEffectiveActiveLayer() { return selectedLayer; }
 function getActiveLayerValues(target, layer) { return layer === 'wrap' ? target.wrapLayer.values : target.values; }
+function getCurveLayerContext(curveId, layer) { return { values: getActiveLayerValues(entry, layer) }; }
+function commitCurveLayerValues(curveId, layer, nextValues, options = {}) {
+    const values = getActiveLayerValues(entry, layer);
+    values.splice(0, values.length, ...nextValues);
+    if (options.rebuildTrace !== false) rebuildCurveTraceFromDigitized(curveId, layer);
+    return { changed: true, values };
+}
+function markCurveLayerTraceRevision() {}
 function getActiveLayerTrackConfig(target, track, layer) {
     return layer === 'wrap' ? { ...track, scaleMin: 100, scaleMax: 300 } : track;
 }
@@ -1103,6 +1134,14 @@ function getTrackCalibrationsSnapshot() { return [{ index: 0, id: 'C' }]; }
 function findDigitizedCurveEntry() { return { key: 'C', entry }; }
 function _getEffectiveActiveLayer() { return selectedLayer; }
 function getActiveLayerValues(target, layer) { return layer === 'wrap' ? target.wrapLayer.values : target.values; }
+function getCurveLayerContext(curveId, layer) { return { values: getActiveLayerValues(entry, layer) }; }
+function commitCurveLayerValues(curveId, layer, nextValues, options = {}) {
+    const values = getActiveLayerValues(entry, layer);
+    values.splice(0, values.length, ...nextValues);
+    if (options.rebuildTrace !== false) rebuildCurveTraceFromDigitized(curveId, layer);
+    return { changed: true, values };
+}
+function markCurveLayerTraceRevision() {}
 function getActiveLayerTrackConfig(target, track) { return track; }
 function getActiveCurveTracePoints(curveId, layer) {
     const traceKey = layer === 'wrap' ? 'C_wrap' : 'C';
@@ -1199,3 +1238,1096 @@ assert.strictEqual(editUndoStack.length, undoCount);
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_drag_preview_isolated_until_single_commit_and_cancel_is_mutation_free():
+    source = WORKSPACE_TEMPLATE.read_text(encoding="utf-8")
+    resolver_source = _function_source(source, "resolveDepthMoveProposals", "applyCurveXShiftForCurve")
+    lifecycle_source = _function_source(source, "cancelCurveDragAnimationFrame", "_computeLocalDepthSpacing")
+    spacing_source = _function_source(source, "_computeLocalDepthSpacing", "_doDragUpdate")
+    drag_source = _drag_source(source)
+    undo_source = _function_source(source, "undoLastCurveEdit", "beginCurveEditInteraction")
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required for the workspace JavaScript regression harness")
+    harness = r"""
+const assert = require('assert');
+const window = { currentDragLayer: null, paintTargetLayer: null, bezierCurveControls: {} };
+let editMode = true;
+let editUndoStack = [];
+let lastDigitizedDepth = [0, 1, 2];
+let lastDepthConfig = {};
+let lastNullValue = -999.25;
+_dragHasMoved = true;
+_lastDragRenderMs = 0;
+let renderCalls = 0;
+let rebuildCalls = 0;
+let wrapActivations = 0;
+let nextFrameId = 1;
+const cancelledFrames = [];
+const document = { getElementById: () => ({ checked: false }) };
+const performance = { now: () => 1000 };
+function cancelAnimationFrame(id) { cancelledFrames.push(id); }
+function getDepthConfigFromInputs() { return {}; }
+function pixelToDepthFromConfig(y) { return y; }
+function findNearestDepthIndex(depth) { return Math.max(0, Math.min(2, Math.round(depth))); }
+function getActiveLayerValues(entry, layer) { return layer === 'wrap' ? entry.wrapLayer.values : entry.values; }
+function getActiveLayerTrackConfig(entry, track, layer) {
+    return layer === 'wrap' ? { ...track, scaleMin: 100, scaleMax: 200 } : track;
+}
+function isLayerLocked() { return false; }
+function isDepthIndexPinned(curveId, idx) { return pinned.has(idx); }
+function isPointLocked() { return false; }
+function trackValueToPixelX(value) { return value; }
+function pixelToTrackValue(x) { return x; }
+function perturbIfEqual() {}
+function snapToCurveColor(x, y) { return { x, y }; }
+function activateTrackWrapForEdit() { wrapActivations++; }
+function buildDisplayTracePointsFromDigitized(curveId, options) {
+    return { traceKey: options.explicitLayer === 'wrap' ? 'C_wrap' : 'C', points: options.valuesSource.map((value, idx) => [value, idx, idx]) };
+}
+function renderCurveTraceOverlays() { renderCalls++; }
+function rebuildCurveTraceFromDigitized() { rebuildCalls++; }
+function getCurveLayerContext(curveId, layer) { return { values: getActiveLayerValues(entry, layer) }; }
+function markCurveLayerTraceRevision() {}
+function commitCurveLayerValues(curveId, layer, nextValues) {
+    const values = getActiveLayerValues(entry, layer);
+    values.splice(0, values.length, ...nextValues);
+    rebuildCurveTraceFromDigitized(curveId, layer, { preserveBezierCache: true });
+    return { changed: true, values };
+}
+function showStatus() {}
+function applyBezierToSegmentValues() {}
+async function applySnapToCurve() {}
+
+const targetTrack = { leftX: 0, rightX: 100, scaleMin: 0, scaleMax: 100, wrapped: false };
+const entry = { values: [10, 20, 30], wrapLayer: { values: [110, 120, 130] } };
+let lastDigitizedCurves = { C: entry };
+let lastCurveTraces = { C: [[10, 0, 0], [20, 1, 1], [30, 2, 2]], C_wrap: [[110, 0, 0], [120, 1, 1], [130, 2, 2]] };
+let pinned = new Set();
+function makeState(layer = 'main') {
+    const values = getActiveLayerValues(entry, layer);
+    const traceKey = layer === 'wrap' ? 'C_wrap' : 'C';
+    const centerValue = values[1];
+    return {
+        interactionId: 1,
+        curveId: 'C', curveKey: 'C', traceKey, dragLayer: layer,
+        entry, targetTrack, centerIndex: 1, pointIndex: 1, depthIndex: 1,
+        neighbors: [{ pointIndex: 1, depthIndex: 1, originalDepthIndex: 1, originalX: centerValue, originalY: 1, originalValue: centerValue, originalRawX: centerValue }],
+        startX: centerValue, startY: 1, currentX: centerValue + 10, currentY: 1,
+        originalValues: values.slice(), previewValues: values.slice(),
+        originalTracePoints: lastCurveTraces[traceKey].map(point => point.slice()),
+        previewTracePoints: lastCurveTraces[traceKey].map(point => point.slice()),
+        committed: false, hasPreviewChange: false, animationFrameId: null,
+    };
+}
+
+let editDragState = makeState('main');
+const mainBefore = entry.values.slice();
+const wrapBefore = JSON.stringify({ values: entry.wrapLayer.values, trace: lastCurveTraces.C_wrap });
+const mainTraceBefore = JSON.stringify(lastCurveTraces.C);
+_doDragUpdate();
+assert.deepStrictEqual(entry.values, mainBefore);
+assert.strictEqual(JSON.stringify(lastCurveTraces.C), mainTraceBefore);
+assert.strictEqual(JSON.stringify({ values: entry.wrapLayer.values, trace: lastCurveTraces.C_wrap }), wrapBefore);
+assert.strictEqual(editUndoStack.length, 0);
+assert.strictEqual(editDragState.previewValues[1], 30);
+const previewAtA = editDragState.previewValues.slice();
+
+editDragState.currentX = 40;
+_doDragUpdate();
+editDragState.currentX = 30;
+_doDragUpdate();
+assert.deepStrictEqual(editDragState.previewValues, previewAtA);
+assert.deepStrictEqual(entry.values, mainBefore);
+
+const previewBeforeCommit = editDragState.previewValues.slice();
+assert.strictEqual(commitCurveDrag(editDragState), true);
+assert.deepStrictEqual(entry.values, previewBeforeCommit);
+assert.strictEqual(editUndoStack.length, 1);
+assert.strictEqual(rebuildCalls, 1);
+assert.strictEqual(JSON.stringify({ values: entry.wrapLayer.values, trace: lastCurveTraces.C_wrap }), wrapBefore);
+assert.deepStrictEqual(editUndoStack[0].values.map(item => item.oldValue), mainBefore);
+undoLastCurveEdit();
+assert.deepStrictEqual(entry.values, mainBefore);
+assert.strictEqual(JSON.stringify(lastCurveTraces.C), mainTraceBefore);
+assert.strictEqual(editUndoStack.length, 0);
+
+editDragState = makeState('main');
+editDragState.currentX = 35;
+_doDragUpdate();
+cancelCurveDrag('test-cancel');
+assert.deepStrictEqual(entry.values, mainBefore);
+assert.strictEqual(JSON.stringify(lastCurveTraces.C), mainTraceBefore);
+assert.strictEqual(editUndoStack.length, 0);
+assert.strictEqual(editDragState, null);
+
+editDragState = makeState('wrap');
+const mainBeforeWrap = JSON.stringify({ values: entry.values, trace: lastCurveTraces.C });
+_doDragUpdate();
+assert.deepStrictEqual(entry.wrapLayer.values, [110, 120, 130]);
+assert.strictEqual(editDragState.previewValues[1], 130);
+assert.strictEqual(JSON.stringify({ values: entry.values, trace: lastCurveTraces.C }), mainBeforeWrap);
+cancelCurveDrag('wrap-cancel');
+
+pinned = new Set([2]);
+editDragState = makeState('main');
+editDragState.currentY = 2;
+_doDragUpdate();
+assert.deepStrictEqual(editDragState.previewValues, mainBefore);
+assert.strictEqual(editDragState.hasPreviewChange, false);
+assert.strictEqual(commitCurveDrag(editDragState), false);
+assert.strictEqual(editUndoStack.length, 0);
+"""
+    result = subprocess.run(
+        [node, "-"],
+        input="\n".join((resolver_source, lifecycle_source, spacing_source, drag_source, undo_source, harness)).encode("utf-8"),
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+
+
+def test_cancelled_drag_invalidates_late_animation_frame_and_noop_release():
+    source = WORKSPACE_TEMPLATE.read_text(encoding="utf-8")
+    lifecycle_source = _function_source(source, "cancelCurveDragAnimationFrame", "_computeLocalDepthSpacing")
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required for the workspace JavaScript regression harness")
+    harness = r"""
+const assert = require('assert');
+const window = { currentDragLayer: null, paintTargetLayer: null };
+let editMode = true;
+_dragHasMoved = false;
+let editUndoStack = [];
+let callbacks = new Map();
+let nextId = 1;
+let updates = 0;
+let renders = 0;
+let lastCurveTraces = { C: [[10, 0, 0]] };
+const entry = { values: [10] };
+function requestAnimationFrame(callback) { const id = nextId++; callbacks.set(id, callback); return id; }
+function cancelAnimationFrame(id) { /* Intentionally retain callback to simulate a late browser delivery. */ }
+function renderCurveTraceOverlays() { renders++; }
+function getActiveLayerValues() { return entry.values; }
+function buildDisplayTracePointsFromDigitized() { return { points: [[20, 0, 0]] }; }
+function rebuildCurveTraceFromDigitized() {}
+function applyBezierToSegmentValues() {}
+async function applySnapToCurve() {}
+function _doDragUpdate() { updates++; }
+const document = { getElementById: () => ({ checked: false }) };
+
+let editDragState = {
+    interactionId: 77, curveId: 'C', curveKey: 'C', traceKey: 'C', dragLayer: 'main', entry,
+    startX: 10, startY: 0, currentX: 10, currentY: 0,
+    originalValues: [10], previewValues: [10], originalTracePoints: [[10, 0, 0]],
+    committed: false, hasPreviewChange: false, animationFrameId: null,
+};
+handleCurveEditDragMove(20, 0);
+const queued = callbacks.get(editDragState.animationFrameId);
+assert.strictEqual(typeof queued, 'function');
+cancelCurveDrag('pointercancel');
+queued();
+assert.strictEqual(updates, 0);
+assert.deepStrictEqual(entry.values, [10]);
+assert.strictEqual(editUndoStack.length, 0);
+assert.strictEqual(editDragState, null);
+
+editDragState = {
+    interactionId: 78, curveId: 'C', curveKey: 'C', traceKey: 'C', dragLayer: 'main', entry,
+    startX: 10, startY: 0, currentX: 10, currentY: 0,
+    originalValues: [10], previewValues: [10], originalTracePoints: [[10, 0, 0]],
+    committed: false, hasPreviewChange: false, animationFrameId: null,
+};
+finishCurveEditDrag();
+assert.deepStrictEqual(entry.values, [10]);
+assert.strictEqual(editUndoStack.length, 0);
+assert.strictEqual(editDragState, null);
+"""
+    result = subprocess.run(
+        [node, "-"],
+        input="\n".join((lifecycle_source, harness)),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_snap_is_frozen_into_preview_and_commit_copies_preview_exactly():
+    source = WORKSPACE_TEMPLATE.read_text(encoding="utf-8")
+    begin_source = _function_source(source, "beginCurveEditInteraction", "cancelCurveDragAnimationFrame")
+    resolver_source = _function_source(source, "resolveDepthMoveProposals", "applyCurveXShiftForCurve")
+    lifecycle_source = _function_source(source, "cancelCurveDragAnimationFrame", "_computeLocalDepthSpacing")
+    spacing_source = _function_source(source, "_computeLocalDepthSpacing", "_doDragUpdate")
+    drag_source = _drag_source(source)
+    commit_source = _function_source(source, "commitCurveDrag", "finishCurveEditDrag")
+
+    assert "snapEnabled" in begin_source
+    assert "snapTrackMode" in begin_source
+    assert "snapOptions" in begin_source
+    assert "magnetEditToggle" not in drag_source
+    assert "snapToCurveToggle" not in drag_source
+    assert drag_source.index("snapToCurveColor(") < drag_source.index("if (state.isBezierControl)")
+    assert "snapToCurveColor" not in commit_source
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required for the workspace JavaScript regression harness")
+    harness = r"""
+const assert = require('assert');
+const window = { currentDragLayer: null, paintTargetLayer: null, bezierCurveControls: {} };
+let editMode = true;
+let editUndoStack = [];
+let lastDigitizedDepth = [0, 1, 2];
+let lastDepthConfig = {};
+let lastNullValue = -999.25;
+_dragHasMoved = true;
+_lastDragRenderMs = 0;
+let snapCalls = 0;
+let invalidSnap = false;
+let rebuildCalls = 0;
+let pinned = new Set();
+const document = { getElementById: () => ({ checked: false }) };
+const performance = { now: () => 1000 };
+function cancelAnimationFrame() {}
+function getDepthConfigFromInputs() { return {}; }
+function pixelToDepthFromConfig(y) { return y; }
+function findNearestDepthIndex(depth) { return Math.max(0, Math.min(2, Math.round(depth))); }
+function getActiveLayerValues(entry, layer) { return layer === 'wrap' ? entry.wrapLayer.values : entry.values; }
+function getActiveLayerTrackConfig(entry, track) { return track; }
+function isLayerLocked() { return false; }
+function isDepthIndexPinned(curveId, depthIndex) { return pinned.has(depthIndex); }
+function isPointLocked() { return false; }
+function isMissingDigitizedValue(value) { return value == null || !Number.isFinite(value) || value === lastNullValue; }
+function trackValueToPixelX(value) { return value; }
+function pixelToTrackValue(x) { return x; }
+function perturbIfEqual() {}
+function snapToCurveColor(x, y) { snapCalls++; return invalidSnap ? { x: NaN, y: Infinity } : { x: x + 5, y }; }
+function activateTrackWrapForEdit() {}
+function buildDisplayTracePointsFromDigitized(curveId, options) { return { points: options.valuesSource.map((value, idx) => [value, idx, idx]) }; }
+function renderCurveTraceOverlays() {}
+function rebuildCurveTraceFromDigitized() { rebuildCalls++; }
+function commitCurveLayerValues(curveId, layer, nextValues) {
+    const values = getActiveLayerValues(entry, layer);
+    values.splice(0, values.length, ...nextValues);
+    rebuildCurveTraceFromDigitized(curveId, layer, { preserveBezierCache: true });
+    return { changed: true, values };
+}
+function applyBezierToSegmentValues() {}
+async function applySnapToCurve() { throw new Error('release-only snap must not run'); }
+
+const track = { leftX: 0, rightX: 100, scaleMin: 0, scaleMax: 100, wrapped: false };
+const entry = { values: [10, 20, 30], wrapLayer: { values: [110, 120, 130] } };
+let lastDigitizedCurves = { C: entry };
+let lastCurveTraces = { C: [[10, 0, 0], [20, 1, 1], [30, 2, 2]], C_wrap: [[110, 0, 0], [120, 1, 1], [130, 2, 2]] };
+function makeState(snapEnabled, dragLayer = 'main') {
+    const isWrap = dragLayer === 'wrap';
+    const originalValues = isWrap ? [110, 120, 130] : [10, 20, 30];
+    const originalX = originalValues[1];
+    return {
+        interactionId: 1, curveId: 'C', curveKey: 'C', traceKey: isWrap ? 'C_wrap' : 'C', dragLayer, entry,
+        targetTrack: track, centerIndex: 1, pointIndex: 1, depthIndex: 1,
+        neighbors: [{ pointIndex: 1, depthIndex: 1, originalDepthIndex: 1, originalX, originalY: 1, originalValue: originalX, originalRawX: originalX }],
+        startX: originalX, startY: 1, currentX: 30, currentY: 1,
+        originalValues, previewValues: originalValues.slice(),
+        originalTracePoints: lastCurveTraces[isWrap ? 'C_wrap' : 'C'].map(point => point.slice()),
+        committed: false, hasPreviewChange: false, animationFrameId: null,
+        snapEnabled, snapTrackMode: 'green', snapOptions: { mode: 'green' },
+    };
+}
+
+let editDragState = makeState(true);
+const authoritativeBefore = entry.values.slice();
+_doDragUpdate();
+assert.deepStrictEqual(entry.values, authoritativeBefore);
+assert.strictEqual(editDragState.lastRawPointer.x, 30);
+assert.strictEqual(editDragState.lastEffectivePointer.x, 35);
+assert.deepStrictEqual(editDragState.lastSnapResult, { enabled: true, available: true, x: 35, y: 1, changed: true });
+assert.strictEqual(editDragState.previewValues[1], 35);
+const finalPreview = editDragState.previewValues.slice();
+assert.strictEqual(snapCalls, 1);
+editDragState.currentX = 40;
+_doDragUpdate();
+assert.strictEqual(editDragState.previewValues[1], 45);
+editDragState.currentX = 30;
+_doDragUpdate();
+assert.deepStrictEqual(editDragState.previewValues, finalPreview);
+assert.deepStrictEqual(entry.values, authoritativeBefore);
+assert.strictEqual(snapCalls, 3);
+assert.strictEqual(commitCurveDrag(editDragState), true);
+assert.strictEqual(snapCalls, 3);
+assert.deepStrictEqual(entry.values, finalPreview);
+assert.strictEqual(editDragState.previewMatchesCommit, true);
+assert.strictEqual(editUndoStack.length, 1);
+
+entry.values.splice(0, entry.values.length, 10, 20, 30);
+editUndoStack = [];
+snapCalls = 0;
+editDragState = makeState(false);
+_doDragUpdate();
+assert.strictEqual(snapCalls, 0);
+assert.strictEqual(editDragState.previewValues[1], 30);
+assert.deepStrictEqual(editDragState.lastSnapResult, { enabled: false, available: false, x: 30, y: 1, changed: false });
+
+invalidSnap = true;
+snapCalls = 0;
+editDragState = makeState(true);
+_doDragUpdate();
+assert.strictEqual(snapCalls, 1);
+assert.strictEqual(editDragState.lastEffectivePointer.x, 30);
+assert.strictEqual(editDragState.lastSnapResult.available, false);
+assert.strictEqual(editDragState.previewValues[1], 30);
+
+cancelCurveDrag('snap-cancel');
+assert.deepStrictEqual(entry.values, [10, 20, 30]);
+assert.strictEqual(editUndoStack.length, 0);
+assert.strictEqual(editDragState, null);
+
+invalidSnap = false;
+pinned = new Set([2]);
+editDragState = makeState(true);
+editDragState.currentY = 2;
+_doDragUpdate();
+assert.deepStrictEqual(editDragState.previewValues, [10, 20, 30]);
+cancelCurveDrag('pinned-snap-cancel');
+
+pinned = new Set();
+const mainBeforeWrapPreview = entry.values.slice();
+editDragState = makeState(true, 'wrap');
+_doDragUpdate();
+assert.strictEqual(editDragState.previewValues[1], 35);
+assert.deepStrictEqual(entry.values, mainBeforeWrapPreview);
+assert.deepStrictEqual(entry.wrapLayer.values, [110, 120, 130]);
+cancelCurveDrag('wrap-snap-cancel');
+"""
+    result = subprocess.run(
+        [node, "-"],
+        input="\n".join((resolver_source, lifecycle_source, spacing_source, drag_source, harness)).encode("utf-8"),
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+
+
+def test_release_coordinates_run_one_final_snapped_preview_before_commit():
+    source = WORKSPACE_TEMPLATE.read_text(encoding="utf-8")
+    lifecycle_source = _function_source(source, "cancelCurveDragAnimationFrame", "_computeLocalDepthSpacing")
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required for the workspace JavaScript regression harness")
+    harness = r"""
+const assert = require('assert');
+const window = { currentDragLayer: null, paintTargetLayer: null };
+_dragHasMoved = true;
+let editUndoStack = [];
+let previewCalls = [];
+let lastCurveTraces = { C: [[10, 0, 0]] };
+const entry = { values: [10] };
+const document = { getElementById: () => ({ checked: false }) };
+function cancelAnimationFrame() {}
+function getActiveLayerValues() { return entry.values; }
+function renderCurveTraceOverlays() {}
+function renderCurveDragPreview() {}
+function rebuildCurveTraceFromDigitized() {}
+function valuesExactlyEqual(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
+function commitCurveLayerValues(curveId, layer, nextValues) {
+    entry.values.splice(0, entry.values.length, ...nextValues);
+    return { changed: true, values: entry.values };
+}
+function activateTrackWrapForEdit() {}
+function _doDragUpdate() {
+    previewCalls.push([editDragState.currentX, editDragState.currentY]);
+    editDragState.previewValues = [editDragState.currentX + 5];
+    editDragState.lastRawPointer = { x: editDragState.currentX, y: editDragState.currentY };
+    editDragState.lastEffectivePointer = { x: editDragState.currentX + 5, y: editDragState.currentY };
+    editDragState.hasPreviewChange = true;
+}
+
+let editDragState = {
+    interactionId: 9, curveId: 'C', curveKey: 'C', traceKey: 'C', dragLayer: 'main', entry,
+    targetTrack: {}, currentX: 20, currentY: 1,
+    originalValues: [10], originalTracePoints: [[10, 0, 0]], previewValues: [25],
+    hasPreviewChange: true, committed: false, animationFrameId: 44,
+};
+
+(async () => {
+    const committed = await finishCurveEditDrag(40, 2);
+    assert.strictEqual(committed, true);
+    assert.deepStrictEqual(previewCalls, [[40, 2]]);
+    assert.deepStrictEqual(entry.values, [45]);
+    assert.strictEqual(editUndoStack.length, 1);
+    assert.strictEqual(editDragState, null);
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+    result = subprocess.run(
+        [node, "-"],
+        input="\n".join((lifecycle_source, harness)),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_bezier_cache_is_layer_keyed_deep_cloned_and_missing_wrap_does_not_fallback():
+    source = WORKSPACE_TEMPLATE.read_text(encoding="utf-8")
+    helper_source = _function_source(source, "getBezierCacheKey", "getBezierSegments")
+    build_source = _function_source(source, "getBezierSegments", "applyBezierToSegmentValues")
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required for the workspace JavaScript regression harness")
+    harness = r"""
+const assert = require('assert');
+const window = { bezierCurveControls: {} };
+function normalizeCurveKey(value) { return String(value || '').trim().toUpperCase(); }
+function getActiveCurveTraceKey(curveId) { return String(curveId || '').replace(/_wrap$/i, ''); }
+function isDepthIndexPinned() { return false; }
+const traces = {
+    GR: [[10, 0, 0], [20, 1, 1], [30, 2, 2], [40, 3, 3]],
+    GR_wrap: [[110, 0, 0], [130, 1, 1], [150, 2, 2], [170, 3, 3]],
+    LOCKED: [[10, 0, 0], [20, 1, 1], [30, 2, 2], [40, 3, 3]],
+};
+function getActiveCurveTracePoints(curveId, layer) {
+    const key = String(curveId).replace(/_wrap$/i, '').toUpperCase() + (layer === 'wrap' ? '_wrap' : '');
+    return { traceKey: key, points: traces[key] || null };
+}
+
+const main = syncBezierControlsForCurve('gr', 'main');
+const wrap = syncBezierControlsForCurve('gr', 'wrap');
+assert.strictEqual(getBezierCacheKey('GR', 'main'), 'GR::main');
+assert.strictEqual(getBezierCacheKey('GR_wrap', 'wrap'), 'GR::wrap');
+assert.ok(Array.isArray(main) && Array.isArray(wrap));
+assert.notStrictEqual(main, wrap);
+assert.notStrictEqual(main[0], wrap[0]);
+assert.notStrictEqual(main[0].p1, wrap[0].p1);
+assert.notDeepStrictEqual(main[0].p1, wrap[0].p1);
+
+const wrapBefore = cloneBezierSegments(wrap);
+main[0].p1[0] += 999;
+assert.deepStrictEqual(wrap, wrapBefore);
+assert.strictEqual(syncBezierControlsForCurve('GR', 'main'), main);
+assert.strictEqual(syncBezierControlsForCurve('GR', 'wrap'), wrap);
+
+const replacement = cloneBezierSegments(main);
+setBezierSegments('GR', 'main', replacement);
+replacement[0].p2[0] += 500;
+assert.notStrictEqual(getCachedBezierSegments('GR', 'main')[0].p2[0], replacement[0].p2[0]);
+
+assert.strictEqual(deleteBezierSegments('GR', 'main'), true);
+assert.strictEqual(getCachedBezierSegments('GR', 'main'), null);
+assert.deepStrictEqual(getCachedBezierSegments('GR', 'wrap'), wrapBefore);
+assert.strictEqual(deleteAllBezierSegmentsForCurve('GR'), true);
+assert.strictEqual(getCachedBezierSegments('GR', 'wrap'), null);
+
+const beforeMissing = JSON.stringify(window.bezierCurveControls);
+assert.strictEqual(syncBezierControlsForCurve('MISSING', 'wrap'), null);
+assert.strictEqual(JSON.stringify(window.bezierCurveControls), beforeMissing);
+const lockedPreview = syncBezierControlsForCurve('LOCKED', 'main', { persist: false });
+assert.ok(Array.isArray(lockedPreview));
+assert.strictEqual(getCachedBezierSegments('LOCKED', 'main'), null);
+"""
+    result = subprocess.run(
+        [node, "-"],
+        input="\n".join((helper_source, build_source, harness)).encode("utf-8"),
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+
+
+def test_bezier_preview_is_transactional_and_uses_frozen_layer_segments():
+    source = WORKSPACE_TEMPLATE.read_text(encoding="utf-8")
+    helper_source = _function_source(source, "getBezierCacheKey", "getBezierSegments")
+    apply_source = _function_source(source, "applyBezierToSegmentValues", "renderBezierControls")
+    drag_source = _drag_source(source)
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required for the workspace JavaScript regression harness")
+    harness = r"""
+const assert = require('assert');
+const window = { bezierCurveControls: {} };
+let editMode = true;
+let _dragHasMoved = true;
+let _lastDragRenderMs = 0;
+let lastDigitizedCurves = null;
+let lastDigitizedDepth = [0, 1, 2];
+let lastDepthConfig = {};
+let lastNullValue = -999.25;
+const performance = { now: () => 1000 };
+const document = { getElementById: () => ({ checked: false }) };
+function normalizeCurveKey(value) { return String(value || '').trim().toUpperCase(); }
+function getActiveCurveTraceKey(curveId) { return String(curveId || '').toUpperCase(); }
+function getActiveLayerValues(entry, layer) { return layer === 'wrap' ? entry.wrapLayer.values : entry.values; }
+function getActiveLayerTrackConfig(entry, track, layer) { return layer === 'wrap' ? { ...track, scaleMin: 100, scaleMax: 200 } : track; }
+function getActiveCurveTracePoints(curveId, layer) { return { points: layer === 'wrap' ? traces.C_wrap : traces.C }; }
+function findTrackByCurveId() { return track; }
+function isDepthIndexPinned() { return false; }
+function isPointLocked() { return false; }
+function pixelToTrackValue(x) { return x; }
+function perturbIfEqual() {}
+function snapToCurveColor(x, y) { return { x, y }; }
+function valuesExactlyEqual(a, b) { return a.length === b.length && a.every((v, i) => Object.is(v, b[i])); }
+function renderCurveDragPreview() { renders++; }
+
+const track = { leftX: 0, rightX: 200, scaleMin: 0, scaleMax: 200 };
+const entry = { values: [10, 20, 30], wrapLayer: { values: [110, 120, 130] } };
+const traces = { C: [[10, 0, 0], [20, 1, 1], [30, 2, 2]], C_wrap: [[110, 0, 0], [120, 1, 1], [130, 2, 2]] };
+const mainSegments = [{ startIdx: 0, endIdx: 2, p0: [10, 0], p1: [15, 0.66], p2: [25, 1.33], p3: [30, 2] }];
+const wrapSegments = [{ startIdx: 0, endIdx: 2, p0: [110, 0], p1: [115, 0.66], p2: [125, 1.33], p3: [130, 2] }];
+setBezierSegments('C', 'main', mainSegments);
+setBezierSegments('C', 'wrap', wrapSegments);
+const mainCacheBefore = cloneBezierSegments(getCachedBezierSegments('C', 'main'));
+const wrapCacheBefore = cloneBezierSegments(getCachedBezierSegments('C', 'wrap'));
+const mainValuesBefore = entry.values.slice();
+const wrapValuesBefore = entry.wrapLayer.values.slice();
+let renders = 0;
+
+let editDragState = {
+    curveId: 'C', curveKey: 'C', traceKey: 'C_wrap', dragLayer: 'wrap', isBezierControl: true,
+    entry, targetTrack: track, segmentIndex: 0, controlIndex: 1,
+    startX: 115, startY: 0.66, currentX: 135, currentY: 0.66,
+    originalControlX: 115, originalControlY: 0.66,
+    originalValues: wrapValuesBefore.slice(), originalTracePoints: traces.C_wrap.map(p => p.slice()),
+    originalBezierSegments: cloneBezierSegments(wrapSegments),
+    previewBezierSegments: cloneBezierSegments(wrapSegments), previewValues: wrapValuesBefore.slice(),
+    snapEnabled: false,
+};
+_doDragUpdate();
+assert.deepStrictEqual(entry.values, mainValuesBefore);
+assert.deepStrictEqual(entry.wrapLayer.values, wrapValuesBefore);
+assert.deepStrictEqual(getCachedBezierSegments('C', 'main'), mainCacheBefore);
+assert.deepStrictEqual(getCachedBezierSegments('C', 'wrap'), wrapCacheBefore);
+assert.strictEqual(editDragState.previewBezierSegments[0].p1[0], 135);
+assert.notDeepStrictEqual(editDragState.previewValues, wrapValuesBefore);
+assert.strictEqual(editDragState.hasPreviewChange, true);
+assert.strictEqual(renders, 1);
+"""
+    result = subprocess.run(
+        [node, "-"],
+        input="\n".join((helper_source, apply_source, drag_source, harness)).encode("utf-8"),
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+
+
+def test_bezier_commit_cancel_and_undo_are_layer_safe():
+    source = WORKSPACE_TEMPLATE.read_text(encoding="utf-8")
+    helper_source = _function_source(source, "getBezierCacheKey", "getBezierSegments")
+    lifecycle_source = _function_source(source, "cancelCurveDragAnimationFrame", "_computeLocalDepthSpacing")
+    undo_source = _function_source(source, "undoLastCurveEdit", "beginCurveEditInteraction")
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required for the workspace JavaScript regression harness")
+    harness = r"""
+const assert = require('assert');
+const window = { bezierCurveControls: {}, currentDragLayer: null, paintTargetLayer: null };
+function normalizeCurveKey(value) { return String(value || '').trim().toUpperCase(); }
+function getActiveCurveTraceKey(curveId) { return String(curveId || '').replace(/_wrap$/i, ''); }
+function getActiveLayerValues(entry, layer) { return layer === 'wrap' ? entry.wrapLayer.values : entry.values; }
+function cancelAnimationFrame() {}
+function renderCurveTraceOverlays() {}
+function rebuildCurveTraceFromDigitized(curveId, layer, options) { rebuilds.push([curveId, layer, options]); }
+function getCurveLayerContext(curveId, layer) { return { values: getActiveLayerValues(entry, layer) }; }
+function commitCurveLayerValues(curveId, layer, nextValues, options = {}) {
+    const values = getActiveLayerValues(entry, layer);
+    values.splice(0, values.length, ...nextValues);
+    if (options.rebuildTrace !== false) rebuildCurveTraceFromDigitized(curveId, layer, { preserveBezierCache: true });
+    return { changed: true, values };
+}
+function markCurveLayerTraceRevision() {}
+function showStatus() {}
+
+let editUndoStack = [];
+let rebuilds = [];
+const entry = { values: [10, 20, 30], wrapLayer: { values: [110, 120, 130] } };
+let lastDigitizedCurves = { C: entry };
+let lastCurveTraces = { C: [[10, 0, 0], [20, 1, 1], [30, 2, 2]], C_wrap: [[110, 0, 0], [120, 1, 1], [130, 2, 2]] };
+const mainOriginal = [{ startIdx: 0, endIdx: 2, p0: [10, 0], p1: [15, 1], p2: [25, 1], p3: [30, 2] }];
+const mainPreview = [{ startIdx: 0, endIdx: 2, p0: [10, 0], p1: [22, 1], p2: [25, 1], p3: [30, 2] }];
+const wrapOriginal = [{ startIdx: 0, endIdx: 2, p0: [110, 0], p1: [115, 1], p2: [125, 1], p3: [130, 2] }];
+setBezierSegments('C', 'main', mainOriginal);
+setBezierSegments('C', 'wrap', wrapOriginal);
+const wrapEverythingBefore = JSON.stringify({ values: entry.wrapLayer.values, trace: lastCurveTraces.C_wrap, cache: getCachedBezierSegments('C', 'wrap') });
+
+let editDragState = {
+    curveId: 'C', curveKey: 'C', traceKey: 'C', dragLayer: 'main', isBezierControl: true,
+    bezierCacheKey: 'C::main', entry, segmentIndex: 0, controlIndex: 1, targetTrack: {},
+    originalControlX: 15, originalControlY: 1,
+    originalValues: [10, 20, 30], previewValues: [10, 22, 30],
+    originalTracePoints: lastCurveTraces.C.map(p => p.slice()),
+    originalBezierSegments: cloneBezierSegments(mainOriginal),
+    previewBezierSegments: cloneBezierSegments(mainPreview),
+    bezierUndoValues: [10, 20, 30].map((oldValue, idx) => ({ idx, oldValue })),
+    hasPreviewChange: true, committed: false, animationFrameId: null,
+};
+assert.strictEqual(commitCurveDrag(editDragState), true);
+assert.deepStrictEqual(entry.values, [10, 22, 30]);
+assert.deepStrictEqual(getCachedBezierSegments('C', 'main'), mainPreview);
+assert.strictEqual(JSON.stringify({ values: entry.wrapLayer.values, trace: lastCurveTraces.C_wrap, cache: getCachedBezierSegments('C', 'wrap') }), wrapEverythingBefore);
+assert.strictEqual(editUndoStack.length, 1);
+assert.strictEqual(editUndoStack[0].type, 'bezier_transform');
+assert.strictEqual(editUndoStack[0].bezierCacheKey, 'C::main');
+assert.deepStrictEqual(rebuilds, [['C', 'main', { preserveBezierCache: true }]]);
+
+undoLastCurveEdit();
+assert.deepStrictEqual(entry.values, [10, 20, 30]);
+assert.deepStrictEqual(lastCurveTraces.C, [[10, 0, 0], [20, 1, 1], [30, 2, 2]]);
+assert.deepStrictEqual(getCachedBezierSegments('C', 'main'), mainOriginal);
+assert.strictEqual(JSON.stringify({ values: entry.wrapLayer.values, trace: lastCurveTraces.C_wrap, cache: getCachedBezierSegments('C', 'wrap') }), wrapEverythingBefore);
+assert.strictEqual(editUndoStack.length, 0);
+
+const cacheBeforeCancel = JSON.stringify(window.bezierCurveControls);
+editDragState = {
+    curveId: 'C', curveKey: 'C', traceKey: 'C_wrap', dragLayer: 'wrap', isBezierControl: true,
+    entry, originalTracePoints: lastCurveTraces.C_wrap.map(p => p.slice()),
+    originalValues: entry.wrapLayer.values.slice(), previewValues: [110, 140, 130],
+    originalBezierSegments: cloneBezierSegments(wrapOriginal),
+    previewBezierSegments: [{ ...wrapOriginal[0], p1: [145, 1] }],
+    hasPreviewChange: true, committed: false, animationFrameId: null,
+};
+cancelCurveDrag('test-cancel');
+assert.strictEqual(JSON.stringify(window.bezierCurveControls), cacheBeforeCancel);
+assert.deepStrictEqual(entry.wrapLayer.values, [110, 120, 130]);
+assert.strictEqual(editUndoStack.length, 0);
+assert.strictEqual(editDragState, null);
+"""
+    result = subprocess.run(
+        [node, "-"],
+        input="\n".join((helper_source, lifecycle_source, undo_source, harness)).encode("utf-8"),
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+
+
+def test_curve_layer_revisions_replacement_aliasing_and_stale_drag_protection():
+    source = WORKSPACE_TEMPLATE.read_text(encoding="utf-8")
+    revision_source = _function_source(source, "getCurveLayerContext", "getActiveLayerValues")
+    commit_start = source.index("function commitCurveDrag")
+    commit_end = source.index("async function finishCurveEditDrag", commit_start)
+    commit_source = source[commit_start:commit_end]
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required for the workspace JavaScript regression harness")
+    harness = r"""
+const assert = require('assert');
+const window = { bezierCurveControls: {}, currentDragLayer: null, paintTargetLayer: null };
+const curveLayerRevisions = new Map();
+const curveLayerTraceRevisions = new Map();
+let committedDatasetGeneration = 0;
+let workspaceHasUnsavedCommittedChanges = false;
+let curveWrapMarkers = { C: [{ depthIndex: 1 }] };
+let editUndoStack = [{ type: 'old_dataset_action' }];
+let lastCurveTraces = { C: [['old-main']], C_wrap: [['old-wrap']] };
+let lastDigitizedCurves = {
+    C: { values: [10, 20, 30], wrapLayer: { values: [110, 120, 130], left_value: 100, right_value: 200 } },
+};
+let editCurveId = 'C';
+let editDragState = null;
+let drawStrokeActive = false, drawStrokeLayer = null, drawStrokePoints = [], drawStrokeSourceRevision = null;
+let paintStrokeActive = false, paintStrokeLayer = null, paintStrokeSourceRevision = null;
+let paintUndoValuesBefore = [], paintUndoPtsBefore = [];
+let smoothStrokeActive = false, smoothStrokeLayer = null, smoothStrokeSourceRevision = null;
+let smoothUndoValuesBefore = [];
+let eraserStart = null, eraserStrokeLayer = null, eraserStrokeSourceRevision = null, eraserBox = null;
+let clearedBezier = [];
+let rebuilds = [];
+let cancellations = [];
+function normalizeCurveKey(value) { return String(value || '').trim().toUpperCase(); }
+function resolveTraceKeyForCurveId(curveId) { return normalizeCurveKey(curveId).replace(/_WRAP$/i, ''); }
+function findDigitizedCurveEntry(curveId) {
+    const normalized = normalizeCurveKey(curveId).replace(/_WRAP$/i, '');
+    const key = Object.keys(lastDigitizedCurves || {}).find(candidate => normalizeCurveKey(candidate) === normalized);
+    return key ? { key, entry: lastDigitizedCurves[key] } : null;
+}
+function valuesExactlyEqual(a, b) { return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => Object.is(v, b[i])); }
+function deleteBezierSegments(curveId, layer) { clearedBezier.push(`${normalizeCurveKey(curveId)}::${layer}`); return true; }
+function clearAllBezierSegments() { window.bezierCurveControls = {}; }
+function clearEditInteractionLayerState() {}
+function rebuildCurveTraceFromDigitized(curveId, layer) {
+    rebuilds.push(`${normalizeCurveKey(curveId)}::${layer}`);
+    const context = getCurveLayerContext(curveId, layer);
+    if (context) lastCurveTraces[context.traceKey] = context.values.map((value, idx) => [value, idx, idx]);
+}
+function cancelCurveDrag(reason, state) { cancellations.push(reason); if (editDragState === state) editDragState = null; return true; }
+
+assert.strictEqual(getCurveLayerRevision('C', 'main'), 0);
+assert.strictEqual(getCurveLayerRevision('C', 'wrap'), 0);
+const wrapSnapshot = JSON.stringify({ values: lastDigitizedCurves.C.wrapLayer.values, trace: lastCurveTraces.C_wrap });
+const replacement = [40, 50, 60];
+const mainResult = replaceCurveLayerValues('C', 'main', replacement, { reason: 'external_main' });
+assert.strictEqual(mainResult.changed, true);
+assert.strictEqual(mainResult.revision, 1);
+assert.strictEqual(getCurveLayerRevision('C', 'main'), 1);
+assert.strictEqual(getCurveLayerRevision('C', 'wrap'), 0);
+assert.strictEqual(JSON.stringify({ values: lastDigitizedCurves.C.wrapLayer.values, trace: lastCurveTraces.C_wrap }), wrapSnapshot);
+replacement[0] = 999;
+assert.strictEqual(lastDigitizedCurves.C.values[0], 40);
+assert.strictEqual(getCurveLayerRevision('C', 'main'), 1);
+assert.ok(clearedBezier.includes('C::main'));
+assert.ok(!clearedBezier.includes('C::wrap'));
+assert.deepStrictEqual(rebuilds, ['C::main']);
+
+const noOp = commitCurveLayerValues('C', 'main', [40, 50, 60]);
+assert.strictEqual(noOp.changed, false);
+assert.strictEqual(getCurveLayerRevision('C', 'main'), 1);
+assert.deepStrictEqual(rebuilds, ['C::main']);
+
+const mainSnapshot = JSON.stringify({ values: lastDigitizedCurves.C.values, trace: lastCurveTraces.C });
+const wrapReplacement = [140, 150, 160];
+const wrapResult = replaceCurveLayerValues('C', 'wrap', wrapReplacement, { reason: 'external_wrap' });
+assert.strictEqual(wrapResult.revision, 1);
+assert.strictEqual(getCurveLayerRevision('C', 'main'), 1);
+assert.strictEqual(getCurveLayerRevision('C', 'wrap'), 1);
+assert.strictEqual(JSON.stringify({ values: lastDigitizedCurves.C.values, trace: lastCurveTraces.C }), mainSnapshot);
+wrapReplacement[0] = 999;
+assert.strictEqual(lastDigitizedCurves.C.wrapLayer.values[0], 140);
+
+const staleState = {
+    curveId: 'C', curveKey: 'C', dragLayer: 'main', sourceRevision: 1,
+    entry: lastDigitizedCurves.C, committed: false, previewValues: [70, 80, 90], hasPreviewChange: true,
+};
+editDragState = staleState;
+replaceCurveLayerValues('C', 'main', [41, 51, 61], { reason: 'external_again' });
+assert.strictEqual(editDragState, null);
+assert.ok(cancellations.includes('external_again'));
+const undoCount = editUndoStack.length;
+assert.strictEqual(commitCurveDrag(staleState), false);
+assert.deepStrictEqual(lastDigitizedCurves.C.values, [41, 51, 61]);
+assert.strictEqual(editUndoStack.length, undoCount);
+assert.ok(cancellations.includes('source_data_changed'));
+const undoLikeRestore = commitCurveLayerValues('C', 'main', [40, 50, 60], { reason: 'undo_test' });
+assert.strictEqual(undoLikeRestore.revision, 3);
+assert.deepStrictEqual(lastDigitizedCurves.C.values, [40, 50, 60]);
+assert.strictEqual(getCurveLayerRevision('C', 'main'), 3);
+
+const staleBezierState = {
+    curveId: 'C', curveKey: 'C', dragLayer: 'main', mode: 'bezier', sourceRevision: 3,
+    entry: lastDigitizedCurves.C, committed: false, previewValues: [45, 55, 65], hasPreviewChange: true,
+};
+editDragState = staleBezierState;
+replaceCurveLayerValues('C', 'main', [42, 52, 62], { reason: 'external_during_bezier' });
+assert.strictEqual(editDragState, null);
+const bezierUndoCount = editUndoStack.length;
+assert.strictEqual(commitCurveDrag(staleBezierState), false);
+assert.deepStrictEqual(lastDigitizedCurves.C.values, [42, 52, 62]);
+assert.strictEqual(editUndoStack.length, bezierUndoCount);
+assert.ok(cancellations.includes('source_data_changed'));
+
+const datasetInput = { D: { values: [1, 2], wrapLayer: { values: [101, 102], color: '#0ff' } } };
+replaceAllDigitizedCurves(datasetInput, { reason: 'project_load', clearTraces: true });
+assert.strictEqual(getCurveLayerRevision('D', 'main'), 1);
+assert.strictEqual(getCurveLayerRevision('D', 'wrap'), 1);
+assert.strictEqual(editUndoStack.length, 0);
+datasetInput.D.values[0] = 999;
+datasetInput.D.wrapLayer.values[0] = 999;
+assert.deepStrictEqual(lastDigitizedCurves.D.values, [1, 2]);
+assert.deepStrictEqual(lastDigitizedCurves.D.wrapLayer.values, [101, 102]);
+const dMainRevision = getCurveLayerRevision('D', 'main');
+assert.strictEqual(removeCurveWrapLayer('D', { reason: 'test_remove_wrap' }).revision, 2);
+assert.strictEqual(lastDigitizedCurves.D.wrapLayer, undefined);
+assert.strictEqual(getCurveLayerRevision('D', 'main'), dMainRevision);
+const createdWrapValues = [201, 202];
+assert.strictEqual(createOrReplaceCurveWrapLayer('D', createdWrapValues, { color: '#0ff' }, { reason: 'test_create_wrap' }).revision, 3);
+createdWrapValues[0] = 999;
+assert.deepStrictEqual(lastDigitizedCurves.D.wrapLayer.values, [201, 202]);
+assert.strictEqual(getCurveLayerRevision('D', 'main'), dMainRevision);
+"""
+    result = subprocess.run(
+        [node, "-"],
+        input="\n".join((revision_source, commit_source, harness)).encode("utf-8"),
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+
+
+def test_bezier_cache_revision_mismatch_is_never_returned():
+    source = WORKSPACE_TEMPLATE.read_text(encoding="utf-8")
+    revision_source = _function_source(source, "getCurveLayerContext", "getActiveLayerValues")
+    bezier_helpers = _function_source(source, "getBezierCacheKey", "getBezierSegments")
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required for the workspace JavaScript regression harness")
+    harness = r"""
+const assert = require('assert');
+const window = { bezierCurveControls: {} };
+const curveLayerRevisions = new Map();
+const curveLayerTraceRevisions = new Map();
+let curveWrapMarkers = {};
+let editUndoStack = [];
+let lastCurveTraces = { C: [] };
+let lastDigitizedCurves = { C: { values: [10, 20, 30] } };
+let editDragState = null;
+let drawStrokeActive = false, paintStrokeActive = false, smoothStrokeActive = false, eraserStart = null;
+function normalizeCurveKey(value) { return String(value || '').trim().toUpperCase(); }
+function resolveTraceKeyForCurveId(curveId) { return normalizeCurveKey(curveId); }
+function findDigitizedCurveEntry(curveId) { return { key: 'C', entry: lastDigitizedCurves.C }; }
+function valuesExactlyEqual(a, b) { return a.length === b.length && a.every((v, i) => Object.is(v, b[i])); }
+function rebuildCurveTraceFromDigitized() {}
+function cancelCurveDrag() {}
+
+bumpCurveLayerRevision('C', 'main', 'initialize');
+const segments = [{ startIdx: 0, endIdx: 2, p0: [10, 0], p1: [15, 1], p2: [25, 1], p3: [30, 2] }];
+setBezierSegments('C', 'main', segments);
+assert.deepStrictEqual(getCachedBezierSegments('C', 'main'), segments);
+const cacheKey = getBezierCacheKey('C', 'main');
+assert.strictEqual(window.bezierCurveControls[cacheKey].sourceRevision, 1);
+bumpCurveLayerRevision('C', 'main', 'untracked_test_advance');
+assert.strictEqual(getCachedBezierSegments('C', 'main'), null);
+assert.strictEqual(window.bezierCurveControls[cacheKey], undefined);
+"""
+    result = subprocess.run(
+        [node, "-"],
+        input="\n".join((revision_source, bezier_helpers, harness)).encode("utf-8"),
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+
+
+def test_authoritative_array_replacement_is_confined_to_canonical_helpers():
+    source = WORKSPACE_TEMPLATE.read_text(encoding="utf-8")
+    replace_region = _function_source(source, "replaceCurveLayerValues", "commitCurveLayerValues")
+    dataset_region = _function_source(source, "replaceAllDigitizedCurves", "invalidateAllLayersForCurve")
+
+    direct_dataset_assignments = [
+        line for line in source.splitlines()
+        if re.search(r"\blastDigitizedCurves\s*=(?!=)", line)
+        and "let lastDigitizedCurves" not in line
+    ]
+    assert direct_dataset_assignments == [
+        line for line in dataset_region.splitlines() if re.search(r"\blastDigitizedCurves\s*=(?!=)", line)
+    ]
+
+    authoritative_value_assignments = [
+        line for line in source.splitlines()
+        if re.search(r"(?:context|found)\.entry(?:\.wrapLayer)?\.values\s*=", line)
+    ]
+    assert authoritative_value_assignments
+    assert authoritative_value_assignments == [
+        line for line in replace_region.splitlines()
+        if re.search(r"(?:context|found)\.entry(?:\.wrapLayer)?\.values\s*=", line)
+    ]
+
+
+def test_committed_snapshot_isolated_preview_free_merge_safe_and_repeatable():
+    source = WORKSPACE_TEMPLATE.read_text(encoding="utf-8")
+    snapshot_source = _function_source(source, "clonePersistenceValue", "getActiveLayerValues")
+    las_source = _function_source(source, "buildLasFromDigitized", "renderDigitizationSummary")
+    canonical_source = _function_source(source, "getCanonicalHeaderMetadata", "mergeHeaderMetadataValues")
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required for the workspace JavaScript regression harness")
+    harness = r"""
+const assert = require('assert');
+const HEADER_METADATA_KEY_GROUPS = [
+    ['well'], ['comp', 'company'], ['api'], ['date'], ['fld', 'field'],
+    ['loc', 'location'], ['county'], ['state'], ['prov', 'province'],
+    ['srvc', 'service', 'service_company'], ['uwi'],
+];
+const window = {};
+const curveLayerRevisions = new Map([['GR::main', 1], ['GR::wrap', 1]]);
+let committedDatasetGeneration = 7;
+let committedSnapshotSequence = 0;
+let metadataStateRevision = 3;
+let latestSaveOperationId = 0;
+let latestExportOperationId = 0;
+let lastSavedSnapshotDescriptor = null;
+let workspaceHasUnsavedCommittedChanges = true;
+let lastMetadataFingerprint = null;
+let lastDigitizedDepth = [1000, 1001, 1002, 1003];
+let lastDigitizedCurves = {
+    GR: {
+        unit: 'API',
+        values: [10, 20, 30, 40],
+        wrapLayer: { values: [-999.25, 120, null, 140], left_value: 100, right_value: 200, color: '#0ff' },
+    },
+};
+let headerMetadata = { well: 'ALPHA', nested: { owner: 'original' } };
+let lastDepthConfig = { unit: 'FT', top_depth: 1000, bottom_depth: 1003 };
+let lastNullValue = -999.25;
+let activeLogId = 55;
+let uploadedImagePath = '/api/images/image-a';
+let originalUploadedImagePath = '/api/images/image-a';
+let lastLasFilename = 'alpha.las';
+let curveWrapMarkers = { GR: [{ depthIndex: 1, cycle: 1 }] };
+let primaryRegion = { left_px: 1, right_px: 10 };
+let headerRegion = { left_px: 2, right_px: 9 };
+let pinnedDepthIndices = new Map([['GR', new Set([1, 3])]]);
+let editDragState = { previewValues: [999, 999, 999, 999], dragLayer: 'main' };
+let drawStrokeActive = false, paintStrokeActive = false, smoothStrokeActive = false, eraserStart = null;
+function normalizeCurveKey(value) { return String(value || '').trim().toUpperCase(); }
+function getCurveLayerRevision(curveId, layer) { return curveLayerRevisions.get(`${normalizeCurveKey(curveId)}::${layer}`) || 0; }
+function syncHeaderMetadataFromInputs() { return headerMetadata; }
+function buildDigitizeConfigFromInputs() {
+    return { depth: { top_depth: 1000, bottom_depth: 1003 }, curves: [{ las_mnemonic: 'GR', scale_min: 0, scale_max: 100 }] };
+}
+function getDepthConfigFromInputs() { return lastDepthConfig; }
+function isMissingDigitizedValue(value, sentinel) {
+    return value == null || !Number.isFinite(value) || (Number.isFinite(sentinel) && value === sentinel);
+}
+function showStatus() {}
+
+const snapshot = createCommittedDatasetSnapshot({ purpose: 'test_save' });
+assert(Object.isFrozen(snapshot));
+assert(Object.isFrozen(snapshot.curves.GR.values));
+assert.strictEqual(snapshot.hadActivePreview, true);
+assert.deepStrictEqual(snapshot.curves.GR.values, [10, 20, 30, 40]);
+assert.deepStrictEqual(snapshot.revisionManifest, { 'GR::main': 1, 'GR::wrap': 1 });
+assert.deepStrictEqual(snapshot.pinnedDepthIndices, { GR: [1, 3] });
+assert.strictEqual(markCommittedSnapshotSaved(snapshot), true);
+assert.strictEqual(workspaceHasUnsavedCommittedChanges, false);
+
+lastDigitizedDepth[0] = 9000;
+lastDigitizedCurves.GR.values[0] = 999;
+lastDigitizedCurves.GR.wrapLayer.values[1] = 999;
+headerMetadata.well = 'CHANGED';
+headerMetadata.nested.owner = 'changed';
+assert.deepStrictEqual(snapshot.depths, [1000, 1001, 1002, 1003]);
+assert.deepStrictEqual(snapshot.curves.GR.values, [10, 20, 30, 40]);
+assert.deepStrictEqual(snapshot.curves.GR.wrapLayer.values, [-999.25, 120, null, 140]);
+assert.strictEqual(snapshot.metadata.well, 'ALPHA');
+assert.strictEqual(snapshot.metadata.nested.owner, 'original');
+try { snapshot.curves.GR.values[0] = 777; } catch (_) {}
+assert.strictEqual(lastDigitizedCurves.GR.values[0], 999);
+
+assert.deepStrictEqual(buildMergedCurveValuesForExport(snapshot.curves.GR, snapshot.nullValue), [10, 120, 30, 140]);
+const mergeInput = {
+    values: [10, 20, 30, 40],
+    wrapLayer: { values: [-999.25, null, NaN, 140] },
+};
+const mergeBefore = stablePersistenceStringify(mergeInput);
+assert.deepStrictEqual(buildMergedCurveValuesForExport(mergeInput, -999.25), [10, 20, 30, 140]);
+assert.strictEqual(stablePersistenceStringify(mergeInput), mergeBefore);
+assert.throws(() => buildMergedCurveValuesForExport({ values: [1, 2], wrapLayer: { values: [3] } }, -999.25));
+
+const lasA = buildLasFromCommittedSnapshot(snapshot);
+lastDigitizedCurves.GR.values.fill(555);
+headerMetadata.well = 'LATEST';
+const lasB = buildLasFromCommittedSnapshot(snapshot);
+assert.strictEqual(lasA, lasB);
+const dataLines = lasA.split(/\r?\n/).filter(line => /^\s*100[0-3]\.0000/.test(line));
+assert.strictEqual(dataLines.length, 4);
+assert(dataLines[0].includes('10.0000'));
+assert(dataLines[1].includes('120.0000'));
+assert(dataLines[2].includes('30.0000'));
+assert(dataLines[3].includes('140.0000'));
+
+const stateChunks = [];
+let inState = false;
+for (const line of lasA.split(/\r?\n/)) {
+    if (line.includes('TURBOTIFF_STATE_START')) { inState = true; continue; }
+    if (line.includes('TURBOTIFF_STATE_END')) { inState = false; continue; }
+    if (inState && line.startsWith('# ')) stateChunks.push(line.slice(2).trim());
+}
+const state = JSON.parse(decodeURIComponent(escape(Buffer.from(stateChunks.join(''), 'base64').toString('binary'))));
+assert.deepStrictEqual(state.digitizedDepth, snapshot.depths);
+assert.deepStrictEqual(state.digitizedCurves.GR.values, snapshot.curves.GR.values);
+assert.deepStrictEqual(state.digitizedCurves.GR.wrapLayer.values, snapshot.curves.GR.wrapLayer.values);
+assert.deepStrictEqual(state.pinnedDepthIndices, { GR: [1, 3] });
+assert.strictEqual(Object.prototype.hasOwnProperty.call(state, 'curveTraces'), false);
+assert.strictEqual(Object.prototype.hasOwnProperty.call(state, 'bezierCurveControls'), false);
+
+lastDigitizedDepth = [1000, 1001, 1002, 1003];
+lastDigitizedCurves = clonePersistenceValue(snapshot.curves);
+headerMetadata = clonePersistenceValue(snapshot.metadata);
+curveLayerRevisions.set('GR::main', 2);
+lastDigitizedCurves.GR.values[0] = 11;
+const committedSnapshot = createCommittedDatasetSnapshot({ purpose: 'after_commit' });
+assert.strictEqual(committedSnapshot.curves.GR.values[0], 11);
+assert.strictEqual(committedSnapshot.revisionManifest['GR::main'], 2);
+assert.strictEqual(markCommittedSnapshotSaved(snapshot), false);
+assert.strictEqual(workspaceHasUnsavedCommittedChanges, true);
+assert.strictEqual(markCommittedSnapshotSaved(committedSnapshot), true);
+assert.strictEqual(workspaceHasUnsavedCommittedChanges, false);
+
+lastDigitizedCurves.GR.wrapLayer.values = [1, 2];
+assert.throws(
+    () => createCommittedDatasetSnapshot({ purpose: 'bad_lengths' }),
+    error => error && error.code === 'invalid_committed_dataset' && error.validation.errors.some(item => item.code === 'wrap_length_mismatch')
+);
+"""
+    result = subprocess.run(
+        [node, "-"],
+        input="\n".join((snapshot_source, canonical_source, las_source, harness)).encode("utf-8"),
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+
+
+def test_persistence_paths_capture_once_and_guard_async_save_ordering():
+    source = WORKSPACE_TEMPLATE.read_text(encoding="utf-8")
+    zip_source = _function_source(source, "downloadLasZip", "autoSaveLogToAccount")
+    autosave_source = _function_source(source, "autoSaveLogToAccount", "downloadLastLas")
+    manual_source = _function_source(source, "saveLogToAccount", "showStatus")
+    download_source = _function_source(source, "downloadLastLas", "saveLogToAccount")
+
+    assert "createCommittedDatasetSnapshot" in zip_source
+    assert "buildExportCurvesFromSnapshot(snapshot)" in zip_source
+    assert "null_value: snapshot.nullValue" in zip_source
+    assert "latestExportOperationId" in zip_source
+    assert "lastDigitizedCurves" not in zip_source
+    assert "lastDigitizedDepth" not in zip_source
+
+    for function_source in (autosave_source, manual_source):
+        assert function_source.count("createCommittedDatasetSnapshot") == 1
+        assert "latestSaveOperationId" in function_source
+        assert "operationId !== latestSaveOperationId" in function_source
+        assert "isPersistenceSnapshotDatasetActive(snapshot)" in function_source
+        assert "markCommittedSnapshotSaved(snapshot)" in function_source
+        assert "buildLasFromCommittedSnapshot(snapshot)" in function_source
+
+    assert download_source.count("createCommittedDatasetSnapshot") == 1
+    assert "buildLasFromCommittedSnapshot(snapshot)" in download_source
+    assert "lastDigitizedCurves" not in download_source
+    assert "lastDigitizedDepth" not in download_source
+
+
+def test_zip_export_endpoint_rejects_dimension_and_numeric_corruption():
+    source = WEB_APP.read_text(encoding="utf-8")
+    start = source.index("def download_las_zip():")
+    end = source.index("@app.route('/api/ml_predict_curve_trace'", start)
+    endpoint = source[start:end]
+
+    assert "Depths must be strictly monotonic" in endpoint
+    assert "values must match the depth count" in endpoint
+    assert "contains infinite values" in endpoint
+    assert "null_value = data.get('null_value', -999.25)" in endpoint
+    assert "write_las_simple(depth_arr, single_curve_data, depth_unit, header_metadata, null_value)" in endpoint
+    assert "min_len = min(" not in endpoint
+
+
+def test_project_load_validates_and_restores_authoritative_layers_pins_and_clean_state():
+    source = WORKSPACE_TEMPLATE.read_text(encoding="utf-8")
+    load_source = _function_source(source, "ensureDigitizedFromLas", "buildLasFromDigitized")
+
+    validation_pos = load_source.index("validateCommittedDatasetSnapshot")
+    replacement_pos = load_source.index("replaceAllDigitizedCurves(stateBlob.digitizedCurves")
+    assert validation_pos < replacement_pos
+    assert "rebuildTraces: true" in load_source
+    assert "pinnedDepthIndices.set(normalizeCurveKey(curveKey), new Set(validIndices))" in load_source
+    assert "curveWrapMarkers = clonePersistenceValue(stateBlob.curveWrapMarkers)" in load_source
+    assert "markCurrentCommittedStateClean('project_loaded')" in load_source

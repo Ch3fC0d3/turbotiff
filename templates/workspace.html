@@ -2084,7 +2084,18 @@
         let editCurveId = null;          // display/LAS mnemonic of curve currently being edited
         let editCurveDataKey = null;     // actual key in lastDigitizedCurves used for LAS data
         let editDragState = null;        // { curveId, curveKey, pointIndex, depthIndex, yImg }
+        let nextCurveDragInteractionId = 1;
         let lastCurveTraces = null;      // last curve_traces overlay returned from backend
+        const curveLayerRevisions = new Map();
+        const curveLayerTraceRevisions = new Map();
+        let committedDatasetGeneration = 0;
+        let committedSnapshotSequence = 0;
+        let metadataStateRevision = 0;
+        let lastMetadataFingerprint = null;
+        let latestSaveOperationId = 0;
+        let latestExportOperationId = 0;
+        let lastSavedSnapshotDescriptor = null;
+        let workspaceHasUnsavedCommittedChanges = true;
         let curveIndexToTraceKey = null; // { [curveIndex:number]: string } mapping from UI curve index to curve_traces key
         let editUndoStack = [];          // stack of { curveKey, idx, oldValue, oldTraceX } for Ctrl+Z
         let curveWrapMarkers = {};       // { [curveKey]: [{ depthIndex, cycle, edge, xImg, createdAt }] }
@@ -2205,6 +2216,18 @@
             if (activeLayer === 'wrap' && !String(traceKey).toLowerCase().endsWith('_wrap')) {
                 traceKey = traceKey + '_wrap';
             }
+
+            if (typeof getCurveLayerIdentityKey === 'function' && typeof getCurveLayerRevision === 'function' &&
+                typeof curveLayerTraceRevisions !== 'undefined') {
+                const revisionKey = getCurveLayerIdentityKey(curveId || traceKey, activeLayer);
+                const currentRevision = getCurveLayerRevision(curveId || traceKey, activeLayer);
+                const traceRevision = revisionKey ? curveLayerTraceRevisions.get(revisionKey) : null;
+                if (revisionKey && traceRevision != null && traceRevision !== currentRevision &&
+                    typeof rebuildCurveTraceFromDigitized === 'function') {
+                    rebuildCurveTraceFromDigitized(curveId || traceKey, activeLayer, { preserveBezierCache: true });
+                    curveLayerTraceRevisions.set(revisionKey, currentRevision);
+                }
+            }
             
             let pts = lastCurveTraces[traceKey];
             if (!Array.isArray(pts)) {
@@ -2216,6 +2239,9 @@
                     }
                 }
                 return { traceKey: null, points: null };
+            }
+            if (typeof markCurveLayerTraceRevision === 'function') {
+                markCurveLayerTraceRevision(curveId || traceKey, activeLayer);
             }
             return { traceKey, points: pts };
         }
@@ -2334,6 +2360,7 @@
             const key = getCurveKeyForWrap(curveId);
             if (!key) return;
             if (!curveWrapMarkers || typeof curveWrapMarkers !== 'object') curveWrapMarkers = {};
+            const previousMarkers = stablePersistenceStringify(curveWrapMarkers[key] || []);
             const clean = Array.isArray(markers)
                 ? markers
                     .filter(m => m && Number.isFinite(Number(m.depthIndex)) && Number.isFinite(Number(m.cycle)))
@@ -2351,6 +2378,9 @@
                 curveWrapMarkers[key] = clean;
             } else {
                 delete curveWrapMarkers[key];
+            }
+            if (stablePersistenceStringify(curveWrapMarkers[key] || []) !== previousMarkers) {
+                workspaceHasUnsavedCommittedChanges = true;
             }
         }
 
@@ -2781,55 +2811,20 @@
         let crosshairEnabled = false;
         let eraserStart = null;
         let eraserStrokeLayer = null;
+        let eraserStrokeSourceRevision = null;
         let eraserBox = null;
         // Draw (pen) tool state
         let drawStrokeActive = false;
         let drawStrokeLayer = null;
+        let drawStrokeSourceRevision = null;
         let drawStrokePoints = [];   // raw [xImg, yImg] samples collected this stroke
         let drawCursorRing = null;   // live visual ring element
 
         function clearEditInteractionLayerState() {
             const dragState = editDragState;
-            let rebuildCurveId = dragState && dragState.curveId ? dragState.curveId : editCurveId;
-            let rebuildLayer = dragState && dragState.dragLayer ? dragState.dragLayer : null;
-
-            if (dragState && dragState.entry) {
-                const dragValues = getActiveLayerValues(dragState.entry, dragState.dragLayer);
-                if (Array.isArray(dragValues) && Array.isArray(dragState.originalValues)) {
-                    for (let i = 0; i < dragValues.length && i < dragState.originalValues.length; i++) {
-                        dragValues[i] = dragState.originalValues[i];
-                    }
-                }
-                if (Array.isArray(dragState.neighbors)) {
-                    dragState.neighbors.forEach(neighbor => {
-                        if (neighbor && Number.isInteger(neighbor.originalDepthIndex)) {
-                            neighbor.depthIndex = neighbor.originalDepthIndex;
-                        }
-                    });
-                }
-                if (dragState.isBezierControl) {
-                    const controls = window.bezierCurveControls && window.bezierCurveControls[dragState.curveId];
-                    const segment = controls && controls[dragState.segmentIndex];
-                    if (segment) {
-                        const control = dragState.controlIndex === 1 ? segment.p1 : segment.p2;
-                        if (control) {
-                            control[0] = dragState.originalControlX;
-                            control[1] = dragState.originalControlY;
-                        }
-                    }
-                    const undo = editUndoStack[editUndoStack.length - 1];
-                    if (undo && undo.label === 'bezier_edit' && undo.curveId === dragState.curveId) {
-                        if (Array.isArray(dragValues) && Array.isArray(undo.undoValues)) {
-                            undo.undoValues.forEach(item => {
-                                if (item && Number.isInteger(item.idx) && item.idx >= 0 && item.idx < dragValues.length) {
-                                    dragValues[item.idx] = item.oldValue;
-                                }
-                            });
-                        }
-                        editUndoStack.pop();
-                    }
-                }
-            }
+            let rebuildCurveId = null;
+            let rebuildLayer = null;
+            if (dragState) cancelCurveDrag('interaction-state-cleared', dragState);
 
             const restoreStrokeValues = (layer, undoValues) => {
                 if (!layer || !Array.isArray(undoValues) || !undoValues.length || !editCurveId) return;
@@ -2852,6 +2847,7 @@
             if (typeof _dragHasMoved !== 'undefined') _dragHasMoved = false;
             drawStrokeActive = false;
             drawStrokePoints = [];
+            drawStrokeSourceRevision = null;
             if (typeof paintStrokeActive !== 'undefined') paintStrokeActive = false;
             if (typeof paintLastProcessedIdx !== 'undefined') paintLastProcessedIdx = null;
             if (typeof paintLastProcessedX !== 'undefined') paintLastProcessedX = null;
@@ -2865,6 +2861,9 @@
             paintStrokeLayer = null;
             smoothStrokeLayer = null;
             eraserStrokeLayer = null;
+            eraserStrokeSourceRevision = null;
+            if (typeof paintStrokeSourceRevision !== 'undefined') paintStrokeSourceRevision = null;
+            if (typeof smoothStrokeSourceRevision !== 'undefined') smoothStrokeSourceRevision = null;
             window.currentDragLayer = null;
             window.paintTargetLayer = null;
             if (rebuildCurveId && typeof rebuildCurveTraceFromDigitized === 'function') {
@@ -2908,6 +2907,7 @@
             if (activeTool === 'draw' && tool !== 'draw') {
                 drawStrokeActive = false;
                 drawStrokePoints = [];
+                drawStrokeSourceRevision = null;
                 if (drawCursorRing) { drawCursorRing.remove(); drawCursorRing = null; }
             }
             if (activeTool === 'paint' && tool !== 'paint') {
@@ -3968,15 +3968,17 @@
             try {
                 sessionStorage.removeItem('directionalToolContent');
                 sessionStorage.removeItem('directionalToolFilename');
-                
-                if (lastLasContent) {
-                    sessionStorage.setItem('directionalToolContent', lastLasContent);
-                    const originalName = uploadedImagePath ? uploadedImagePath.split('/').pop().split('?')[0] : 'workspace';
-                    const baseName = originalName.replace(/\.[^/.]+$/, "");
-                    sessionStorage.setItem('directionalToolFilename', `${baseName}_digitized.las`);
-                }
+                const snapshot = createCommittedDatasetSnapshot({ purpose: 'directional_tool' });
+                const lasContent = buildLasFromCommittedSnapshot(snapshot);
+                reportExcludedActivePreview(snapshot, 'directional_tool');
+                sessionStorage.setItem('directionalToolContent', lasContent);
+                const originalName = snapshot.sourceImageId ? String(snapshot.sourceImageId).split('/').pop().split('?')[0] : 'workspace';
+                const baseName = originalName.replace(/\.[^/.]+$/, "");
+                sessionStorage.setItem('directionalToolFilename', `${baseName}_digitized.las`);
             } catch (e) {
                 console.warn('Failed to save data for Directional Tool:', e);
+                showStatus(`Could not prepare committed LAS data: ${e.message}`, 'error');
+                return;
             }
             window.location.href = '/directional';
         }
@@ -4012,14 +4014,11 @@
                     }
                 }
                 
-                if (lastLasContent) {
-                     sessionStorage.setItem('lasViewerContent', lastLasContent);
-                }
-                
-                // Pass depth config if available to pre-fill image depths
-                if (lastDepthConfig) {
-                     sessionStorage.setItem('lasViewerDepths', JSON.stringify(lastDepthConfig));
-                }
+                const snapshot = createCommittedDatasetSnapshot({ purpose: 'las_viewer' });
+                const lasContent = buildLasFromCommittedSnapshot(snapshot);
+                reportExcludedActivePreview(snapshot, 'las_viewer');
+                sessionStorage.setItem('lasViewerContent', lasContent);
+                if (snapshot.depthConfig) sessionStorage.setItem('lasViewerDepths', JSON.stringify(snapshot.depthConfig));
 
                 // Try to pass current curve colors
                 try {
@@ -4232,12 +4231,11 @@
             
             // Ensure wrapLayer exists if the box is checked
             if (isWrapped && !entry.wrapLayer && lastDigitizedDepth) {
-                entry.wrapLayer = {
-                    values: new Array(lastDigitizedDepth.length).fill(null),
+                createOrReplaceCurveWrapLayer(mnemonic, new Array(lastDigitizedDepth.length).fill(null), {
                     left_value: null,
                     right_value: null,
                     color: '#00ffff'
-                };
+                }, { reason: 'wrap_layer_created' });
             }
             
             if (entry.wrapLayer) {
@@ -4264,27 +4262,26 @@
                     const entry = lastDigitizedCurves[entryKey];
                     if (isWrapped) {
                         if (!entry.wrapLayer && lastDigitizedDepth) {
-                            entry.wrapLayer = {
-                                values: new Array(lastDigitizedDepth.length).fill(null),
+                            createOrReplaceCurveWrapLayer(mnemonic, new Array(lastDigitizedDepth.length).fill(null), {
                                 left_value: null,
                                 right_value: null,
                                 color: '#00ffff'
-                            };
+                            }, { reason: 'wrap_layer_created' });
                         }
                     } else {
                         // User unchecked wrapped, we might want to ask before deleting?
                         // Or just hide it from UI to save data. But let's delete it to be clean.
                         if (entry.wrapLayer) {
                             if (confirm(`Remove the wrapped line for ${mnemonic}? This will delete any traced wrap data.`)) {
-                                delete entry.wrapLayer;
+                                removeCurveWrapLayer(mnemonic, { reason: 'wrap_layer_removed' });
                             } else {
                                 wrappedCheckbox.checked = true; // Revert
                                 return;
                             }
                         }
                     }
-                    
-                    rebuildCurveTraceFromDigitized(mnemonic);
+                    deleteBezierSegments(mnemonic, 'wrap');
+                    rebuildCurveTraceFromDigitized(mnemonic, null, { preserveBezierCache: true });
                     if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
                 }
             }
@@ -4298,7 +4295,10 @@
 
         function s5SwitchLayer(layer) {
             const nextLayer = layer === 'wrap' ? 'wrap' : 'main';
-            if (editDragState || drawStrokeActive || paintStrokeActive || smoothStrokeActive || eraserStart) {
+            if (editDragState) {
+                cancelCurveDrag('layer-changed');
+            }
+            if (drawStrokeActive || paintStrokeActive || smoothStrokeActive || eraserStart) {
                 showStatus('Finish or cancel the current edit before switching layers.', 'info');
                 return _getEffectiveActiveLayer();
             }
@@ -4365,20 +4365,20 @@
             
             const entry = lastDigitizedCurves[entryKey];
             if (!entry.wrapLayer) {
-                entry.wrapLayer = {
-                    values: new Array(lastDigitizedDepth.length).fill(null),
+                createOrReplaceCurveWrapLayer(targetCurve, new Array(lastDigitizedDepth.length).fill(null), {
                     left_value: null,
                     right_value: null,
                     color: '#00ffff'
-                };
+                }, { reason: 'wrap_layer_created' });
             }
+            deleteBezierSegments(targetCurve, 'wrap');
             
             // Auto-switch to the new layer
             s5SwitchLayer('wrap');
             s5SyncTraceLayers(targetCurve);
             
             // Rebuild canvas overlays to show the new wrap trace
-            rebuildCurveTraceFromDigitized(targetCurve);
+            rebuildCurveTraceFromDigitized(targetCurve, null, { preserveBezierCache: true });
             if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
             
             showStatus(`Added Wrap Trace to ${targetCurve}. You are now editing the Wrap Trace.`, 'success');
@@ -4393,10 +4393,10 @@
             if (!entryKey) return;
             
             if (confirm(`Delete the Wrap Trace for ${targetCurve}? This cannot be undone.`)) {
-                delete lastDigitizedCurves[entryKey].wrapLayer;
+                removeCurveWrapLayer(targetCurve, { reason: 'wrap_layer_removed' });
                 s5SwitchLayer('main');
                 s5SyncTraceLayers(targetCurve);
-                rebuildCurveTraceFromDigitized(targetCurve);
+                rebuildCurveTraceFromDigitized(targetCurve, 'main', { preserveBezierCache: true });
                 if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
             }
         }
@@ -4412,8 +4412,10 @@
             const entry = lastDigitizedCurves[entryKey];
             if (entry && entry.wrapLayer) {
                 if (confirm(`Clear all points on the Wrap Trace for ${targetCurve}?`)) {
-                    entry.wrapLayer.values = new Array(lastDigitizedDepth.length).fill(null);
-                    rebuildCurveTraceFromDigitized(targetCurve);
+                    replaceCurveLayerValues(targetCurve, 'wrap', new Array(lastDigitizedDepth.length).fill(null), {
+                        reason: 'wrap_layer_cleared',
+                        rebuildTrace: true,
+                    });
                     if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
                 }
             }
@@ -4968,6 +4970,590 @@
             values[idx] = curr + delta;
         }
 
+        function getCurveLayerContext(curveId, explicitLayer = 'main') {
+            const found = findDigitizedCurveEntry(curveId);
+            if (!found || !found.entry) return null;
+            const layer = explicitLayer === 'wrap' ? 'wrap' : 'main';
+            const entry = found.entry;
+            const values = layer === 'wrap'
+                ? (entry.wrapLayer && Array.isArray(entry.wrapLayer.values) ? entry.wrapLayer.values : null)
+                : (Array.isArray(entry.values) ? entry.values : null);
+            if (!Array.isArray(values)) return null;
+            const resolvedTraceKey = typeof resolveTraceKeyForCurveId === 'function'
+                ? resolveTraceKeyForCurveId(curveId)
+                : null;
+            const baseTraceKey = String(resolvedTraceKey || found.key || normalizeCurveKey(curveId) || '')
+                .replace(/_wrap$/i, '');
+            if (!baseTraceKey) return null;
+            const canonicalCurveKey = normalizeCurveKey(found.key || baseTraceKey);
+            return {
+                curveId,
+                curveKey: found.key,
+                entry,
+                layer,
+                values,
+                traceKey: layer === 'wrap' ? `${baseTraceKey}_wrap` : baseTraceKey,
+                identityKey: `${canonicalCurveKey}::${layer}`,
+            };
+        }
+
+        function getCurveLayerIdentityKey(curveId, explicitLayer = 'main') {
+            const context = getCurveLayerContext(curveId, explicitLayer);
+            if (context) return context.identityKey;
+            const baseKey = normalizeCurveKey(String(curveId || '').replace(/_wrap$/i, ''));
+            return baseKey ? `${baseKey}::${explicitLayer === 'wrap' ? 'wrap' : 'main'}` : null;
+        }
+
+        function getCurveLayerRevision(curveId, layer = 'main') {
+            const key = getCurveLayerIdentityKey(curveId, layer);
+            return key ? (curveLayerRevisions.get(key) || 0) : 0;
+        }
+
+        function bumpCurveLayerRevision(curveId, layer = 'main', reason = 'values_changed') {
+            const key = getCurveLayerIdentityKey(curveId, layer);
+            if (!key) return 0;
+            const revision = (curveLayerRevisions.get(key) || 0) + 1;
+            curveLayerRevisions.set(key, revision);
+            workspaceHasUnsavedCommittedChanges = true;
+            return revision;
+        }
+
+        function markCurveLayerTraceRevision(curveId, layer = 'main', revision = null) {
+            const key = getCurveLayerIdentityKey(curveId, layer);
+            if (!key) return false;
+            curveLayerTraceRevisions.set(key, revision == null ? getCurveLayerRevision(curveId, layer) : revision);
+            return true;
+        }
+
+        function isCurveLayerRevisionCurrent(curveId, layer, sourceRevision) {
+            return getCurveLayerRevision(curveId, layer) === sourceRevision;
+        }
+
+        function cancelCurveLayerInteractions(curveId, layer, reason = 'source_data_changed') {
+            const targetKey = getCurveLayerIdentityKey(curveId, layer);
+            if (!targetKey) return;
+            if (editDragState && getCurveLayerIdentityKey(editDragState.curveId, editDragState.dragLayer) === targetKey) {
+                cancelCurveDrag(reason, editDragState);
+            }
+            const editingSameLayer = editCurveId && getCurveLayerIdentityKey(editCurveId, layer) === targetKey;
+            if (!editingSameLayer) return;
+            if (typeof drawStrokeActive !== 'undefined' && drawStrokeActive && drawStrokeLayer === layer) {
+                drawStrokeActive = false;
+                drawStrokePoints = [];
+                drawStrokeSourceRevision = null;
+            }
+            if (typeof paintStrokeActive !== 'undefined' && paintStrokeActive && paintStrokeLayer === layer) {
+                paintStrokeActive = false;
+                paintStrokeSourceRevision = null;
+                paintUndoValuesBefore = [];
+                paintUndoPtsBefore = [];
+            }
+            if (typeof smoothStrokeActive !== 'undefined' && smoothStrokeActive && smoothStrokeLayer === layer) {
+                smoothStrokeActive = false;
+                smoothStrokeSourceRevision = null;
+                smoothUndoValuesBefore = [];
+            }
+            if (typeof eraserStart !== 'undefined' && eraserStart && eraserStrokeLayer === layer) {
+                eraserStart = null;
+                eraserStrokeLayer = null;
+                eraserStrokeSourceRevision = null;
+                if (eraserBox) { eraserBox.remove(); eraserBox = null; }
+            }
+        }
+
+        function invalidateCurveLayerDerivedState(curveId, layer = 'main', options = {}) {
+            const context = getCurveLayerContext(curveId, layer);
+            const identityKey = context ? context.identityKey : getCurveLayerIdentityKey(curveId, layer);
+            if (options.cancelInteraction !== false) {
+                cancelCurveLayerInteractions(curveId, layer, options.reason || 'source_data_changed');
+            }
+            if (options.clearBezier !== false && typeof deleteBezierSegments === 'function') {
+                deleteBezierSegments(curveId, layer);
+            }
+            if (identityKey) curveLayerTraceRevisions.set(identityKey, -1);
+            if (layer === 'main' && options.clearWrapMarkers !== false && curveWrapMarkers) {
+                const markerKey = normalizeCurveKey(context ? context.curveKey : curveId);
+                if (markerKey) delete curveWrapMarkers[markerKey];
+            }
+            if (options.removeTrace && context && lastCurveTraces) {
+                delete lastCurveTraces[context.traceKey];
+            }
+            if (options.rebuildTrace !== false && context && typeof rebuildCurveTraceFromDigitized === 'function') {
+                rebuildCurveTraceFromDigitized(curveId, layer, { preserveBezierCache: true });
+                markCurveLayerTraceRevision(curveId, layer, options.revision);
+            }
+            if (options.clearUndo === true && Array.isArray(editUndoStack)) editUndoStack.length = 0;
+        }
+
+        function replaceCurveLayerValues(curveId, layer, nextValues, options = {}) {
+            const context = getCurveLayerContext(curveId, layer);
+            if (!context) return { changed: false, reason: 'curve_or_layer_unavailable' };
+            if (!Array.isArray(nextValues)) return { changed: false, reason: 'invalid_values' };
+            const clonedValues = nextValues.slice();
+            if (options.detectNoop !== false && valuesExactlyEqual(context.values, clonedValues)) {
+                return { changed: false, reason: 'no_change', revision: getCurveLayerRevision(curveId, layer), values: context.values };
+            }
+            if (options.cancelInteraction !== false) {
+                cancelCurveLayerInteractions(curveId, context.layer, options.reason || 'replace_values');
+            }
+            // AUTHORITATIVE_VALUES_ASSIGNMENT: replacements are allowed only in this helper.
+            if (context.layer === 'wrap') context.entry.wrapLayer.values = clonedValues;
+            else context.entry.values = clonedValues;
+            const revision = bumpCurveLayerRevision(curveId, context.layer, options.reason || 'replace_values');
+            invalidateCurveLayerDerivedState(curveId, context.layer, {
+                ...options,
+                cancelInteraction: false,
+                revision,
+            });
+            return { changed: true, revision, values: clonedValues, context: getCurveLayerContext(curveId, context.layer) };
+        }
+
+        function commitCurveLayerValues(curveId, layer, nextValues, options = {}) {
+            return replaceCurveLayerValues(curveId, layer, nextValues, {
+                ...options,
+                detectNoop: true,
+                cancelInteraction: options.cancelInteraction === true,
+                reason: options.reason || 'transaction_commit',
+            });
+        }
+
+        function commitInPlaceCurveLayerMutation(curveId, layer, changed, options = {}) {
+            if (!changed) return { changed: false, reason: 'no_change', revision: getCurveLayerRevision(curveId, layer) };
+            const context = getCurveLayerContext(curveId, layer);
+            if (!context) return { changed: false, reason: 'curve_or_layer_unavailable' };
+            const revision = bumpCurveLayerRevision(curveId, layer, options.reason || 'in_place_commit');
+            invalidateCurveLayerDerivedState(curveId, layer, {
+                ...options,
+                cancelInteraction: false,
+                revision,
+            });
+            return { changed: true, revision, values: context.values };
+        }
+
+        function createOrReplaceCurveWrapLayer(curveId, nextValues, metadata = {}, options = {}) {
+            const found = findDigitizedCurveEntry(curveId);
+            if (!found || !found.entry || !Array.isArray(nextValues)) {
+                return { changed: false, reason: 'curve_or_values_unavailable' };
+            }
+            cancelCurveLayerInteractions(curveId, 'wrap', options.reason || 'wrap_layer_replaced');
+            // AUTHORITATIVE_WRAP_LAYER_ASSIGNMENT: wrap objects are adopted only here.
+            found.entry.wrapLayer = {
+                ...(found.entry.wrapLayer || {}),
+                ...metadata,
+                values: nextValues.slice(),
+            };
+            const revision = bumpCurveLayerRevision(curveId, 'wrap', options.reason || 'wrap_layer_replaced');
+            invalidateCurveLayerDerivedState(curveId, 'wrap', {
+                ...options,
+                cancelInteraction: false,
+                revision,
+            });
+            return { changed: true, revision, context: getCurveLayerContext(curveId, 'wrap') };
+        }
+
+        function removeCurveWrapLayer(curveId, options = {}) {
+            const found = findDigitizedCurveEntry(curveId);
+            if (!found || !found.entry || !found.entry.wrapLayer) return { changed: false, reason: 'wrap_unavailable' };
+            const identityKey = getCurveLayerIdentityKey(curveId, 'wrap');
+            cancelCurveLayerInteractions(curveId, 'wrap', options.reason || 'wrap_layer_removed');
+            const revision = (identityKey ? (curveLayerRevisions.get(identityKey) || 0) : 0) + 1;
+            // AUTHORITATIVE_WRAP_LAYER_REMOVAL: wrap deletion is allowed only here.
+            delete found.entry.wrapLayer;
+            if (identityKey) {
+                curveLayerRevisions.set(identityKey, revision);
+                curveLayerTraceRevisions.set(identityKey, -1);
+            }
+            workspaceHasUnsavedCommittedChanges = true;
+            if (typeof deleteBezierSegments === 'function') deleteBezierSegments(curveId, 'wrap');
+            const baseTraceKey = typeof resolveTraceKeyForCurveId === 'function'
+                ? resolveTraceKeyForCurveId(curveId)
+                : normalizeCurveKey(curveId);
+            if (baseTraceKey && lastCurveTraces) delete lastCurveTraces[`${String(baseTraceKey).replace(/_wrap$/i, '')}_wrap`];
+            return { changed: true, revision };
+        }
+
+        function cloneDigitizedCurvesForAuthority(nextCurves) {
+            if (!nextCurves || typeof nextCurves !== 'object') return null;
+            const cloned = {};
+            Object.entries(nextCurves).forEach(([key, rawEntry]) => {
+                if (!rawEntry || typeof rawEntry !== 'object' || !Array.isArray(rawEntry.values)) return;
+                const entry = { ...rawEntry, values: rawEntry.values.slice() };
+                if (rawEntry.wrapLayer && typeof rawEntry.wrapLayer === 'object') {
+                    entry.wrapLayer = {
+                        ...rawEntry.wrapLayer,
+                        values: Array.isArray(rawEntry.wrapLayer.values) ? rawEntry.wrapLayer.values.slice() : [],
+                    };
+                }
+                cloned[key] = entry;
+            });
+            return cloned;
+        }
+
+        function clearAllCurveDerivedState(options = {}) {
+            if (editDragState) cancelCurveDrag(options.reason || 'dataset_replaced', editDragState);
+            if (typeof clearEditInteractionLayerState === 'function') clearEditInteractionLayerState();
+            curveLayerRevisions.clear();
+            curveLayerTraceRevisions.clear();
+            if (typeof clearAllBezierSegments === 'function') clearAllBezierSegments();
+            if (options.clearTraces === true) lastCurveTraces = {};
+            if (options.clearWrapMarkers !== false) curveWrapMarkers = {};
+            if (options.clearUndo !== false && Array.isArray(editUndoStack)) editUndoStack.length = 0;
+        }
+
+        function replaceAllDigitizedCurves(nextCurves, options = {}) {
+            clearAllCurveDerivedState({
+                reason: options.reason || 'dataset_replaced',
+                clearTraces: options.clearTraces === true,
+                clearWrapMarkers: options.clearWrapMarkers !== false,
+                clearUndo: options.clearUndo !== false,
+            });
+            const adopted = cloneDigitizedCurvesForAuthority(nextCurves);
+            // AUTHORITATIVE_DATASET_ASSIGNMENT: global replacement is allowed only here.
+            lastDigitizedCurves = adopted;
+            window.lastDigitizedCurves = adopted;
+            committedDatasetGeneration += 1;
+            workspaceHasUnsavedCommittedChanges = true;
+            if (adopted) {
+                Object.keys(adopted).forEach(curveKey => {
+                    bumpCurveLayerRevision(curveKey, 'main', 'dataset_initialized');
+                    if (adopted[curveKey].wrapLayer && Array.isArray(adopted[curveKey].wrapLayer.values)) {
+                        bumpCurveLayerRevision(curveKey, 'wrap', 'dataset_initialized');
+                    }
+                });
+                if (options.rebuildTraces === true && typeof rebuildCurveTraceFromDigitized === 'function') {
+                    Object.keys(adopted).forEach(curveKey => {
+                        rebuildCurveTraceFromDigitized(curveKey, 'main', { preserveBezierCache: true });
+                        markCurveLayerTraceRevision(curveKey, 'main');
+                        if (adopted[curveKey].wrapLayer && Array.isArray(adopted[curveKey].wrapLayer.values)) {
+                            rebuildCurveTraceFromDigitized(curveKey, 'wrap', { preserveBezierCache: true });
+                            markCurveLayerTraceRevision(curveKey, 'wrap');
+                        }
+                    });
+                }
+            }
+            return adopted;
+        }
+
+        function invalidateAllLayersForCurve(curveId, options = {}) {
+            invalidateCurveLayerDerivedState(curveId, 'main', options);
+            invalidateCurveLayerDerivedState(curveId, 'wrap', options);
+        }
+
+        function clonePersistenceValue(value) {
+            if (Array.isArray(value)) return value.map(item => clonePersistenceValue(item));
+            if (value && typeof value === 'object') {
+                const cloned = {};
+                Object.keys(value).forEach(key => { cloned[key] = clonePersistenceValue(value[key]); });
+                return cloned;
+            }
+            return value;
+        }
+
+        function stablePersistenceStringify(value) {
+            const normalize = (item) => {
+                if (Array.isArray(item)) return item.map(normalize);
+                if (typeof item === 'number') {
+                    if (Number.isNaN(item)) return '__TURBOTIFF_NAN__';
+                    if (item === Infinity) return '__TURBOTIFF_INFINITY__';
+                    if (item === -Infinity) return '__TURBOTIFF_NEG_INFINITY__';
+                    return item;
+                }
+                if (item === undefined) return '__TURBOTIFF_UNDEFINED__';
+                if (item && typeof item === 'object') {
+                    const normalized = {};
+                    Object.keys(item).sort().forEach(key => { normalized[key] = normalize(item[key]); });
+                    return normalized;
+                }
+                return item;
+            };
+            return JSON.stringify(normalize(value));
+        }
+
+        function deepFreezePersistenceValue(value) {
+            if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
+            Object.keys(value).forEach(key => deepFreezePersistenceValue(value[key]));
+            return Object.freeze(value);
+        }
+
+        function captureCurveLayerRevisionManifest(curves = lastDigitizedCurves) {
+            const manifest = {};
+            if (!curves || typeof curves !== 'object') return manifest;
+            Object.keys(curves).sort().forEach(curveKey => {
+                const normalized = normalizeCurveKey(curveKey);
+                if (!normalized) return;
+                manifest[`${normalized}::main`] = getCurveLayerRevision(curveKey, 'main');
+                const entry = curves[curveKey];
+                if (entry && entry.wrapLayer && Array.isArray(entry.wrapLayer.values)) {
+                    manifest[`${normalized}::wrap`] = getCurveLayerRevision(curveKey, 'wrap');
+                }
+            });
+            return manifest;
+        }
+
+        function persistenceManifestsEqual(first, second) {
+            return stablePersistenceStringify(first || {}) === stablePersistenceStringify(second || {});
+        }
+
+        function serializePinnedDepthIndicesForProject() {
+            const serialized = {};
+            if (!(pinnedDepthIndices instanceof Map)) return serialized;
+            for (const [rawKey, depthSet] of pinnedDepthIndices.entries()) {
+                const key = normalizeCurveKey(rawKey);
+                if (!key || !(depthSet instanceof Set)) continue;
+                serialized[key] = Array.from(depthSet)
+                    .filter(value => Number.isInteger(value) && value >= 0)
+                    .sort((a, b) => a - b);
+            }
+            return serialized;
+        }
+
+        function hasActivePersistencePreview() {
+            return !!(
+                editDragState ||
+                (typeof drawStrokeActive !== 'undefined' && drawStrokeActive) ||
+                (typeof paintStrokeActive !== 'undefined' && paintStrokeActive) ||
+                (typeof smoothStrokeActive !== 'undefined' && smoothStrokeActive) ||
+                (typeof eraserStart !== 'undefined' && eraserStart)
+            );
+        }
+
+        function validateCommittedDatasetSnapshot(snapshot) {
+            const errors = [];
+            const warnings = [];
+            const depths = snapshot && snapshot.depths;
+            const curves = snapshot && snapshot.curves;
+            const expectedDepthCount = Array.isArray(depths) ? depths.length : 0;
+            if (!Array.isArray(depths) || depths.length === 0) {
+                errors.push({ code: 'missing_depths', message: 'A non-empty depth array is required.' });
+            } else {
+                let direction = 0;
+                for (let i = 0; i < depths.length; i++) {
+                    const depth = depths[i];
+                    if (!Number.isFinite(depth)) {
+                        errors.push({ code: 'invalid_depth', index: i, message: `Depth ${i} is not finite.` });
+                        continue;
+                    }
+                    if (i > 0) {
+                        const delta = depth - depths[i - 1];
+                        if (delta === 0) {
+                            errors.push({ code: 'duplicate_depth', index: i, message: `Depth ${i} duplicates the previous depth.` });
+                        } else if (direction === 0) {
+                            direction = Math.sign(delta);
+                        } else if (Math.sign(delta) !== direction) {
+                            errors.push({ code: 'non_monotonic_depth', index: i, message: 'Depth values must be monotonic.' });
+                        }
+                    }
+                }
+            }
+            if (!curves || typeof curves !== 'object' || Object.keys(curves).length === 0) {
+                errors.push({ code: 'missing_curves', message: 'At least one digitized curve is required.' });
+            } else {
+                const normalizedKeys = new Set();
+                Object.entries(curves).forEach(([curveKey, entry]) => {
+                    const normalizedKey = normalizeCurveKey(curveKey);
+                    if (!normalizedKey || normalizedKeys.has(normalizedKey)) {
+                        errors.push({ code: 'duplicate_curve_key', curveKey, message: `Curve key ${curveKey} is empty or duplicated.` });
+                    }
+                    normalizedKeys.add(normalizedKey);
+                    const mainValues = entry && entry.values;
+                    if (!Array.isArray(mainValues) || mainValues.length !== expectedDepthCount) {
+                        errors.push({ code: 'main_length_mismatch', curveKey, expected: expectedDepthCount, actual: Array.isArray(mainValues) ? mainValues.length : null, message: `${curveKey} main values do not match the depth count.` });
+                    }
+                    const wrapValues = entry && entry.wrapLayer && entry.wrapLayer.values;
+                    if (wrapValues !== undefined && (!Array.isArray(wrapValues) || wrapValues.length !== expectedDepthCount)) {
+                        errors.push({ code: 'wrap_length_mismatch', curveKey, expected: expectedDepthCount, actual: Array.isArray(wrapValues) ? wrapValues.length : null, message: `${curveKey} wrap values do not match the depth count.` });
+                    }
+                    [mainValues, wrapValues].filter(Array.isArray).forEach(values => {
+                        values.forEach((value, index) => {
+                            if (value === undefined) {
+                                errors.push({ code: 'undefined_curve_value', curveKey, index, message: `${curveKey} contains an undefined value.` });
+                            } else if (typeof value === 'number' && !Number.isFinite(value) && !Number.isNaN(value)) {
+                                errors.push({ code: 'infinite_curve_value', curveKey, index, message: `${curveKey} contains an infinite value.` });
+                            } else if (value !== null && typeof value !== 'number') {
+                                errors.push({ code: 'non_numeric_curve_value', curveKey, index, message: `${curveKey} contains a non-numeric value.` });
+                            }
+                        });
+                    });
+                });
+            }
+            return { valid: errors.length === 0, errors, warnings };
+        }
+
+        function createCommittedDatasetSnapshot(options = {}) {
+            const purpose = String(options.purpose || 'persistence');
+            const maxAttempts = Math.max(1, Math.min(5, Number(options.maxAttempts) || 3));
+            const snapshotId = `${purpose}-${Date.now()}-${++committedSnapshotSequence}`;
+            if (options.syncMetadata !== false && typeof syncHeaderMetadataFromInputs === 'function') {
+                syncHeaderMetadataFromInputs();
+            }
+            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+                const beforeManifest = captureCurveLayerRevisionManifest();
+                const beforeGeneration = committedDatasetGeneration;
+                const beforeMetadataRevision = metadataStateRevision;
+                const metadataSource = headerMetadata && typeof headerMetadata === 'object' ? headerMetadata : {};
+                const depthConfigSource = lastDepthConfig || (typeof getDepthConfigFromInputs === 'function' ? getDepthConfigFromInputs() : null);
+                const configSource = typeof buildDigitizeConfigFromInputs === 'function' ? buildDigitizeConfigFromInputs() : null;
+                const candidate = {
+                    snapshotId,
+                    purpose,
+                    createdAt: new Date().toISOString(),
+                    depths: clonePersistenceValue(lastDigitizedDepth),
+                    curves: clonePersistenceValue(lastDigitizedCurves),
+                    metadata: clonePersistenceValue(metadataSource),
+                    depthConfig: clonePersistenceValue(depthConfigSource),
+                    nullValue: Number.isFinite(lastNullValue) ? lastNullValue : -999.25,
+                    revisionManifest: clonePersistenceValue(beforeManifest),
+                    metadataRevision: beforeMetadataRevision,
+                    datasetGeneration: beforeGeneration,
+                    sourceProjectId: activeLogId == null ? null : activeLogId,
+                    sourceImageId: uploadedImagePath || originalUploadedImagePath || null,
+                    originalImagePath: originalUploadedImagePath || uploadedImagePath || null,
+                    croppedImagePath: uploadedImagePath && uploadedImagePath !== originalUploadedImagePath ? uploadedImagePath : null,
+                    lasFilename: lastLasFilename || 'digitized_log.las',
+                    config: clonePersistenceValue(configSource),
+                    pinnedDepthIndices: serializePinnedDepthIndicesForProject(),
+                    curveWrapMarkers: clonePersistenceValue(curveWrapMarkers || {}),
+                    regions: {
+                        primary: clonePersistenceValue(primaryRegion),
+                        header: clonePersistenceValue(headerRegion),
+                    },
+                    hadActivePreview: hasActivePersistencePreview(),
+                };
+                const afterManifest = captureCurveLayerRevisionManifest();
+                const metadataFingerprint = stablePersistenceStringify(headerMetadata && typeof headerMetadata === 'object' ? headerMetadata : {});
+                if (beforeGeneration !== committedDatasetGeneration ||
+                    beforeMetadataRevision !== metadataStateRevision ||
+                    !persistenceManifestsEqual(beforeManifest, afterManifest) ||
+                    metadataFingerprint !== stablePersistenceStringify(candidate.metadata)) {
+                    continue;
+                }
+                candidate.metadataFingerprint = metadataFingerprint;
+                candidate.depthFingerprint = stablePersistenceStringify(candidate.depths);
+                candidate.authoritativeFingerprint = stablePersistenceStringify({ depths: candidate.depths, curves: candidate.curves });
+                candidate.projectStateFingerprint = stablePersistenceStringify({
+                    config: candidate.config,
+                    depthConfig: candidate.depthConfig,
+                    pinnedDepthIndices: candidate.pinnedDepthIndices,
+                    curveWrapMarkers: candidate.curveWrapMarkers,
+                    regions: candidate.regions,
+                });
+                candidate.validation = validateCommittedDatasetSnapshot(candidate);
+                if (!candidate.validation.valid) {
+                    const error = new Error(candidate.validation.errors.map(item => item.message).join(' '));
+                    error.code = 'invalid_committed_dataset';
+                    error.validation = candidate.validation;
+                    throw error;
+                }
+                console.debug('[persistence snapshot]', {
+                    snapshotId, purpose, attempt,
+                    curveCount: Object.keys(candidate.curves).length,
+                    depthCount: candidate.depths.length,
+                    hadActivePreview: candidate.hadActivePreview,
+                    revisionManifest: candidate.revisionManifest,
+                });
+                return deepFreezePersistenceValue(candidate);
+            }
+            const error = new Error('The committed dataset changed while it was being captured. Please try again.');
+            error.code = 'snapshot_race';
+            throw error;
+        }
+
+        function normalizeValueForLas(value, nullValue) {
+            return isMissingDigitizedValue(value, nullValue) ? nullValue : Number(value);
+        }
+
+        function buildMergedCurveValuesForExport(curveEntry, nullValue) {
+            if (!curveEntry || !Array.isArray(curveEntry.values)) throw new Error('Curve main values are unavailable.');
+            const mainValues = curveEntry.values;
+            const wrapValues = curveEntry.wrapLayer && Array.isArray(curveEntry.wrapLayer.values)
+                ? curveEntry.wrapLayer.values
+                : null;
+            if (wrapValues && wrapValues.length !== mainValues.length) {
+                throw new Error('Wrap values must have the same length as main values.');
+            }
+            return mainValues.map((mainValue, index) => {
+                const wrapValue = wrapValues ? wrapValues[index] : null;
+                return !isMissingDigitizedValue(wrapValue, nullValue) ? wrapValue : mainValue;
+            });
+        }
+
+        function buildExportCurvesFromSnapshot(snapshot) {
+            const exportCurves = {};
+            Object.entries(snapshot.curves).forEach(([curveKey, entry]) => {
+                exportCurves[curveKey] = {
+                    ...clonePersistenceValue(entry),
+                    values: buildMergedCurveValuesForExport(entry, snapshot.nullValue)
+                        .map(value => normalizeValueForLas(value, snapshot.nullValue)),
+                };
+                delete exportCurves[curveKey].wrapLayer;
+            });
+            return exportCurves;
+        }
+
+        function buildLasFromCommittedSnapshot(snapshot) {
+            if (!snapshot || !snapshot.validation || !snapshot.validation.valid) {
+                throw new Error('A valid committed dataset snapshot is required for LAS generation.');
+            }
+            return buildLasFromDigitized(
+                snapshot.depths,
+                snapshot.curves,
+                snapshot.depthConfig,
+                snapshot.nullValue,
+                snapshot.metadata,
+                snapshot
+            );
+        }
+
+        function snapshotPersistenceDescriptor(snapshot) {
+            return {
+                datasetGeneration: snapshot.datasetGeneration,
+                revisionManifest: clonePersistenceValue(snapshot.revisionManifest),
+                metadataRevision: snapshot.metadataRevision,
+                metadataFingerprint: snapshot.metadataFingerprint,
+                depthFingerprint: snapshot.depthFingerprint,
+                authoritativeFingerprint: snapshot.authoritativeFingerprint,
+                projectStateFingerprint: snapshot.projectStateFingerprint,
+            };
+        }
+
+        function isPersistenceSnapshotDatasetActive(snapshot) {
+            return !!snapshot && snapshot.datasetGeneration === committedDatasetGeneration;
+        }
+
+        function currentCommittedStateMatchesSnapshot(snapshot) {
+            try {
+                const current = createCommittedDatasetSnapshot({ purpose: 'dirty_check' });
+                return stablePersistenceStringify(snapshotPersistenceDescriptor(current)) ===
+                    stablePersistenceStringify(snapshotPersistenceDescriptor(snapshot));
+            } catch (error) {
+                return false;
+            }
+        }
+
+        function markCommittedSnapshotSaved(snapshot) {
+            lastSavedSnapshotDescriptor = snapshotPersistenceDescriptor(snapshot);
+            workspaceHasUnsavedCommittedChanges = !currentCommittedStateMatchesSnapshot(snapshot);
+            return !workspaceHasUnsavedCommittedChanges;
+        }
+
+        function markCurrentCommittedStateClean(reason = 'project_loaded') {
+            try {
+                const snapshot = createCommittedDatasetSnapshot({ purpose: reason });
+                lastSavedSnapshotDescriptor = snapshotPersistenceDescriptor(snapshot);
+                workspaceHasUnsavedCommittedChanges = false;
+                return snapshot;
+            } catch (error) {
+                return null;
+            }
+        }
+
+        function reportExcludedActivePreview(snapshot, purpose) {
+            if (!snapshot || !snapshot.hadActivePreview) return;
+            const message = 'The active edit preview was not included; the last committed curve state is being used.';
+            if (purpose === 'autosave') console.info(message);
+            else showStatus(message, 'info');
+        }
+
         function getActiveLayerValues(entry, explicitLayer = null) {
             if (!entry) return null;
             const activeLayer = _getEffectiveActiveLayer(explicitLayer);
@@ -5259,13 +5845,17 @@
             }
 
             const depthCfg = lastDepthConfig || getDepthConfigFromInputs();
-            const track = findTrackByCurveId(normalizedId);
+            const track = options.trackSource || findTrackByCurveId(normalizedId);
             const found = findDigitizedCurveEntry(normalizedId);
             if (!depthCfg || !track || !found || !found.entry || !Array.isArray(found.entry.values)) {
                 return { traceKey: null, points: null };
             }
 
             const traceKey = resolveTraceKeyForCurveId(normalizedId) || found.key || normalizedId;
+            const explicitLayer = options.explicitLayer === 'wrap' || options.explicitLayer === 'main'
+                ? options.explicitLayer
+                : null;
+            const valuesSource = Array.isArray(options.valuesSource) ? options.valuesSource : null;
             if (!lastCurveTraces || typeof lastCurveTraces !== 'object') {
                 lastCurveTraces = {};
             }
@@ -5273,7 +5863,7 @@
             const leftBound = Math.min(track.leftX, track.rightX);
             const rightBound = Math.max(track.leftX, track.rightX);
             const points = [];
-            const values = found.entry.values;
+            const values = explicitLayer === 'main' && valuesSource ? valuesSource : found.entry.values;
             const count = Math.min(values.length, lastDigitizedDepth.length);
             const displayXs = new Array(count).fill(null);
 
@@ -5353,12 +5943,9 @@
                 points.push([displayX, yImg, depthIndex, 'manual', Date.now(), rawX]);
             }
 
-            const explicitLayer = options.explicitLayer === 'wrap' || options.explicitLayer === 'main'
-                ? options.explicitLayer
-                : null;
             let wrapPoints = null;
             if (found.entry.wrapLayer && Array.isArray(found.entry.wrapLayer.values)) {
-                const wrapValues = found.entry.wrapLayer.values;
+                const wrapValues = explicitLayer === 'wrap' && valuesSource ? valuesSource : found.entry.wrapLayer.values;
                 wrapPoints = [];
                 // Create a synthetic track config for the wrap layer to use its custom scales
                 const wrapTrack = { ...track };
@@ -5398,8 +5985,27 @@
             return { traceKey, points };
         }
 
-        function rebuildCurveTraceFromDigitized(curveId, explicitLayer = null) {
-            return buildDisplayTracePointsFromDigitized(curveId, { persist: true, explicitLayer });
+        function rebuildCurveTraceFromDigitized(curveId, explicitLayer = null, options = {}) {
+            const rebuilt = buildDisplayTracePointsFromDigitized(curveId, { persist: true, explicitLayer });
+            if (!options.preserveBezierCache && typeof deleteBezierSegments === 'function') {
+                if (explicitLayer === 'main' || explicitLayer === 'wrap') {
+                    deleteBezierSegments(curveId, explicitLayer);
+                } else {
+                    deleteAllBezierSegmentsForCurve(curveId);
+                }
+            }
+            if (typeof markCurveLayerTraceRevision === 'function') {
+                if (explicitLayer === 'main' || explicitLayer === 'wrap') {
+                    markCurveLayerTraceRevision(curveId, explicitLayer);
+                } else {
+                    markCurveLayerTraceRevision(curveId, 'main');
+                    const found = findDigitizedCurveEntry(curveId);
+                    if (found && found.entry && found.entry.wrapLayer && Array.isArray(found.entry.wrapLayer.values)) {
+                        markCurveLayerTraceRevision(curveId, 'wrap');
+                    }
+                }
+            }
+            return rebuilt;
         }
 
         function valueAtDepth1D(depth, depths, values, nullSentinel) {
@@ -5563,6 +6169,9 @@
         }
 
         function syncHeaderMetadataFromInputs() {
+            const previousFingerprint = stablePersistenceStringify(
+                headerMetadata && typeof headerMetadata === 'object' ? headerMetadata : {}
+            );
             if (!headerMetadata || typeof headerMetadata !== 'object') {
                 headerMetadata = {};
             }
@@ -5586,6 +6195,12 @@
             headerMetadata.province = headerMetadata.prov;
             headerMetadata.srvc = getVal('headerSrvc') || headerMetadata.srvc;
             headerMetadata.service = headerMetadata.srvc;
+            const nextFingerprint = stablePersistenceStringify(headerMetadata);
+            if (nextFingerprint !== previousFingerprint || lastMetadataFingerprint !== nextFingerprint) {
+                metadataStateRevision += 1;
+                lastMetadataFingerprint = nextFingerprint;
+                workspaceHasUnsavedCommittedChanges = true;
+            }
             return headerMetadata;
         }
 
@@ -6101,8 +6716,11 @@
                     undoValues: originalValues.map((oldValue, idx) => ({ idx, oldValue })),
                     undoTracePoints: originalTracePoints,
                 });
-                for (let i = 0; i < nextValues.length; i++) activeValues[i] = nextValues[i];
-                rebuildCurveTraceFromDigitized(curveId, layer);
+                const commitResult = commitCurveLayerValues(curveId, layer, nextValues, {
+                    rebuildTrace: true,
+                    reason: 'shift_x_commit',
+                });
+                if (!commitResult.changed) { editUndoStack.pop(); return; }
                 renderCurveTraceOverlays(lastCurveTraces);
                 showStatus(`Shifted curve ${curveId} by ${deltaX.toFixed(2)} px.`, 'success');
 
@@ -6216,8 +6834,11 @@
                     undoValues: originalValues.map((oldValue, idx) => ({ idx, oldValue })),
                     undoTracePoints: originalTracePoints,
                 });
-                for (let i = 0; i < nextValues.length; i++) activeValues[i] = nextValues[i];
-                rebuildCurveTraceFromDigitized(curveId, layer);
+                const commitResult = commitCurveLayerValues(curveId, layer, nextValues, {
+                    rebuildTrace: true,
+                    reason: 'shift_y_commit',
+                });
+                if (!commitResult.changed) { editUndoStack.pop(); return; }
                 renderCurveTraceOverlays(lastCurveTraces);
                 showStatus(`Shifted curve ${curveId} by ${deltaY.toFixed(2)} px vertically.`, 'success');
 
@@ -6492,12 +7113,14 @@
             if (pinned) {
                 const set = getPinnedSetForCurve(key);
                 set.add(depthIndex);
+                workspaceHasUnsavedCommittedChanges = true;
                 return true;
             }
             const set = findPinnedSetByKey(key);
             if (!set) return false;
             set.delete(depthIndex);
             if (set.size === 0) pinnedDepthIndices.delete(key);
+            workspaceHasUnsavedCommittedChanges = true;
             return false;
         }
 
@@ -6636,6 +7259,7 @@
                 showStatus('Selected point is locked.', 'warning');
                 return;
             }
+            if (Object.is(oldValue, newValue)) return;
 
             const traceKey = activeTrace.traceKey || getActiveCurveTraceKey(editCurveId) || editCurveId;
             editUndoStack.push({
@@ -6650,7 +7274,10 @@
             });
 
             activeValues[idx] = newValue;
-            rebuildCurveTraceFromDigitized(editCurveId, activeLayer);
+            commitInPlaceCurveLayerMutation(editCurveId, activeLayer, !Object.is(oldValue, newValue), {
+                rebuildTrace: true,
+                reason: 'click_nudge_commit',
+            });
             renderCurveTraceOverlays(lastCurveTraces);
         }
 
@@ -6693,14 +7320,17 @@
          */
         function commitDrawStroke() {
             const activeLayer = drawStrokeLayer;
+            const sourceRevision = drawStrokeSourceRevision;
             drawStrokeActive = false;
             drawStrokeLayer = null;
+            drawStrokeSourceRevision = null;
             window.currentDragLayer = null;
             window.paintTargetLayer = null;
             if (drawCursorRing) { drawCursorRing.remove(); drawCursorRing = null; }
             const samples = drawStrokePoints;
             drawStrokePoints = [];
             if (!editMode || !editCurveId || samples.length < 2) return;
+            if (Number.isInteger(sourceRevision) && !isCurveLayerRevisionCurrent(editCurveId, activeLayer, sourceRevision)) return;
 
             const curveKey = editCurveDataKey || editCurveId;
             if (!curveKey || !lastDigitizedCurves || !lastDigitizedCurves[curveKey]) return;
@@ -6773,7 +7403,15 @@
                 }
             }
 
-            rebuildCurveTraceFromDigitized(editCurveId, activeLayer);
+            const penChanged = valsBefore.some(item => !Object.is(item.oldValue, activeValues[item.idx]));
+            if (!penChanged) {
+                editUndoStack.pop();
+                return;
+            }
+            commitInPlaceCurveLayerMutation(editCurveId, activeLayer, true, {
+                rebuildTrace: true,
+                reason: 'pen_draw_commit',
+            });
             if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
             showStatus(`Pen stroke applied (${seenDepth.size} depth points updated).`, 'info');
         }
@@ -6782,6 +7420,7 @@
         // ─── PAINT TRACE TOOL ────────────────────────────────────────────────
         let paintStrokeActive = false;
         let paintStrokeLayer = null;
+        let paintStrokeSourceRevision = null;
         let paintLastProcessedIdx = null;
         let paintLastProcessedX = null;
         let paintStrokePts = [];
@@ -6894,13 +7533,16 @@
 
         function commitPaintStroke() {
             const activeLayer = paintStrokeLayer;
+            const sourceRevision = paintStrokeSourceRevision;
             paintStrokeActive = false;
             paintStrokeLayer = null;
+            paintStrokeSourceRevision = null;
             window.currentDragLayer = null;
             window.paintTargetLayer = null;
             paintLastProcessedIdx = null;
             paintLastProcessedX = null;
             if (!editMode || !editCurveId) return;
+            if (Number.isInteger(sourceRevision) && !isCurveLayerRevisionCurrent(editCurveId, activeLayer, sourceRevision)) return;
             const curveKey = editCurveDataKey || editCurveId;
             const activeTrace = getActiveCurveTracePoints(editCurveId, activeLayer);
             const traceKey = activeTrace.traceKey || getActiveCurveTraceKey(editCurveId) || editCurveId;
@@ -6917,11 +7559,14 @@
                     undoPoints: paintUndoPtsBefore,
                     undoValues: paintUndoValuesBefore,
                 });
+                commitInPlaceCurveLayerMutation(editCurveId, activeLayer, true, {
+                    rebuildTrace: true,
+                    reason: 'paint_stroke_commit',
+                });
             }
             paintUndoValuesBefore = [];
             paintUndoPtsBefore = [];
             
-            rebuildCurveTraceFromDigitized(editCurveId, activeLayer);
             if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
             showStatus(`Paint stroke applied.`, 'info');
         }
@@ -6930,6 +7575,7 @@
         // ─── SMOOTH BRUSH TOOL ────────────────────────────────────────────────
         let smoothStrokeActive = false;
         let smoothStrokeLayer = null;
+        let smoothStrokeSourceRevision = null;
         let smoothLastProcessedIdx = null;
         let smoothUndoValuesBefore = [];
 
@@ -7049,13 +7695,19 @@
 
         function commitSmoothStroke() {
             const activeLayer = smoothStrokeLayer;
+            const sourceRevision = smoothStrokeSourceRevision;
             smoothStrokeActive = false;
             smoothStrokeLayer = null;
+            smoothStrokeSourceRevision = null;
             window.currentDragLayer = null;
             window.paintTargetLayer = null;
             smoothLastProcessedIdx = null;
             if (drawCursorRing) { drawCursorRing.remove(); drawCursorRing = null; }
             if (!editMode || !editCurveId || !smoothUndoValuesBefore.length) {
+                smoothUndoValuesBefore = [];
+                return;
+            }
+            if (Number.isInteger(sourceRevision) && !isCurveLayerRevisionCurrent(editCurveId, activeLayer, sourceRevision)) {
                 smoothUndoValuesBefore = [];
                 return;
             }
@@ -7074,9 +7726,11 @@
                 undoPoints: [],
                 undoValues: smoothUndoValuesBefore
             });
-            
+            commitInPlaceCurveLayerMutation(editCurveId, activeLayer, true, {
+                rebuildTrace: true,
+                reason: 'smooth_stroke_commit',
+            });
             smoothUndoValuesBefore = [];
-            rebuildCurveTraceFromDigitized(editCurveId, activeLayer);
             renderCurveTraceOverlays(lastCurveTraces);
             showStatus('Smooth brush applied.', 'info');
         }
@@ -7248,6 +7902,11 @@
                 return ay - by;
             });
             lastCurveTraces[targetKey] = pts;
+            commitInPlaceCurveLayerMutation(editCurveId, activeLayer, touchedDepths.length > 0, {
+                rebuildTrace: false,
+                reason: 'add_point_commit',
+            });
+            markCurveLayerTraceRevision(editCurveId, activeLayer);
 
             renderCurveTraceOverlays(lastCurveTraces);
             showStatus(`Added crest point (${touchedDepths.length} samples).`, 'info');
@@ -7331,7 +7990,10 @@
             // Remove the point from the trace array
             pts.splice(nearestIndex, 1);
             lastCurveTraces[traceKey] = pts;
-            rebuildCurveTraceFromDigitized(editCurveId, selectedLayer);
+            commitInPlaceCurveLayerMutation(editCurveId, selectedLayer, true, {
+                rebuildTrace: true,
+                reason: 'delete_point_commit',
+            });
 
             renderCurveTraceOverlays(lastCurveTraces);
         }
@@ -7438,7 +8100,10 @@
                 }
             });
 
-            rebuildCurveTraceFromDigitized(editCurveId, activeLayer);
+            commitInPlaceCurveLayerMutation(editCurveId, activeLayer, true, {
+                rebuildTrace: true,
+                reason: 'smooth_curve_commit',
+            });
             renderCurveTraceOverlays(lastCurveTraces);
             showStatus(`Smoothed curve "${editCurveId}" locally (radius ${radius}). Ctrl+Z to undo.`, 'success');
         }
@@ -7578,22 +8243,61 @@
                         : [];
                 }
 
+                commitInPlaceCurveLayerMutation(curveId, dragLayer, true, {
+                    rebuildTrace: false,
+                    reason: 'undo_add_point',
+                });
+                markCurveLayerTraceRevision(curveId, dragLayer);
+
                 renderCurveTraceOverlays(lastCurveTraces);
                 showStatus(`Undo: removed crest point on "${curveId}".`, 'info');
                 return;
             }
 
+            if (last.type === 'bezier_transform') {
+                const { curveKey, curveId, traceKey, dragLayer, undoValues,
+                    undoTracePoints, undoBezierSegments } = last;
+                const context = getCurveLayerContext(curveId, dragLayer);
+                if (context && Array.isArray(undoValues)) {
+                    const restoredValues = context.values.slice();
+                    undoValues.forEach(item => {
+                        if (item && Number.isInteger(item.idx) && item.idx >= 0 && item.idx < restoredValues.length) {
+                            restoredValues[item.idx] = item.oldValue;
+                        }
+                    });
+                    commitCurveLayerValues(curveId, dragLayer, restoredValues, {
+                        cancelInteraction: true,
+                        rebuildTrace: false,
+                        reason: 'undo_bezier_transform',
+                    });
+                }
+                if (lastCurveTraces && traceKey && Array.isArray(undoTracePoints)) {
+                    lastCurveTraces[traceKey] = undoTracePoints.map(point => Array.isArray(point) ? point.slice() : point);
+                }
+                setBezierSegments(curveId, dragLayer, undoBezierSegments || []);
+                markCurveLayerTraceRevision(curveId, dragLayer);
+                renderCurveTraceOverlays(lastCurveTraces);
+                showStatus(`Undo: reverted Bezier edit on "${curveId}" ${dragLayer} layer.`, 'info');
+                return;
+            }
+
             if (last.type === 'bulk_transform') {
                 const { curveKey, curveId, traceKey, undoPoints, undoValues } = last;
-                if (lastDigitizedCurves && lastDigitizedCurves[curveKey] && Array.isArray(undoValues)) {
-                    const entry = lastDigitizedCurves[curveKey];
-                    const vals = (last.dragLayer === 'wrap' && entry.wrapLayer && Array.isArray(entry.wrapLayer.values)) ? entry.wrapLayer.values : entry.values;
-                    undoValues.forEach(v => { if (v && Number.isInteger(v.idx) && v.idx >= 0 && v.idx < vals.length) vals[v.idx] = v.oldValue; });
+                const context = getCurveLayerContext(curveId, last.dragLayer);
+                if (context && Array.isArray(undoValues)) {
+                    const restoredValues = context.values.slice();
+                    undoValues.forEach(v => { if (v && Number.isInteger(v.idx) && v.idx >= 0 && v.idx < restoredValues.length) restoredValues[v.idx] = v.oldValue; });
+                    commitCurveLayerValues(curveId, last.dragLayer, restoredValues, {
+                        cancelInteraction: true,
+                        rebuildTrace: false,
+                        reason: 'undo_bulk_transform',
+                    });
                 }
                 if (Array.isArray(last.undoTracePoints) && lastCurveTraces && traceKey) {
                     lastCurveTraces[traceKey] = last.undoTracePoints.map(point => Array.isArray(point) ? point.slice() : point);
+                    markCurveLayerTraceRevision(curveId, last.dragLayer);
                 } else {
-                    rebuildCurveTraceFromDigitized(curveId, last.dragLayer);
+                    rebuildCurveTraceFromDigitized(curveId, last.dragLayer, { preserveBezierCache: true });
                 }
                 renderCurveTraceOverlays(lastCurveTraces);
                 showStatus(`Undo: reverted ${last.label || 'transform'} on "${curveId}".`, 'info');
@@ -7601,17 +8305,27 @@
             }
 
             if (last.type === 'drag_group_v2') {
-                const { curveKey, curveId, points, values } = last;
-                if (lastDigitizedCurves && lastDigitizedCurves[curveKey] && Array.isArray(values)) {
-                    const entry = lastDigitizedCurves[curveKey];
-                    const arr = (last.dragLayer === 'wrap' && entry.wrapLayer && Array.isArray(entry.wrapLayer.values)) ? entry.wrapLayer.values : entry.values;
+                const { curveKey, curveId, traceKey, values, undoTracePoints } = last;
+                const context = getCurveLayerContext(curveId, last.dragLayer);
+                if (context && Array.isArray(values)) {
+                    const restoredValues = context.values.slice();
                     values.forEach(v => {
-                        if (v && Number.isInteger(v.idx) && v.idx >= 0 && v.idx < arr.length) {
-                            arr[v.idx] = v.oldValue;
+                        if (v && Number.isInteger(v.idx) && v.idx >= 0 && v.idx < restoredValues.length) {
+                            restoredValues[v.idx] = v.oldValue;
                         }
                     });
+                    commitCurveLayerValues(curveId, last.dragLayer, restoredValues, {
+                        cancelInteraction: true,
+                        rebuildTrace: false,
+                        reason: 'undo_pointer_drag',
+                    });
                 }
-                rebuildCurveTraceFromDigitized(curveId, last.dragLayer);
+                if (Array.isArray(undoTracePoints) && lastCurveTraces && traceKey) {
+                    lastCurveTraces[traceKey] = undoTracePoints.map(point => Array.isArray(point) ? point.slice() : point);
+                    markCurveLayerTraceRevision(curveId, last.dragLayer);
+                } else {
+                    rebuildCurveTraceFromDigitized(curveId, last.dragLayer, { preserveBezierCache: true });
+                }
                 renderCurveTraceOverlays(lastCurveTraces);
                 showStatus('Undo: restored drag.', 'info');
                 return;
@@ -7658,7 +8372,10 @@
                         });
                         pts.sort((a, b) => a[1] - b[1]);
                     }
-                    rebuildCurveTraceFromDigitized(curveId, last.dragLayer);
+                    commitInPlaceCurveLayerMutation(curveId, last.dragLayer, neighbors.length > 0, {
+                        rebuildTrace: true,
+                        reason: 'undo_drag_group',
+                    });
                     renderCurveTraceOverlays(lastCurveTraces);
                 }
 
@@ -7737,7 +8454,10 @@
                         pts = cleanPts;
                         lastCurveTraces[traceKey] = pts;
                     }
-                    rebuildCurveTraceFromDigitized(curveId, last.dragLayer);
+                    commitInPlaceCurveLayerMutation(curveId, last.dragLayer, restoredCount > 0, {
+                        rebuildTrace: true,
+                        reason: 'undo_bulk_delete',
+                    });
                     renderCurveTraceOverlays(lastCurveTraces);
                 }
                 showStatus(`Undo: restored ${restoredCount} points.`, 'info');
@@ -7794,7 +8514,10 @@
                         pts.sort((a, b) => a[1] - b[1]);
                     }
                 }
-                rebuildCurveTraceFromDigitized(curveId, dragLayer);
+                commitInPlaceCurveLayerMutation(curveId, dragLayer, true, {
+                    rebuildTrace: true,
+                    reason: 'undo_single_point',
+                });
                 renderCurveTraceOverlays(lastCurveTraces);
             }
             showStatus(`Undo: restored depth index ${idx} to ${oldValue !== null && oldValue !== undefined ? oldValue.toFixed(2) : 'null'}`, 'info');
@@ -7822,12 +8545,31 @@
             const selectedLayer = explicitLayer === 'main' || explicitLayer === 'wrap'
                 ? explicitLayer
                 : resolveActiveLayer(xImg, yImg, entry, targetTrack);
+            const magnetToggle = document.getElementById('magnetEditToggle');
+            const snapToggle = document.getElementById('snapToCurveToggle');
+            const snapEnabled = !!(
+                (magnetToggle && magnetToggle.checked) ||
+                (snapToggle && snapToggle.checked)
+            );
+            const snapTrackMode = (function () {
+                try {
+                    const modeEl = document.getElementById(`mode${targetTrack.index}`);
+                    if (modeEl && modeEl.value) return String(modeEl.value).toLowerCase();
+                } catch (error) { /* use frozen track fallback */ }
+                return String(targetTrack.mode || 'green').toLowerCase();
+            })();
+            const snapOptions = {
+                mode: snapTrackMode,
+            };
             // Removed tight bounds check to allow edits outside track
 
             const bezierToggle = document.getElementById('bezierEditToggle');
             if (bezierToggle && bezierToggle.checked) {
-                syncBezierControlsForCurve(editCurveId, selectedLayer);
-                const controls = window.bezierCurveControls && window.bezierCurveControls[editCurveId];
+                const bezierCacheKey = getBezierCacheKey(editCurveId, selectedLayer);
+                const bezierLayerLocked = isLayerLocked(selectedLayer, entry);
+                const controls = syncBezierControlsForCurve(editCurveId, selectedLayer, {
+                    persist: !bezierLayerLocked,
+                });
                 if (targetTrack && entry && Array.isArray(controls)) {
                     const wrapActive = targetTrack.wrapped;
                     let bestDist = Infinity;
@@ -7858,35 +8600,26 @@
                     });
                     
                     if (bestSegIdx >= 0) {
-                        if (isLayerLocked(selectedLayer, entry)) {
+                        if (bezierLayerLocked) {
                             showStatus(`${selectedLayer === 'wrap' ? 'Wrap Line' : 'Main Line'} is locked.`, 'warning');
                             return false;
                         }
                         const seg = controls[bestSegIdx];
                         const originalCtrl = bestCtrlIdx === 1 ? seg.p1 : seg.p2;
+                        const bezierTrace = getActiveCurveTracePoints(editCurveId, selectedLayer);
                         
                         // Save initial values for undo
                         const activeValues = getActiveLayerValues(entry, selectedLayer);
-                        const valsBefore = activeValues.slice(seg.startIdx, seg.endIdx + 1).map((v, offset) => ({
-                            idx: seg.startIdx + offset,
-                            oldValue: v
-                        }));
-                        
-                        // Push undo state
-                        editUndoStack.push({
-                            type: 'bulk_transform',
-                            label: 'bezier_edit',
-                            curveKey,
-                            curveId: editCurveId,
-                            dragLayer: selectedLayer,
-                            undoPoints: [],
-                            undoValues: valsBefore
-                        });
+                        const valsBefore = activeValues.map((oldValue, idx) => ({ idx, oldValue }));
+                        const originalBezierSegments = cloneBezierSegments(controls);
                         
                         _dragHasMoved = false;
                         editDragState = {
+                            interactionId: nextCurveDragInteractionId++,
                             curveId: editCurveId,
                             curveKey: curveKey,
+                            traceKey: bezierTrace.traceKey || getActiveCurveTraceKey(editCurveId) || editCurveId,
+                            bezierCacheKey,
                             isBezierControl: true,
                             segmentIndex: bestSegIdx,
                             controlIndex: bestCtrlIdx,
@@ -7898,7 +8631,25 @@
                             originalControlY: originalCtrl[1],
                             currentX: xImg,
                             currentY: yImg,
-                            dragLayer: selectedLayer
+                            dragLayer: selectedLayer,
+                            sourceRevision: getCurveLayerRevision(editCurveId, selectedLayer),
+                            originalValues: activeValues.slice(),
+                            originalTracePoints: Array.isArray(bezierTrace.points)
+                                ? bezierTrace.points.map(point => Array.isArray(point) ? point.slice() : point)
+                                : [],
+                            previewValues: activeValues.slice(),
+                            originalBezierSegments,
+                            previewBezierSegments: cloneBezierSegments(originalBezierSegments),
+                            bezierUndoValues: valsBefore,
+                            hasPreviewChange: false,
+                            committed: false,
+                            animationFrameId: null,
+                            snapEnabled,
+                            snapTrackMode,
+                            snapOptions: { ...snapOptions },
+                            lastRawPointer: { x: xImg, y: yImg },
+                            lastEffectivePointer: { x: xImg, y: yImg },
+                            lastSnapResult: { enabled: snapEnabled, available: false, x: xImg, y: yImg, changed: false },
                         };
                         return true;
                     }
@@ -7996,7 +8747,6 @@
                     return false;
                 }
                 targetTrack.wrapped = isTrackWrapActive(targetTrack, curveKey, pts);
-                lastCurveTraces[traceKey] = pts;
                 const smoothMode = document.getElementById('smoothEditToggle')?.checked;
                 const windowRadius = smoothMode ? 60 : 40;
                 for (let offset = -windowRadius; offset <= windowRadius; offset++) {
@@ -8038,10 +8788,12 @@
 
                 _dragHasMoved = false;
                 editDragState = {
+                    interactionId: nextCurveDragInteractionId++,
                     curveId: editCurveId,
                     curveKey: curveKey,
                     traceKey: traceKey,
                     dragLayer: selectedLayer,
+                    sourceRevision: getCurveLayerRevision(editCurveId, selectedLayer),
                     centerIndex: nearestIdx,
                     pointIndex: nearestIdx,
                     depthIndex: centerDepthIdx,
@@ -8054,6 +8806,20 @@
                     currentX: xImg,
                     currentY: yImg,
                     originalValues: activeValues.slice(),
+                    originalTracePoints: activeTrace.points.map(point => Array.isArray(point) ? point.slice() : point),
+                    previewValues: activeValues.slice(),
+                    previewTracePoints: activeTrace.points.map(point => Array.isArray(point) ? point.slice() : point),
+                    previewDepthIndices: new Map(),
+                    finalResolvedMove: null,
+                    hasPreviewChange: false,
+                    committed: false,
+                    animationFrameId: null,
+                    snapEnabled,
+                    snapTrackMode,
+                    snapOptions: { ...snapOptions },
+                    lastRawPointer: { x: xImg, y: yImg },
+                    lastEffectivePointer: { x: xImg, y: yImg },
+                    lastSnapResult: { enabled: snapEnabled, available: false, x: xImg, y: yImg, changed: false },
                 };
                 return true;
             }
@@ -8062,11 +8828,183 @@
             return false;
         }
 
-        let _dragUpdatePending = false;
-        let _dragPendingX = null;
-        let _dragPendingY = null;
+        function cancelCurveDragAnimationFrame(state) {
+            if (!state) return;
+            if (state.animationFrameId != null && typeof cancelAnimationFrame === 'function') {
+                cancelAnimationFrame(state.animationFrameId);
+            }
+            state.animationFrameId = null;
+            state.pendingX = null;
+            state.pendingY = null;
+        }
+
+        function renderCurveDragPreview(state) {
+            if (!state || state.committed || !Array.isArray(state.previewValues)) return false;
+            const previewTrack = state.previewTrack || state.targetTrack;
+            const built = buildDisplayTracePointsFromDigitized(state.curveId, {
+                persist: false,
+                explicitLayer: state.dragLayer,
+                valuesSource: state.previewValues,
+                trackSource: previewTrack,
+            });
+            if (!built || !Array.isArray(built.points)) return false;
+            state.previewTracePoints = built.points.map(point => Array.isArray(point) ? point.slice() : point);
+            const previewTraces = { ...(lastCurveTraces || {}) };
+            previewTraces[state.traceKey] = state.previewTracePoints;
+            renderCurveTraceOverlays(previewTraces, { focusCurveId: state.curveId, fastMode: true });
+            return true;
+        }
+
+        function cancelCurveDrag(reason = 'cancelled', state = editDragState) {
+            if (!state) return false;
+            cancelCurveDragAnimationFrame(state);
+            if (reason !== 'source_data_changed' && Array.isArray(state.originalTracePoints) && lastCurveTraces && state.traceKey) {
+                lastCurveTraces[state.traceKey] = state.originalTracePoints.map(point => Array.isArray(point) ? point.slice() : point);
+            }
+            state.previewValues = null;
+            state.previewTracePoints = null;
+            state.previewBezierSegments = null;
+            state.finalResolvedMove = null;
+            state.lastRawPointer = null;
+            state.lastEffectivePointer = null;
+            state.lastSnapResult = null;
+            state.hasPreviewChange = false;
+            if (editDragState === state) editDragState = null;
+            window.currentDragLayer = null;
+            window.paintTargetLayer = null;
+            _dragHasMoved = false;
+            if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
+            return true;
+        }
+
+        function valuesExactlyEqual(a, b) {
+            if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+            for (let idx = 0; idx < a.length; idx++) {
+                if (!Object.is(a[idx], b[idx])) return false;
+            }
+            return true;
+        }
+
+        function commitCurveDrag(state = editDragState) {
+            if (!state || state.committed) return false;
+            if (Number.isInteger(state.sourceRevision) &&
+                !isCurveLayerRevisionCurrent(state.curveId, state.dragLayer, state.sourceRevision)) {
+                cancelCurveDrag('source_data_changed', state);
+                return false;
+            }
+            cancelCurveDragAnimationFrame(state);
+            const activeValues = state.entry ? getActiveLayerValues(state.entry, state.dragLayer) : null;
+            if (!Array.isArray(activeValues)) return false;
+
+            if (state.isBezierControl) {
+                if (!state.hasPreviewChange || !Array.isArray(state.previewValues) ||
+                    !Array.isArray(state.previewBezierSegments)) return false;
+                editUndoStack.push({
+                    type: 'bezier_transform',
+                    label: 'bezier_edit',
+                    curveKey: state.curveKey,
+                    curveId: state.curveId,
+                    traceKey: state.traceKey,
+                    dragLayer: state.dragLayer,
+                    bezierCacheKey: state.bezierCacheKey,
+                    undoValues: state.bezierUndoValues || state.originalValues.map((oldValue, idx) => ({ idx, oldValue })),
+                    undoTracePoints: Array.isArray(state.originalTracePoints)
+                        ? state.originalTracePoints.map(point => Array.isArray(point) ? point.slice() : point)
+                        : [],
+                    undoBezierSegments: cloneBezierSegments(state.originalBezierSegments),
+                });
+                const commitResult = commitCurveLayerValues(state.curveId, state.dragLayer, state.previewValues, {
+                    cancelInteraction: false,
+                    rebuildTrace: true,
+                    reason: 'bezier_drag_commit',
+                });
+                state.previewMatchesCommit = commitResult.changed && valuesExactlyEqual(commitResult.values, state.previewValues);
+                if (!state.previewMatchesCommit) { editUndoStack.pop(); return false; }
+                if (!setBezierSegments(state.curveId, state.dragLayer, state.previewBezierSegments)) {
+                    editUndoStack.pop();
+                    return false;
+                }
+            } else {
+                if (!state.hasPreviewChange || !Array.isArray(state.previewValues)) return false;
+                editUndoStack.push({
+                    type: 'drag_group_v2',
+                    curveKey: state.curveKey,
+                    curveId: state.curveId,
+                    traceKey: state.traceKey,
+                    dragLayer: state.dragLayer,
+                    values: state.originalValues.map((oldValue, idx) => ({ idx, oldValue })),
+                    undoTracePoints: Array.isArray(state.originalTracePoints)
+                        ? state.originalTracePoints.map(point => Array.isArray(point) ? point.slice() : point)
+                        : [],
+                });
+                const commitResult = commitCurveLayerValues(state.curveId, state.dragLayer, state.previewValues, {
+                    cancelInteraction: false,
+                    rebuildTrace: true,
+                    reason: 'pointer_drag_commit',
+                });
+                state.previewMatchesCommit = commitResult.changed && valuesExactlyEqual(commitResult.values, state.previewValues);
+                if (!state.previewMatchesCommit) { editUndoStack.pop(); return false; }
+                if (state.requiresWrapActivation) activateTrackWrapForEdit(state.targetTrack);
+            }
+
+            state.committed = true;
+            if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
+            return true;
+        }
+
+        async function finishCurveEditDrag(xImg = null, yImg = null) {
+            const state = editDragState;
+            if (!state) return false;
+            cancelCurveDragAnimationFrame(state);
+            if (Number.isFinite(xImg)) state.currentX = xImg;
+            if (Number.isFinite(yImg)) state.currentY = yImg;
+
+            if (!_dragHasMoved) {
+                cancelCurveDrag('no-op', state);
+                return false;
+            }
+
+            try {
+                _doDragUpdate();
+            } catch (error) {
+                console.warn('Drag preview finalize failed', error);
+                cancelCurveDrag('preview-error', state);
+                return false;
+            }
+            renderCurveDragPreview(state);
+            const committed = commitCurveDrag(state);
+            if (!committed) {
+                cancelCurveDrag('no-valid-preview', state);
+                return false;
+            }
+
+            state.previewValues = null;
+            state.previewTracePoints = null;
+            state.previewBezierSegments = null;
+            state.finalResolvedMove = null;
+            if (editDragState === state) editDragState = null;
+            window.currentDragLayer = null;
+            window.paintTargetLayer = null;
+            _dragHasMoved = false;
+            if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
+            return true;
+        }
+
         let _lastDragRenderMs = 0;
         let _dragHasMoved = false; // true once mouse travels beyond click-distance threshold
+
+        function getCurveDragReleaseImageCoords(clientX, clientY) {
+            const overlay = document.getElementById('overlay');
+            const image = document.getElementById('imagePreview');
+            const rect = overlay ? overlay.getBoundingClientRect() : (image ? image.getBoundingClientRect() : null);
+            if (!rect || !rect.width || !rect.height || !imageWidth || !imageHeight) return null;
+            const xNorm = (clientX - rect.left) / rect.width;
+            const yNorm = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
+            return {
+                xImg: Math.round(xNorm * (imageWidth - 1)),
+                yImg: Math.round(yNorm * (imageHeight - 1)),
+            };
+        }
 
         function handleCurveEditDragMove(xImg, yImg) {
             if (!editMode || !editDragState) return;
@@ -8079,33 +9017,27 @@
                 if (dx * dx + dy * dy > 9) _dragHasMoved = true;
             }
 
-            // Always remember the latest mouse position
-            _dragPendingX = xImg;
-            _dragPendingY = yImg;
+            const state = editDragState;
+            const interactionId = state.interactionId;
+            state.pendingX = xImg;
+            state.pendingY = yImg;
+            if (state.animationFrameId != null) return;
 
-            // Throttle: at most one update per animation frame
-            if (_dragUpdatePending) return;
-            _dragUpdatePending = true;
-
-            requestAnimationFrame(() => {
-                _dragUpdatePending = false;
-                const px = _dragPendingX;
-                const py = _dragPendingY;
-                _dragPendingX = null;
-                _dragPendingY = null;
+            state.animationFrameId = requestAnimationFrame(() => {
+                if (!editDragState || editDragState !== state || editDragState.interactionId !== interactionId) return;
+                state.animationFrameId = null;
+                const px = state.pendingX;
+                const py = state.pendingY;
+                state.pendingX = null;
+                state.pendingY = null;
                 if (px == null || py == null) return;
-                if (editDragState) {
-                    editDragState.currentX = px;
-                    editDragState.currentY = py;
-                    // Update curve position and re-render live during drag
+                state.currentX = px;
+                state.currentY = py;
+                try {
                     _doDragUpdate();
-                    if (lastCurveTraces) {
-                        const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-                        if (now - _lastDragRenderMs >= 50) {
-                            _lastDragRenderMs = now;
-                            renderCurveTraceOverlays(lastCurveTraces, { focusCurveId: editDragState.curveId, fastMode: true });
-                        }
-                    }
+                } catch (error) {
+                    console.warn('Drag preview update failed', error);
+                    cancelCurveDrag('preview-error', state);
                 }
             });
         }
@@ -8191,13 +9123,50 @@
                 return;
             }
             const state = editDragState;
+            if (Number.isInteger(state.sourceRevision) &&
+                !isCurveLayerRevisionCurrent(state.curveId, state.dragLayer, state.sourceRevision)) {
+                cancelCurveDrag('source_data_changed', state);
+                return;
+            }
             let xImg = state.currentX;
             let yImg = state.currentY;
             if (xImg == null || yImg == null) return;
 
+            const rawX = xImg;
+            const rawY = yImg;
+            let snapAvailable = false;
+            if (state.snapEnabled) {
+                try {
+                    const snapped = snapToCurveColor(
+                        rawX,
+                        rawY,
+                        state.targetTrack.leftX,
+                        state.targetTrack.rightX,
+                        state.snapOptions || { mode: state.snapTrackMode }
+                    );
+                    if (snapped && Number.isFinite(snapped.x) && Number.isFinite(snapped.y)) {
+                        xImg = snapped.x;
+                        yImg = snapped.y;
+                        snapAvailable = true;
+                    }
+                } catch (error) {
+                    xImg = rawX;
+                    yImg = rawY;
+                }
+            }
+            state.lastRawPointer = { x: rawX, y: rawY };
+            state.lastEffectivePointer = { x: xImg, y: yImg };
+            state.lastSnapResult = {
+                enabled: !!state.snapEnabled,
+                available: snapAvailable,
+                x: xImg,
+                y: yImg,
+                changed: !Object.is(xImg, rawX) || !Object.is(yImg, rawY),
+            };
+
             if (state.isBezierControl) {
                 const deltaX = xImg - state.startX;
-                const controls = window.bezierCurveControls[state.curveId];
+                const controls = cloneBezierSegments(state.originalBezierSegments);
                 if (controls && controls[state.segmentIndex]) {
                     const seg = controls[state.segmentIndex];
                     if (state.controlIndex === 1) {
@@ -8205,50 +9174,54 @@
                     } else {
                         seg.p2[0] = state.originalControlX + deltaX;
                     }
-                    
-                    // Apply to digitizer values
-                    applyBezierToSegmentValues(state.curveId, seg, state.dragLayer);
-                    
-                    // Rebuild trace
-                    rebuildCurveTraceFromDigitized(state.curveId, state.dragLayer);
+                    state.previewBezierSegments = controls;
+                    state.previewValues = applyBezierToSegmentValues(state.curveId, seg, {
+                        layer: state.dragLayer,
+                        curveKey: state.curveKey,
+                        entry: state.entry,
+                        values: state.originalValues,
+                        tracePoints: state.originalTracePoints,
+                        track: state.targetTrack,
+                        persist: false,
+                    });
+                    state.hasPreviewChange = _dragHasMoved && Math.abs(deltaX) > 1e-6 &&
+                        Array.isArray(state.previewValues) &&
+                        !valuesExactlyEqual(state.originalValues, state.previewValues);
+                    const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+                    if (now - _lastDragRenderMs >= 50) {
+                        _lastDragRenderMs = now;
+                        renderCurveDragPreview(state);
+                    }
                 }
                 return;
             }
 
             const curveKey = state.curveKey || state.curveId;
-            if (!curveKey || !lastDigitizedCurves || !lastDigitizedCurves[curveKey]) return;
+            if (!curveKey || !lastDigitizedCurves || !lastDigitizedCurves[curveKey]) {
+                cancelCurveDrag('curve-unavailable', state);
+                return;
+            }
             
             const entry = state.entry;
             const targetTrack = state.targetTrack;
             const neighbors = state.neighbors;
             const centerIndex = state.centerIndex;
             const activeValues = getActiveLayerValues(entry, state.dragLayer);
-            if (!entry || !activeValues || !targetTrack || !neighbors) return;
-
-            const magnetToggle = document.getElementById('magnetEditToggle');
-            if (magnetToggle && magnetToggle.checked) {
-                const trackMode = (function() {
-                    try {
-                        const idx = targetTrack.index;
-                        const modeEl = document.getElementById(`mode${idx}`);
-                        if (modeEl && modeEl.value) return String(modeEl.value).toLowerCase();
-                    } catch (e) {}
-                    return (targetTrack.mode || 'green').toLowerCase();
-                })();
-                const snapped = snapToCurveColor(xImg, yImg, targetTrack.leftX, targetTrack.rightX, { mode: trackMode });
-                xImg = snapped.x;
-                yImg = snapped.y;
+            if (!entry || !activeValues || !targetTrack || !neighbors) {
+                cancelCurveDrag('layer-unavailable', state);
+                return;
             }
 
             const activeLayer = state.dragLayer;
-            if (isLayerLocked(activeLayer, entry)) return;
+            if (isLayerLocked(activeLayer, entry)) {
+                cancelCurveDrag('layer-locked', state);
+                return;
+            }
 
             const centerN = neighbors.find(n => n.pointIndex === centerIndex);
             if (!centerN) return;
 
-            if (!Array.isArray(state.originalValues) || state.originalValues.length !== activeValues.length) {
-                state.originalValues = activeValues.slice();
-            }
+            if (!Array.isArray(state.originalValues) || state.originalValues.length !== activeValues.length) return;
             const originalValues = state.originalValues;
             neighbors.forEach(n => {
                 if (!Number.isInteger(n.originalDepthIndex)) {
@@ -8263,9 +9236,12 @@
             const trackRight = Math.max(Number(targetTrack.leftX), Number(targetTrack.rightX));
             const crossedTrackRail = Number.isFinite(trackLeft) && Number.isFinite(trackRight) &&
                 (Number(xImg) < trackLeft - 1 || Number(xImg) > trackRight + 1);
-            if (!targetTrack.wrapped && crossedTrackRail) {
-                activateTrackWrapForEdit(targetTrack);
-            }
+            const previewTrack = (!targetTrack.wrapped && crossedTrackRail)
+                ? { ...targetTrack, wrapped: true }
+                : targetTrack;
+            state.previewTrack = previewTrack;
+            state.requiresWrapActivation = !targetTrack.wrapped && crossedTrackRail;
+            const activeTrack = getActiveLayerTrackConfig(entry, previewTrack, activeLayer);
 
             const deltaX = xImg - centerN.originalX;
             const deltaY = yImg - centerN.originalY;
@@ -8277,7 +9253,7 @@
                 const deltaValue = (deltaX / trackWidth) * trackRange;
                 targetValue = centerN.originalValue + deltaValue;
             } else {
-                targetValue = pixelToTrackValue(xImg, getActiveLayerTrackConfig(entry, targetTrack, activeLayer), { depthIndex: centerSourceDepthIndex, values: originalValues });
+                targetValue = pixelToTrackValue(xImg, activeTrack, { depthIndex: centerSourceDepthIndex, values: originalValues });
             }
 
             const smoothMode = document.getElementById('smoothEditToggle')?.checked;
@@ -8310,7 +9286,7 @@
                 let newRawX;
                 if (isCenter) {
                     if (Number.isFinite(targetValue)) {
-                        newRawX = trackValueToPixelX(targetValue, getActiveLayerTrackConfig(entry, targetTrack, activeLayer), { rawValue: true });
+                        newRawX = trackValueToPixelX(targetValue, activeTrack, { rawValue: true });
                         if (!Number.isFinite(newRawX)) newRawX = xImg;
                     } else {
                         newRawX = xImg;
@@ -8318,7 +9294,7 @@
                 } else {
                     if (Number.isFinite(n.originalValue) && Number.isFinite(targetValue)) {
                         const interpolatedValue = n.originalValue * (1 - weight) + targetValue * weight;
-                        newRawX = trackValueToPixelX(interpolatedValue, getActiveLayerTrackConfig(entry, targetTrack, activeLayer), { rawValue: true });
+                        newRawX = trackValueToPixelX(interpolatedValue, activeTrack, { rawValue: true });
                         if (!Number.isFinite(newRawX)) {
                             const refX = Number.isFinite(n.originalRawX) ? n.originalRawX : n.originalX;
                             newRawX = refX + deltaX * weight;
@@ -8339,7 +9315,7 @@
                     }
                 }
 
-                const newValue = pixelToTrackValue(newRawX, getActiveLayerTrackConfig(entry, targetTrack, activeLayer), { rawX: true });
+                const newValue = pixelToTrackValue(newRawX, activeTrack, { rawX: true });
                 const proposal = {
                     neighbor: n,
                     pointIndex: n.pointIndex,
@@ -8396,8 +9372,8 @@
             };
             resolveDepthMoveProposals(proposals, originalValues, compareProposalPriority);
 
-            // Phase 4: Commit atomically from the stable interaction snapshot.
-            // Clearing all accepted movers before any writes preserves swaps/cycles.
+            // Phase 4: Build an isolated preview from the stable interaction
+            // snapshot. Authoritative LAS arrays and trace arrays are untouched.
             const acceptedProposals = proposals.filter(p => p.accepted);
             const nextValues = originalValues.slice();
             for (const proposal of acceptedProposals) {
@@ -8411,20 +9387,98 @@
             for (const proposal of acceptedProposals) {
                 perturbIfEqual(nextValues, proposal.destinationDepthIndex, targetTrack);
             }
-            for (let i = 0; i < nextValues.length; i++) {
-                activeValues[i] = nextValues[i];
-            }
-            for (const proposal of proposals) {
-                proposal.neighbor.depthIndex = proposal.accepted
-                    ? proposal.destinationDepthIndex
-                    : proposal.sourceDepthIndex;
-            }
+            const changed = acceptedProposals.some(proposal => (
+                proposal.destinationDepthIndex !== proposal.sourceDepthIndex ||
+                !Object.is(proposal.newValue, originalValues[proposal.sourceDepthIndex])
+            ));
+            state.previewValues = nextValues;
+            state.previewDepthIndices = new Map(proposals.map(proposal => [
+                proposal.pointIndex,
+                proposal.accepted ? proposal.destinationDepthIndex : proposal.sourceDepthIndex,
+            ]));
+            state.finalResolvedMove = {
+                acceptedProposals: acceptedProposals.slice(),
+                rejectedProposals: proposals.filter(proposal => !proposal.accepted),
+                previewDepthIndices: state.previewDepthIndices,
+                changed,
+            };
+            state.hasPreviewChange = _dragHasMoved && changed;
 
-            // Paint Tool technique: regenerate trace cleanly from digitized values!
-            rebuildCurveTraceFromDigitized(state.curveId, state.dragLayer);
+            const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+            if (now - _lastDragRenderMs >= 50) {
+                _lastDragRenderMs = now;
+                renderCurveDragPreview(state);
+            }
         }
 
         // ─── BEZIER CURVE EDITING HELPERS ──────────────────────────────────────
+        function getBezierCacheKey(curveId, explicitLayer = 'main') {
+            const resolvedTraceKey = typeof resolveTraceKeyForCurveId === 'function'
+                ? resolveTraceKeyForCurveId(curveId)
+                : null;
+            const baseKey = String(resolvedTraceKey || normalizeCurveKey(curveId) || '')
+                .replace(/_wrap$/i, '');
+            const normalizedBaseKey = normalizeCurveKey(baseKey);
+            if (!normalizedBaseKey) return null;
+            return `${normalizedBaseKey}::${explicitLayer === 'wrap' ? 'wrap' : 'main'}`;
+        }
+
+        function cloneBezierSegments(segments) {
+            if (!Array.isArray(segments)) return [];
+            return segments.map(segment => ({
+                ...segment,
+                p0: Array.isArray(segment.p0) ? segment.p0.slice() : segment.p0,
+                p1: Array.isArray(segment.p1) ? segment.p1.slice() : segment.p1,
+                p2: Array.isArray(segment.p2) ? segment.p2.slice() : segment.p2,
+                p3: Array.isArray(segment.p3) ? segment.p3.slice() : segment.p3,
+            }));
+        }
+
+        function getCachedBezierSegments(curveId, explicitLayer = 'main') {
+            const cacheKey = getBezierCacheKey(curveId, explicitLayer);
+            if (!cacheKey || !window.bezierCurveControls) return null;
+            const cacheEntry = window.bezierCurveControls[cacheKey];
+            const sourceRevision = typeof getCurveLayerRevision === 'function'
+                ? getCurveLayerRevision(curveId, explicitLayer)
+                : 0;
+            if (!cacheEntry || cacheEntry.sourceRevision !== sourceRevision || !Array.isArray(cacheEntry.segments)) {
+                delete window.bezierCurveControls[cacheKey];
+                return null;
+            }
+            return cacheEntry.segments;
+        }
+
+        function setBezierSegments(curveId, explicitLayer, segments) {
+            const cacheKey = getBezierCacheKey(curveId, explicitLayer);
+            if (!cacheKey || !Array.isArray(segments)) return null;
+            window.bezierCurveControls = window.bezierCurveControls || {};
+            window.bezierCurveControls[cacheKey] = {
+                sourceRevision: typeof getCurveLayerRevision === 'function'
+                    ? getCurveLayerRevision(curveId, explicitLayer)
+                    : 0,
+                segments: cloneBezierSegments(segments),
+            };
+            return cacheKey;
+        }
+
+        function deleteBezierSegments(curveId, explicitLayer = 'main') {
+            const cacheKey = getBezierCacheKey(curveId, explicitLayer);
+            if (!cacheKey || !window.bezierCurveControls) return false;
+            const existed = Object.prototype.hasOwnProperty.call(window.bezierCurveControls, cacheKey);
+            delete window.bezierCurveControls[cacheKey];
+            return existed;
+        }
+
+        function deleteAllBezierSegmentsForCurve(curveId) {
+            const removedMain = deleteBezierSegments(curveId, 'main');
+            const removedWrap = deleteBezierSegments(curveId, 'wrap');
+            return removedMain || removedWrap;
+        }
+
+        function clearAllBezierSegments() {
+            window.bezierCurveControls = {};
+        }
+
         function getBezierSegments(curveId, explicitLayer = null) {
             const activeTrace = getActiveCurveTracePoints(curveId, explicitLayer);
             const pts = activeTrace.points;
@@ -8519,61 +9573,52 @@
             };
         }
 
-        function syncBezierControlsForCurve(curveId, explicitLayer = null) {
-            if (!curveId) return;
+        function syncBezierControlsForCurve(curveId, explicitLayer = 'main', options = {}) {
+            if (!curveId) return null;
             window.bezierCurveControls = window.bezierCurveControls || {};
-            
-            const activeTrace = getActiveCurveTracePoints(curveId, explicitLayer);
+            const layer = explicitLayer === 'wrap' ? 'wrap' : 'main';
+            const cached = getCachedBezierSegments(curveId, layer);
+            if (cached) return cached;
+
+            const activeTrace = getActiveCurveTracePoints(curveId, layer);
             const pts = activeTrace.points;
-            if (!Array.isArray(pts) || pts.length < 2) {
-                window.bezierCurveControls[curveId] = [];
-                return;
-            }
-            
-            const segments = getBezierSegments(curveId, explicitLayer);
-            const existing = window.bezierCurveControls[curveId] || [];
-            const updated = [];
-            
-            segments.forEach(seg => {
-                const match = existing.find(e => e.startIdx === seg.startIdx && e.endIdx === seg.endIdx);
-                const p0_raw = pts[seg.startIdx][5] !== undefined ? pts[seg.startIdx][5] : pts[seg.startIdx][0];
-                const p3_raw = pts[seg.endIdx][5] !== undefined ? pts[seg.endIdx][5] : pts[seg.endIdx][0];
-                
-                if (match) {
-                    // Update P0 and P3 from current trace point coordinates (since they are pins and might have moved)
-                    match.p0 = [p0_raw, pts[seg.startIdx][1]];
-                    match.p3 = [p3_raw, pts[seg.endIdx][1]];
-                    // Keep control points P1 and P2, but ensure their Y coordinates remain linearly spaced
-                    match.p1[1] = match.p0[1] + (match.p3[1] - match.p0[1]) / 3;
-                    match.p2[1] = match.p0[1] + 2 * (match.p3[1] - match.p0[1]) / 3;
-                    updated.push(match);
-                } else {
-                    const fit = fitBezierToSegment(pts, seg.startIdx, seg.endIdx);
-                    updated.push({
-                        startIdx: seg.startIdx,
-                        endIdx: seg.endIdx,
-                        p0: fit.p0,
-                        p1: fit.p1,
-                        p2: fit.p2,
-                        p3: fit.p3
-                    });
-                }
+            if (!Array.isArray(pts) || pts.length < 2) return null;
+
+            const segments = getBezierSegments(curveId, layer);
+            const updated = segments.map(seg => {
+                const fit = fitBezierToSegment(pts, seg.startIdx, seg.endIdx);
+                return {
+                    startIdx: seg.startIdx,
+                    endIdx: seg.endIdx,
+                    p0: fit.p0,
+                    p1: fit.p1,
+                    p2: fit.p2,
+                    p3: fit.p3,
+                };
             });
-            
-            window.bezierCurveControls[curveId] = updated;
+
+            if (options.persist === false) return cloneBezierSegments(updated);
+            setBezierSegments(curveId, layer, updated);
+            return getCachedBezierSegments(curveId, layer);
         }
 
-        function applyBezierToSegmentValues(curveId, segment, explicitLayer = null) {
-            const curveKey = editCurveDataKey || curveId;
-            const entry = lastDigitizedCurves[normalizeCurveKey(curveKey)];
-            if (!entry || !Array.isArray(entry.values)) return;
-            const activeValues = getActiveLayerValues(entry, explicitLayer);
-            const targetTrack = findTrackByCurveId(curveId);
-            if (!targetTrack || !activeValues) return;
-            
-            const activeTrace = getActiveCurveTracePoints(curveId, explicitLayer);
+        function applyBezierToSegmentValues(curveId, segment, options = {}) {
+            const layer = options.layer === 'wrap' ? 'wrap' : 'main';
+            const curveKey = options.curveKey || editCurveDataKey || curveId;
+            const entry = options.entry || (lastDigitizedCurves && lastDigitizedCurves[normalizeCurveKey(curveKey)]);
+            if (!entry || !Array.isArray(entry.values) || !segment) return null;
+            const authoritativeValues = getActiveLayerValues(entry, layer);
+            const sourceValues = Array.isArray(options.values) ? options.values : authoritativeValues;
+            const resultValues = Array.isArray(sourceValues) ? sourceValues.slice() : null;
+            const targetTrack = options.track || findTrackByCurveId(curveId);
+            const activeTrack = getActiveLayerTrackConfig(entry, targetTrack, layer);
+            if (!targetTrack || !resultValues || !activeTrack) return null;
+
+            const activeTrace = Array.isArray(options.tracePoints)
+                ? { points: options.tracePoints }
+                : getActiveCurveTracePoints(curveId, layer);
             const pts = activeTrace.points;
-            if (!pts) return;
+            if (!Array.isArray(pts)) return null;
 
             const n = segment.endIdx - segment.startIdx;
             const p0 = segment.p0;
@@ -8591,21 +9636,29 @@
                 const rawX = b0 * p0[0] + b1 * p1[0] + b2 * p2[0] + b3 * p3[0];
                 
                 const depthIdx = pts[i][2];
-                if (depthIdx == null || depthIdx < 0 || depthIdx >= activeValues.length) continue;
+                if (depthIdx == null || depthIdx < 0 || depthIdx >= resultValues.length) continue;
                 if (isDepthIndexPinned(curveId, depthIdx)) {
                     // Do not overwrite pins except at the boundaries P0 and P3
                     if (depthIdx !== pts[segment.startIdx][2] && depthIdx !== pts[segment.endIdx][2]) {
                         continue;
                     }
                 }
-                if (isPointLocked(activeValues[depthIdx], targetTrack, entry, explicitLayer)) continue;
+                if (isPointLocked(resultValues[depthIdx], targetTrack, entry, layer)) continue;
                 
-                const val = pixelToTrackValue(rawX, getActiveLayerTrackConfig(entry, targetTrack, explicitLayer), { rawX: true });
+                const val = pixelToTrackValue(rawX, activeTrack, { rawX: true });
                 if (Number.isFinite(val)) {
-                    activeValues[depthIdx] = val;
-                    perturbIfEqual(activeValues, depthIdx, targetTrack);
+                    resultValues[depthIdx] = val;
+                    perturbIfEqual(resultValues, depthIdx, targetTrack);
                 }
             }
+            if (options.persist !== false && Array.isArray(authoritativeValues)) {
+                const commitResult = commitCurveLayerValues(curveId, layer, resultValues, {
+                    rebuildTrace: options.rebuildTrace !== false,
+                    reason: options.reason || 'bezier_values_commit',
+                });
+                return commitResult.changed ? commitResult.values : authoritativeValues;
+            }
+            return resultValues;
         }
 
         function renderBezierControls(ctx, scaleX, scaleY, trackMeta) {
@@ -8613,10 +9666,16 @@
             const bezierToggle = document.getElementById('bezierEditToggle');
             if (!bezierToggle || !bezierToggle.checked) return;
             
-            // Sync first
-            syncBezierControlsForCurve(editCurveId);
-            
-            const controls = window.bezierCurveControls && window.bezierCurveControls[editCurveId];
+            const layer = editDragState && editDragState.isBezierControl
+                ? editDragState.dragLayer
+                : (window.lastActiveLayer === 'wrap' ? 'wrap' : 'main');
+            const previewControls = editDragState && editDragState.isBezierControl &&
+                editDragState.curveId === editCurveId && editDragState.dragLayer === layer
+                ? editDragState.previewBezierSegments
+                : null;
+            const controls = Array.isArray(previewControls)
+                ? previewControls
+                : syncBezierControlsForCurve(editCurveId, layer);
             if (!Array.isArray(controls)) return;
             
             ctx.save();
@@ -9617,6 +10676,7 @@
                     const targetLayer = resolveActiveLayer(xImg, yImg, entry, clickedTrack);
                     // Eraser does not abort on mousedown; it filters points on mouseup based on isPointLocked
                     eraserStrokeLayer = targetLayer;
+                    eraserStrokeSourceRevision = getCurveLayerRevision(editCurveId, targetLayer);
                     
                     eraserStart = { x: xImg, y: yImg, clientX: event.clientX, clientY: event.clientY };
                     eraserBox = document.createElement('div');
@@ -9892,7 +10952,15 @@
             // Handle Eraser Finalization
             if (eraserStart) {
                 const deleteLayer = eraserStrokeLayer;
+                const sourceRevision = eraserStrokeSourceRevision;
                 if (eraserBox) eraserBox.remove();
+                if (Number.isInteger(sourceRevision) && !isCurveLayerRevisionCurrent(editCurveId, deleteLayer, sourceRevision)) {
+                    eraserStart = null;
+                    eraserStrokeLayer = null;
+                    eraserStrokeSourceRevision = null;
+                    eraserBox = null;
+                    return;
+                }
                 
                 // Calculate final box (re-calculate or store? Recalc is safer with event)
                 // We need image coords. Re-use logic or just use eraserStart and last known mouse?
@@ -10023,7 +11091,10 @@
                                 items: deletedItems
                             });
 
-                            rebuildCurveTraceFromDigitized(editCurveId, deleteLayer);
+                            commitInPlaceCurveLayerMutation(editCurveId, deleteLayer, true, {
+                                rebuildTrace: true,
+                                reason: 'eraser_commit',
+                            });
                             renderCurveTraceOverlays(lastCurveTraces);
                             showStatus(`Erased ${deletedItems.length} points.`, 'info');
                         }
@@ -10032,6 +11103,7 @@
                 
                 eraserStart = null;
                 eraserStrokeLayer = null;
+                eraserStrokeSourceRevision = null;
                 eraserBox = null;
                 window.currentDragLayer = null;
                 window.paintTargetLayer = null;
@@ -10039,147 +11111,9 @@
             }
 
             if (editDragState) {
-                // If mouse never moved beyond the click threshold, treat as a simple click nudge
-                // rather than committing a drag that displaces all neighbors.
-                if (!_dragHasMoved) {
-                    const clickX = editDragState.startX ?? editDragState.currentX;
-                    const clickY = editDragState.startY ?? editDragState.currentY;
-                    const clickLayer = editDragState.dragLayer;
-                    const savedPts = editDragState.pts;
-                    const savedNeighbors = editDragState.neighbors;
-                    // Restore all neighbor points to their original positions
-                    if (Array.isArray(savedPts) && Array.isArray(savedNeighbors)) {
-                        savedNeighbors.forEach(n => {
-                            if (Array.isArray(savedPts[n.pointIndex])) {
-                                savedPts[n.pointIndex][0] = n.originalX;
-                                savedPts[n.pointIndex][1] = n.originalY;
-                            }
-                        });
-                    }
-                    editDragState = null;
-                    window.currentDragLayer = null;
-                    window.paintTargetLayer = null;
-                    _dragHasMoved = false;
-                    handleCurveEditClick(clickX, clickY, clickLayer);
-                    return;
-                }
-
-                // Apply the final drag delta once to update data
-                _doDragUpdate();
-
-                try {
-                    const state = editDragState;
-                    const curveKey = state ? (state.curveKey || state.curveId) : null;
-                    const curveId = state ? state.curveId : null;
-                    const traceKey = state ? (state.traceKey || getActiveCurveTraceKey(curveId) || curveId) : null;
-                    const pts = (traceKey && lastCurveTraces) ? lastCurveTraces[traceKey] : null;
-                    const entry = (curveKey && lastDigitizedCurves) ? lastDigitizedCurves[curveKey] : null;
-                    if (state && curveKey && curveId && Array.isArray(pts) && entry && Array.isArray(entry.values)) {
-                        const pointsUndo = [];
-                        const valuesUndoMap = new Map();
-
-                        const neighbors = Array.isArray(state.neighbors) ? state.neighbors : [];
-                        neighbors.forEach(n => {
-                            if (!n || !Number.isInteger(n.pointIndex)) return;
-                            pointsUndo.push({
-                                pointIndex: n.pointIndex,
-                                oldX: n.originalX,
-                                oldY: n.originalY,
-                                oldDepthIndex: n.depthIndex,
-                            });
-                            if (Number.isInteger(n.depthIndex)) {
-                                valuesUndoMap.set(n.depthIndex, n.originalValue);
-                            }
-                        });
-
-                        const valuesUndo = Array.from(valuesUndoMap.entries()).map(([idx, oldValue]) => ({ idx, oldValue }));
-                        editUndoStack.push({
-                            type: 'drag_group_v2',
-                            curveKey,
-                            curveId,
-                            traceKey,
-                            dragLayer: state.dragLayer || 'main',
-                            points: pointsUndo,
-                            values: valuesUndo,
-                        });
-
-                        rebuildCurveTraceFromDigitized(curveId, state.dragLayer);
-                    }
-                } catch (e) {
-                    console.warn('Drag finalize failed', e);
-                }
-
-                const smoothToggle = document.getElementById('smoothEditToggle');
-                if (smoothToggle && smoothToggle.checked) {
-                    try {
-                        const state = editDragState;
-                        const traceKey = state ? (state.traceKey || getActiveCurveTraceKey(state.curveId) || state.curveId) : null;
-                        if (state && traceKey && Array.isArray(lastCurveTraces?.[traceKey])) {
-                            const pts = lastCurveTraces[traceKey];
-                            const curveKey = state.curveKey || state.curveId;
-                            const entry = curveKey && lastDigitizedCurves ? lastDigitizedCurves[curveKey] : null;
-                            const targetTrack = findTrackByCurveId(state.curveId);
-                            if (entry && targetTrack) {
-                                _applyPostDragSmooth(state.centerIndex ?? state.pointIndex ?? 0, pts, entry, targetTrack, state.dragLayer);
-                            }
-                        }
-                    } catch (e) {
-                        console.warn('Post-drag smooth failed', e);
-                    }
-                }
-
-                // Re-render the full overlay (including connecting line) now that drag is done
-                if (lastCurveTraces) {
-                    renderCurveTraceOverlays(lastCurveTraces);
-                }
-
-                // Optionally snap the center point back onto the colored curve (async)
-                const snapToggle = document.getElementById('snapToCurveToggle');
-                if (snapToggle && snapToggle.checked && editDragState.curveId) {
-                    // Save state before nulling since applySnapToCurve is async
-                    const savedState = { ...editDragState };
-                    try {
-                        const curveId = savedState.curveId;
-                        const curveKey = savedState.curveKey || savedState.curveId;
-                        const traceKey = savedState.traceKey || getActiveCurveTraceKey(curveId) || curveId;
-                        const pts = (traceKey && lastCurveTraces) ? lastCurveTraces[traceKey] : null;
-                        const depthCfg = lastDepthConfig || getDepthConfigFromInputs();
-                        if (curveId && curveKey && Array.isArray(pts) && depthCfg && Array.isArray(lastDigitizedDepth)) {
-                            ensureTracePointsHaveDepthIndex(curveId);
-                            const yForSnap = Number.isFinite(savedState.currentY)
-                                ? savedState.currentY
-                                : (Number.isInteger(savedState.pointIndex) && pts[savedState.pointIndex] ? pts[savedState.pointIndex][1] : null);
-                            const depth = Number.isFinite(yForSnap) ? pixelToDepthFromConfig(yForSnap, depthCfg) : null;
-                            const dIdx = Number.isFinite(depth) ? findNearestDepthIndex(depth, lastDigitizedDepth) : -1;
-                            if (dIdx >= 0) {
-                                const pIdx = findPointIndexByDepthIndex(pts, dIdx);
-                                if (pIdx >= 0) {
-                                    savedState.depthIndex = dIdx;
-                                    savedState.pointIndex = pIdx;
-                                }
-                            }
-                        }
-                    } catch (e) {
-                        // ignore
-                    }
-                    editDragState = null;
-                    window.currentDragLayer = null;
-                    window.paintTargetLayer = null;
-                    try {
-                        await applySnapToCurve(savedState);
-                        rebuildCurveTraceFromDigitized(savedState.curveId, savedState.dragLayer);
-                        if (lastCurveTraces) {
-                            renderCurveTraceOverlays(lastCurveTraces);
-                        }
-                    } catch (err) {
-                        console.warn('Snap to curve error:', err);
-                    }
-                } else {
-                    editDragState = null;
-                    window.currentDragLayer = null;
-                    window.paintTargetLayer = null;
-                }
-                _dragHasMoved = false;
+                const releaseCoords = getCurveDragReleaseImageCoords(event.clientX, event.clientY);
+                await finishCurveEditDrag(releaseCoords?.xImg, releaseCoords?.yImg);
+                return;
             }
 
             if (trackOverlayDrag) {
@@ -10343,6 +11277,7 @@
                     }
                     drawStrokeActive = true;
                     drawStrokeLayer = targetLayer;
+                    drawStrokeSourceRevision = getCurveLayerRevision(editCurveId, targetLayer);
                     drawStrokePoints = [[coords.xImg, coords.yImg]];
                     if (!drawCursorRing) {
                         const ov = document.getElementById('overlay');
@@ -10361,6 +11296,7 @@
                     }
                     paintStrokeActive = true;
                     paintStrokeLayer = targetLayer;
+                    paintStrokeSourceRevision = getCurveLayerRevision(editCurveId, targetLayer);
                     const pressure = pe.pointerType === 'pen' ? pe.pressure : null;
                     handlePaintSample(coords.xImg, coords.yImg, true, pressure);
                 } else if (activeTool === 'smoothBrush') {
@@ -10372,6 +11308,7 @@
                     }
                     smoothStrokeActive = true;
                     smoothStrokeLayer = targetLayer;
+                    smoothStrokeSourceRevision = getCurveLayerRevision(editCurveId, targetLayer);
                     smoothLastProcessedIdx = null;
                     smoothUndoValuesBefore = [];
                     handleSmoothSample(coords.xImg, coords.yImg, true);
@@ -10415,7 +11352,15 @@
                 pe.stopPropagation();
             }, { passive: false });
 
-            imageHitTarget.addEventListener('pointerup', (pe) => {
+            imageHitTarget.addEventListener('pointerup', async (pe) => {
+                if (activeTool === 'pointer' && editDragState) {
+                    const releaseCoords = getCurveDragReleaseImageCoords(pe.clientX, pe.clientY);
+                    await finishCurveEditDrag(releaseCoords?.xImg, releaseCoords?.yImg);
+                    try { pe.target.releasePointerCapture(pe.pointerId); } catch(_) {}
+                    pe.preventDefault();
+                    pe.stopPropagation();
+                    return;
+                }
                 if ((!drawStrokeActive && !paintStrokeActive && !smoothStrokeActive) || 
                     (activeTool !== 'draw' && activeTool !== 'paint' && activeTool !== 'smoothBrush')) return;
                 try { pe.target.releasePointerCapture(pe.pointerId); } catch(_) {}
@@ -10433,15 +11378,23 @@
             imageHitTarget.addEventListener('pointercancel', (pe) => {
                 if (drawCursorRing) { drawCursorRing.remove(); drawCursorRing = null; }
                 if (eraserBox) { eraserBox.remove(); eraserBox = null; }
+                if (editDragState) cancelCurveDrag('pointercancel');
                 clearEditInteractionLayerState();
             });
+            imageHitTarget.addEventListener('lostpointercapture', () => {
+                if (editDragState && activeTool === 'pointer') cancelCurveDrag('lostpointercapture');
+            });
         }
+        window.addEventListener('blur', () => {
+            if (editDragState) cancelCurveDrag('window-blur');
+        });
         // ─── End Tablet Pointer Events ────────────────────────────────────────
 
         // Clicks on the image are now used only for panel selection and phrase
         // highlighting; depth configuration is controlled by numeric inputs.
 
         async function handleFile(file) {
+            if (editDragState) cancelCurveDrag('image-replaced');
             // Check file size (100MB limit)
             const maxSize = 100 * 1024 * 1024; // 100MB in bytes
             if (file.size > maxSize) {
@@ -10470,7 +11423,7 @@
             curveEdgePick = null;
             trackOverlayDrag = null;
             lastDigitizedDepth = null;
-            lastDigitizedCurves = null;
+            replaceAllDigitizedCurves(null, { reason: 'new_image', clearTraces: true });
             curveWrapMarkers = {};
             if (pinnedDepthIndices) pinnedDepthIndices.clear();
 
@@ -15112,6 +16065,7 @@
                 }
 
                 if (data.success) {
+                    if (editDragState) cancelCurveDrag('digitization-replaced');
                     const previousCurves = lastDigitizedCurves;
                     const previousTraces = lastCurveTraces;
                     // ML predictions are transient setup previews. Once the
@@ -15120,7 +16074,10 @@
                     window.mlPredictedCurves = [];
                     // Store digitized data for cursor readout and later download
                     lastDigitizedDepth = Array.isArray(data.digitized_depth) ? data.digitized_depth : null;
-                    lastDigitizedCurves = data.digitized_curves || null;
+                    replaceAllDigitizedCurves(data.digitized_curves || null, {
+                        reason: 'redigitization',
+                        clearTraces: false,
+                    });
                     curveWrapMarkers = {};
                     lastLasContent = data.las_content || null;
                     lastLasFilename = data.filename || 'digitized_log.las';
@@ -15128,7 +16085,8 @@
                     lastNullValue = (config.global_options && typeof config.global_options.null === 'number') ? config.global_options.null : -999.25;
                     if (Array.isArray(lastDigitizedDepth) && lastDigitizedDepth.length > 0 &&
                         lastDigitizedCurves && typeof lastDigitizedCurves === 'object') {
-                        const rebuiltLas = buildLasFromDigitized(lastDigitizedDepth, lastDigitizedCurves, lastDepthConfig || depthCfg, lastNullValue);
+                        const digitizedSnapshot = createCommittedDatasetSnapshot({ purpose: 'redigitization_result' });
+                        const rebuiltLas = buildLasFromCommittedSnapshot(digitizedSnapshot);
                         if (rebuiltLas && typeof rebuiltLas === 'string' && rebuiltLas.trim().length) {
                             lastLasContent = rebuiltLas;
                         }
@@ -15324,47 +16282,21 @@
         }
 
         async function downloadLasZip() {
-            if (!Array.isArray(lastDigitizedDepth) || !lastDigitizedCurves) {
-                showStatus('No digitized data available. Please run Digitize first.', 'error');
-                return;
-            }
-
             const btn = document.getElementById('downloadLasBtn');
             if (btn) btn.disabled = true;
             showStatus('⏳ Generating ZIP archive...', 'info');
 
             try {
-                // Prepare merged curves object using current manual edits
-                // (Note: lastDigitizedCurves should already be updated by applyRefinedSegment/updateCurveData)
-                syncWrapMarkersToDigitizedCurves();
-                
-                const exportCurves = {};
-                for (const [key, curveData] of Object.entries(lastDigitizedCurves)) {
-                    // clone curveData to avoid mutating original state
-                    const exportData = { ...curveData };
-                    if (Array.isArray(curveData.values)) {
-                        exportData.values = [...curveData.values];
-                        
-                        // Merge wrap layer values if they exist
-                        if (curveData.wrapLayer && Array.isArray(curveData.wrapLayer.values)) {
-                            for (let i = 0; i < exportData.values.length; i++) {
-                                const wVal = curveData.wrapLayer.values[i];
-                                if (wVal !== null && wVal !== undefined && !Number.isNaN(wVal)) {
-                                    exportData.values[i] = wVal;
-                                }
-                            }
-                        }
-                        // Remove wrapLayer from export to avoid polluting payload
-                        delete exportData.wrapLayer;
-                    }
-                    exportCurves[key] = exportData;
-                }
-                
+                const operationId = ++latestExportOperationId;
+                const snapshot = createCommittedDatasetSnapshot({ purpose: 'las_zip_download' });
+                reportExcludedActivePreview(snapshot, 'las_zip_download');
                 const payload = {
-                    depths: lastDigitizedDepth,
-                    curves: exportCurves,
-                    header_metadata: headerMetadata || {},
-                    depth_unit: lastDepthConfig ? lastDepthConfig.unit : 'FT'
+                    depths: snapshot.depths,
+                    curves: buildExportCurvesFromSnapshot(snapshot),
+                    header_metadata: snapshot.metadata,
+                    depth_unit: snapshot.depthConfig && snapshot.depthConfig.unit ? snapshot.depthConfig.unit : 'FT',
+                    null_value: snapshot.nullValue,
+                    snapshot_id: snapshot.snapshotId,
                 };
 
                 const resp = await fetch('/api/download_las_zip', {
@@ -15384,6 +16316,10 @@
                 }
 
                 const blob = await resp.blob();
+                if (operationId !== latestExportOperationId) {
+                    console.info(`Ignoring stale ZIP response for ${snapshot.snapshotId}.`);
+                    return;
+                }
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
@@ -15420,13 +16356,16 @@
         }
 
         async function autoSaveLogToAccount() {
-            if (!lastLasContent) {
-                console.log('Auto-save skipped: no LAS content');
+            const operationId = ++latestSaveOperationId;
+            let snapshot;
+            try {
+                snapshot = createCommittedDatasetSnapshot({ purpose: 'autosave' });
+            } catch (error) {
+                console.warn('Auto-save skipped:', error.message);
                 return;
             }
-
-            // Sync latest metadata from the inputs
-            const metadata = syncHeaderMetadataFromInputs();
+            reportExcludedActivePreview(snapshot, 'autosave');
+            const metadata = snapshot.metadata;
 
             // Generate a default name from the well name, or filename, or timestamp
             const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
@@ -15434,47 +16373,37 @@
             
             if (metadata && metadata.well) {
                 logName = metadata.well;
-            } else if (lastLasFilename) {
-                logName = lastLasFilename.replace(/\.las$/i, '');
+            } else if (snapshot.lasFilename) {
+                logName = snapshot.lasFilename.replace(/\.las$/i, '');
             } else {
                 logName = `Log_${timestamp}`;
             }
 
-            const curveCount = document.querySelectorAll('.track-section').length;
-            const topDepth = parseFloat(document.getElementById('topDepth')?.value) || 0;
-            const bottomDepth = parseFloat(document.getElementById('bottomDepth')?.value) || 0;
-            const depthUnit = document.getElementById('depthUnit')?.value || 'FT';
-
-            // Rebuild LAS to include manual edits
-            let finalLasContent = lastLasContent;
-            if (Array.isArray(lastDigitizedDepth) && lastDigitizedDepth.length > 0 &&
-                lastDigitizedCurves && typeof lastDigitizedCurves === 'object' &&
-                Object.keys(lastDigitizedCurves).length > 0) {
-                const depthCfg = lastDepthConfig || (typeof getDepthConfigFromInputs === 'function' ? getDepthConfigFromInputs() : null);
-                const rebuilt = buildLasFromDigitized(lastDigitizedDepth, lastDigitizedCurves, depthCfg, lastNullValue);
-                if (rebuilt && typeof rebuilt === 'string' && rebuilt.trim().length) {
-                    finalLasContent = rebuilt;
-                }
-            }
+            const curveCount = Object.keys(snapshot.curves).length;
+            const topDepth = snapshot.depths[0];
+            const bottomDepth = snapshot.depths[snapshot.depths.length - 1];
+            const depthUnit = snapshot.depthConfig && snapshot.depthConfig.unit ? snapshot.depthConfig.unit : 'FT';
+            const finalLasContent = buildLasFromCommittedSnapshot(snapshot);
+            const imageFileForOperation = originalUploadedFile;
             
             // 1. Upload original image to GCS if we have it
             let gcsKey = null;
-            if (originalUploadedFile) {
+            if (imageFileForOperation) {
                 try {
                     const urlRes = await fetch('/api/managed-jobs/upload-url', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
-                            filename: originalUploadedFile.name,
-                            contentType: originalUploadedFile.type
+                            filename: imageFileForOperation.name,
+                            contentType: imageFileForOperation.type
                         })
                     });
                     const urlData = await urlRes.json();
                     if (urlData.success && urlData.uploadUrl) {
                         const uploadRes = await fetch(urlData.uploadUrl, {
                             method: 'PUT',
-                            headers: { 'Content-Type': originalUploadedFile.type },
-                            body: originalUploadedFile
+                            headers: { 'Content-Type': imageFileForOperation.type },
+                            body: imageFileForOperation
                         });
                         if (uploadRes.ok) {
                             gcsKey = urlData.fileKey;
@@ -15486,10 +16415,15 @@
                 }
             }
 
+            if (operationId !== latestSaveOperationId || !isPersistenceSnapshotDatasetActive(snapshot)) {
+                console.info(`Discarding superseded autosave ${snapshot.snapshotId} before account persistence.`);
+                return;
+            }
+
             // 2. Save log to account DB
             try {
                 // If uploadedImage is a data URL and original is not, it means we're working on a cropped/modified image
-                let croppedImagePath = (uploadedImagePath !== originalUploadedImagePath) ? uploadedImagePath : null;
+                const croppedImagePath = snapshot.croppedImagePath;
                 
                 const response = await fetch('/api/logs', {
                     method: 'POST',
@@ -15497,24 +16431,35 @@
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
-                        log_id: activeLogId,
+                        log_id: snapshot.sourceProjectId,
                         name: logName,
                         curve_count: curveCount,
                         depth_start: topDepth,
                         depth_end: bottomDepth,
                         depth_unit: depthUnit,
                         las_content: finalLasContent,
-                        original_image_path: gcsKey || originalUploadedImagePath || uploadedImagePath,
+                        original_image_path: gcsKey || snapshot.originalImagePath,
                         cropped_image_path: croppedImagePath
                     })
                 });
 
                 const data = await response.json();
+                if (operationId !== latestSaveOperationId || !isPersistenceSnapshotDatasetActive(snapshot)) {
+                    console.info(`Ignoring stale autosave response for ${snapshot.snapshotId}.`);
+                    return;
+                }
                 if (data.success) {
                     if (data.log_id) activeLogId = data.log_id;
+                    const savedCurrentState = markCommittedSnapshotSaved(snapshot);
+                    if (!savedCurrentState) {
+                        console.info(`Snapshot ${snapshot.snapshotId} saved; newer committed changes remain unsaved.`);
+                    }
                     console.log(`✅ Log auto-saved: ${logName}`);
                     showStatus(`✅ Log saved: ${logName}`, 'success');
                     showSaveConfirmation(data.log_name || logName);
+                    if (!savedCurrentState) {
+                        showStatus(`Snapshot saved: ${logName}. Newer committed changes remain unsaved.`, 'info');
+                    }
                 } else {
                     console.warn('Auto-save failed:', data.error || 'Unknown error');
                 }
@@ -15524,28 +16469,14 @@
         }
 
         function downloadLastLas() {
-            let lasText = null;
-            let unstrippedLas = null;
-
-            // Prefer a LAS rebuilt from the in-memory digitized arrays so any
-            // manual edits made in the viewer are reflected in the download.
-            if (Array.isArray(lastDigitizedDepth) && lastDigitizedDepth.length > 0 &&
-                lastDigitizedCurves && typeof lastDigitizedCurves === 'object') {
-                const depthCfg = lastDepthConfig || (typeof getDepthConfigFromInputs === 'function' ? getDepthConfigFromInputs() : null);
-                const rebuilt = buildLasFromDigitized(lastDigitizedDepth, lastDigitizedCurves, depthCfg, lastNullValue);
-                if (rebuilt && typeof rebuilt === 'string' && rebuilt.trim().length) {
-                    lasText = rebuilt;
-                    unstrippedLas = rebuilt;
-                }
-            }
-
-            // Fallback: use the LAS content returned by the server.
-            if (!lasText && lastLasContent) {
-                lasText = lastLasContent;
-                unstrippedLas = lastLasContent;
-            }
-
-            if (!lasText) {
+            let snapshot;
+            let lasText;
+            try {
+                snapshot = createCommittedDatasetSnapshot({ purpose: 'las_download' });
+                reportExcludedActivePreview(snapshot, 'las_download');
+                lasText = buildLasFromCommittedSnapshot(snapshot);
+            } catch (error) {
+                console.error('LAS snapshot creation failed:', error);
                 showStatus('No LAS file to download yet. Run Digitize first.', 'info');
                 return;
             }
@@ -15554,14 +16485,11 @@
                 lasText = stripTurbotiffStateFromLasText(lasText);
             }
 
-            // Keep the cached LAS in sync with unstripped content.
-            lastLasContent = unstrippedLas || lasText;
-
             const blob = new Blob([lasText], { type: 'text/plain' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = lastLasFilename || 'digitized_log.las';
+            a.download = snapshot.lasFilename;
             a.click();
             URL.revokeObjectURL(url);
             void autoCaptureBlackSegments('download_snapshot', {
@@ -15578,49 +16506,59 @@
             
             const logName = prompt("Enter a name for this log:", lastLasFilename || "New Well Log");
             if (!logName) return;
+
+            const operationId = ++latestSaveOperationId;
+            let snapshot;
+            try {
+                snapshot = createCommittedDatasetSnapshot({ purpose: 'manual_account_save' });
+                reportExcludedActivePreview(snapshot, 'manual_account_save');
+            } catch (error) {
+                showStatus(`Cannot save: ${error.message}`, 'error');
+                return;
+            }
             
             const btn = document.getElementById('saveLogBtn');
             const originalText = btn.innerHTML;
             btn.innerHTML = '⏳ Saving...';
             btn.disabled = true;
             
-            const curveCount = document.querySelectorAll('.track-section').length;
-            const topDepth = parseFloat(document.getElementById('topDepth')?.value) || 0;
-            const bottomDepth = parseFloat(document.getElementById('bottomDepth')?.value) || 0;
-            const depthUnit = document.getElementById('depthUnit')?.value || 'FT';
-            
-            // Rebuild LAS to include manual edits
-            let finalLasContent = lastLasContent || '';
-            if (Array.isArray(lastDigitizedDepth) && lastDigitizedDepth.length > 0 &&
-                lastDigitizedCurves && typeof lastDigitizedCurves === 'object') {
-                const depthCfg = lastDepthConfig || (typeof getDepthConfigFromInputs === 'function' ? getDepthConfigFromInputs() : null);
-                const rebuilt = buildLasFromDigitized(lastDigitizedDepth, lastDigitizedCurves, depthCfg, lastNullValue);
-                if (rebuilt && typeof rebuilt === 'string' && rebuilt.trim().length) {
-                    finalLasContent = rebuilt;
-                }
-            }
-            
-            let croppedImagePath = (uploadedImagePath !== originalUploadedImagePath) ? uploadedImagePath : null;
+            const curveCount = Object.keys(snapshot.curves).length;
+            const topDepth = snapshot.depths[0];
+            const bottomDepth = snapshot.depths[snapshot.depths.length - 1];
+            const depthUnit = snapshot.depthConfig && snapshot.depthConfig.unit ? snapshot.depthConfig.unit : 'FT';
+            const finalLasContent = buildLasFromCommittedSnapshot(snapshot);
+            const croppedImagePath = snapshot.croppedImagePath;
 
             fetch('/api/logs', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({
-                    log_id: activeLogId,
+                    log_id: snapshot.sourceProjectId,
                     name: logName,
                     curve_count: curveCount,
                     depth_start: topDepth,
                     depth_end: bottomDepth,
                     depth_unit: depthUnit,
                     las_content: finalLasContent,
-                    original_image_path: originalUploadedImagePath || uploadedImagePath,
+                    original_image_path: snapshot.originalImagePath,
                     cropped_image_path: croppedImagePath
                 })
             })
             .then(r => r.json())
             .then(data => {
+                if (operationId !== latestSaveOperationId || !isPersistenceSnapshotDatasetActive(snapshot)) {
+                    console.info(`Ignoring stale manual-save response for ${snapshot.snapshotId}.`);
+                    return;
+                }
                 if (data.success) {
                     if (data.log_id) activeLogId = data.log_id;
+                    const savedCurrentState = markCommittedSnapshotSaved(snapshot);
+                    if (!savedCurrentState) {
+                        console.info(`Snapshot ${snapshot.snapshotId} saved; newer committed changes remain unsaved.`);
+                        setTimeout(() => {
+                            showStatus(`Snapshot saved: ${logName}. Newer committed changes remain unsaved.`, 'info');
+                        }, 0);
+                    }
                     btn.innerHTML = '✅ Saved!';
                     showStatus(`Log saved successfully: ${logName}`, 'success');
                     setTimeout(() => {
@@ -15632,6 +16570,7 @@
                 }
             })
             .catch(err => {
+                if (operationId !== latestSaveOperationId || !isPersistenceSnapshotDatasetActive(snapshot)) return;
                 console.error(err);
                 btn.innerHTML = '❌ Error';
                 showStatus(`Error saving log: ${err.message}`, 'error');
@@ -16127,7 +17066,7 @@
             }
 
             if (Object.keys(curvesObj).length) {
-                lastDigitizedCurves = curvesObj;
+                replaceAllDigitizedCurves(curvesObj, { reason: 'las_replacement', clearTraces: true });
             }
             
             // --- TURBOTIFF STATE RESTORATION ---
@@ -16145,6 +17084,9 @@
                 
                 if (stateB64) {
                     const stateBlob = JSON.parse(decodeURIComponent(escape(atob(stateB64))));
+                    if (Array.isArray(stateBlob.digitizedDepth)) {
+                        lastDigitizedDepth = stateBlob.digitizedDepth.slice();
+                    }
                     const restoredMetadata = mergeHeaderMetadataValues(
                         stateBlob.headerMetadata,
                         stateBlob.header_metadata,
@@ -16205,6 +17147,8 @@
                         }
                     }
                     if (stateBlob.curveTraces) {
+                        if (editDragState) cancelCurveDrag('project-state-replaced');
+                        clearAllBezierSegments();
                         // Assign to the module-scope `lastCurveTraces` so the
                         // scroll/pan redraw scheduler (scheduleCurveOverlayRedraw)
                         // can see it. Previously this only set window.lastCurveTraces
@@ -16229,11 +17173,30 @@
                         }, 100);
                     }
                     if (stateBlob.digitizedCurves && typeof stateBlob.digitizedCurves === 'object') {
-                        lastDigitizedCurves = stateBlob.digitizedCurves;
-                        window.lastDigitizedCurves = stateBlob.digitizedCurves;
+                        if (editDragState) cancelCurveDrag('project-state-replaced');
+                        const incomingValidation = validateCommittedDatasetSnapshot({
+                            depths: lastDigitizedDepth,
+                            curves: stateBlob.digitizedCurves,
+                        });
+                        if (!incomingValidation.valid) {
+                            throw new Error(`Saved project data is invalid: ${incomingValidation.errors.map(item => item.message).join(' ')}`);
+                        }
+                        replaceAllDigitizedCurves(stateBlob.digitizedCurves, {
+                            reason: 'project_state_replaced',
+                            clearTraces: false,
+                            rebuildTraces: true,
+                        });
+                    }
+                    if (stateBlob.pinnedDepthIndices && typeof stateBlob.pinnedDepthIndices === 'object') {
+                        pinnedDepthIndices.clear();
+                        Object.entries(stateBlob.pinnedDepthIndices).forEach(([curveKey, indices]) => {
+                            if (!Array.isArray(indices)) return;
+                            const validIndices = indices.filter(index => Number.isInteger(index) && index >= 0);
+                            if (validIndices.length) pinnedDepthIndices.set(normalizeCurveKey(curveKey), new Set(validIndices));
+                        });
                     }
                     if (stateBlob.curveWrapMarkers && typeof stateBlob.curveWrapMarkers === 'object') {
-                        curveWrapMarkers = stateBlob.curveWrapMarkers;
+                        curveWrapMarkers = clonePersistenceValue(stateBlob.curveWrapMarkers);
                     }
                     if (stateBlob.regions && typeof stateBlob.regions === 'object') {
                         if (stateBlob.regions.primary) primaryRegion = stateBlob.regions.primary;
@@ -16247,6 +17210,7 @@
                     }
                     configureWorkspaceFromParsedLas(parsed);
                 }
+                markCurrentCommittedStateClean('project_loaded');
             } catch (e) {
                 console.error("Failed to restore Turbotiff internal state from LAS:", e);
                 try {
@@ -16258,12 +17222,9 @@
             // ---------------------------------
         }
 
-        function buildLasFromDigitized(depths, curves, depthCfg, nullSentinel) {
+        function buildLasFromDigitized(depths, curves, depthCfg, nullSentinel, metadata = {}, persistenceSnapshot = null) {
             if (!Array.isArray(depths) || !curves || typeof curves !== 'object' || depths.length === 0) {
                 return null;
-            }
-            if (curves === lastDigitizedCurves) {
-                syncWrapMarkersToDigitizedCurves();
             }
 
             const eol = '\r\n';
@@ -16285,9 +17246,7 @@
             const step = depths.length > 1 ? (depths[1] - depths[0]) : 0.0;
             lines.push(` STEP.${unitToken}               ${step.toFixed(4)}:` + eol);
             lines.push(` NULL.               ${nullVal.toFixed(4)}:` + eol);
-            const md = (typeof syncHeaderMetadataFromInputs === 'function')
-                ? getCanonicalHeaderMetadata(syncHeaderMetadataFromInputs())
-                : getCanonicalHeaderMetadata(headerMetadata);
+            const md = getCanonicalHeaderMetadata(metadata || {});
             if (md.comp) lines.push(` COMP.       ${md.comp}:` + eol);
             lines.push(` WELL.       ${md.well || 'DIGITIZED_LOG'}:` + eol);
             if (md.fld) lines.push(` FLD .       ${md.fld}:` + eol);
@@ -16319,23 +17278,11 @@
 
             const arrays = curveNames.map((name) => {
                 const meta = curves[name] || {};
-                const vals = Array.isArray(meta.values) ? meta.values.slice() : [];
-                if (meta.wrapLayer && Array.isArray(meta.wrapLayer.values)) {
-                    for (let k = 0; k < vals.length; k++) {
-                        const wVal = meta.wrapLayer.values[k];
-                        if (wVal !== null && wVal !== undefined && !Number.isNaN(wVal)) {
-                            vals[k] = wVal;
-                        }
-                    }
+                const vals = buildMergedCurveValuesForExport(meta, nullVal);
+                if (vals.length !== depths.length) {
+                    throw new Error(`${name} values do not match the depth count.`);
                 }
-                if (vals.length < depths.length) {
-                    while (vals.length < depths.length) {
-                        vals.push(nullVal);
-                    }
-                } else if (vals.length > depths.length) {
-                    vals.length = depths.length;
-                }
-                return vals;
+                return vals.map(value => normalizeValueForLas(value, nullVal));
             });
 
             const headerCols = ['DEPTH'].concat(curveNames.map((n) => n.toUpperCase()));
@@ -16347,23 +17294,37 @@
                 const row = [depths[i].toFixed(4).padStart(10, ' ')];
                 for (let j = 0; j < arrays.length; j++) {
                     const v = arrays[j][i];
-                    const vv = (v == null || !Number.isFinite(v)) ? nullVal : v;
+                    const vv = normalizeValueForLas(v, nullVal);
                     row.push(vv.toFixed(4).padStart(10, ' '));
                 }
                 lines.push(row.join(' ') + eol);
             }
 
-            return embedTurbotiffStateIntoLasText(lines.join(''));
+            const snapshotForState = persistenceSnapshot || {
+                metadata: clonePersistenceValue(metadata || {}),
+                config: null,
+                depths: clonePersistenceValue(depths),
+                curves: clonePersistenceValue(curves),
+                pinnedDepthIndices: {},
+                curveWrapMarkers: {},
+                regions: { primary: null, header: null },
+                revisionManifest: {},
+                snapshotId: null,
+            };
+            return embedTurbotiffStateIntoLasText(lines.join(''), snapshotForState);
         }
 
-        function embedTurbotiffStateIntoLasText(lasText) {
+        function embedTurbotiffStateIntoLasText(lasText, snapshot) {
             if (!lasText || typeof lasText !== 'string') return lasText || '';
             let cleanText = lasText;
             if (cleanText.includes('TURBOTIFF_STATE_START')) {
                 cleanText = (typeof stripTurbotiffStateFromLasText === 'function') ? stripTurbotiffStateFromLasText(cleanText) : cleanText;
             }
             const eol = cleanText.includes('\r\n') ? '\r\n' : '\n';
-            const cfg = (typeof buildDigitizeConfigFromInputs === 'function') ? buildDigitizeConfigFromInputs() : null;
+            if (!snapshot || !snapshot.curves || !Array.isArray(snapshot.depths)) {
+                throw new Error('A committed dataset snapshot is required for project-state serialization.');
+            }
+            const cfg = clonePersistenceValue(snapshot.config || null);
             if (cfg && Array.isArray(cfg.curves)) {
                 cfg.curves.forEach(c => {
                     if (c && c.left_value !== undefined && c.scale_min === undefined) c.scale_min = c.left_value;
@@ -16371,15 +17332,17 @@
                 });
             }
             const stateBlob = {
-                headerMetadata: (typeof syncHeaderMetadataFromInputs === 'function') ? syncHeaderMetadataFromInputs() : (typeof headerMetadata !== 'undefined' ? headerMetadata : {}),
+                headerMetadata: clonePersistenceValue(snapshot.metadata || {}),
                 config: cfg,
-                curveTraces: (typeof lastCurveTraces !== 'undefined' && lastCurveTraces) ? lastCurveTraces : {},
-                digitizedCurves: (typeof lastDigitizedCurves !== 'undefined' && lastDigitizedCurves) ? lastDigitizedCurves : {},
-                curveWrapMarkers: (typeof curveWrapMarkers !== 'undefined' && curveWrapMarkers) ? curveWrapMarkers : {},
-                regions: {
-                    primary: (typeof primaryRegion !== 'undefined' && primaryRegion) ? primaryRegion : null,
-                    header: (typeof headerRegion !== 'undefined' && headerRegion) ? headerRegion : null
-                }
+                digitizedDepth: clonePersistenceValue(snapshot.depths),
+                digitizedCurves: clonePersistenceValue(snapshot.curves),
+                pinnedDepthIndices: clonePersistenceValue(snapshot.pinnedDepthIndices || {}),
+                curveWrapMarkers: clonePersistenceValue(snapshot.curveWrapMarkers || {}),
+                regions: clonePersistenceValue(snapshot.regions || { primary: null, header: null }),
+                sourceSnapshot: {
+                    snapshotId: snapshot.snapshotId || null,
+                    revisionManifest: clonePersistenceValue(snapshot.revisionManifest || {}),
+                },
             };
             let b64 = '';
             try {

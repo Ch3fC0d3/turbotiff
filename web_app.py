@@ -49,6 +49,12 @@ from app import corrections_store
 from app import header_layout
 from app import track_analysis
 import app.config as config
+from curve_model.integration import PHASE1_MODES, build_phase1_probability
+from curve_model.phase2_decode import decode_phase2_path
+from curve_model.phase2_integration import PHASE2_MODES, build_phase2_probability
+from curve_model.phase2_score import Phase2ScoreConfig, phase2_confidence
+from curve_decoder import CurveEvidence, DecoderConfig, decode_curve_path
+from curve_decoder.scale import ScaleConfig as TopologyScaleConfig, path_to_values
 from werkzeug.security import generate_password_hash, check_password_hash
 import stripe
 import secrets
@@ -2611,6 +2617,28 @@ def score_and_suppress_black_components(mask, xs_guide, curve_type=None):
         return mask
 
 
+def _circular_hue_mask(hsv, center, band, saturation_min=60, value_min=40):
+    """Return an HSV mask using OpenCV's circular 0..179 hue space."""
+    hue = hsv[:, :, 0].astype(np.float32)
+    distance = np.abs(hue - float(center))
+    circular_distance = np.minimum(distance, 180.0 - distance)
+    return (
+        (circular_distance <= float(band))
+        & (hsv[:, :, 1] >= int(saturation_min))
+        & (hsv[:, :, 2] >= int(value_min))
+    ).astype(np.uint8) * 255
+
+
+def _circular_hue_center(hues):
+    """Estimate the center of hue samples without splitting red at 0/179."""
+    values = np.asarray(hues, dtype=np.float32).reshape(-1)
+    if values.size == 0:
+        return 0.0
+    angles = values * (2.0 * np.pi / 180.0)
+    mean_angle = np.arctan2(np.sin(angles).mean(), np.cos(angles).mean())
+    return float((mean_angle * 180.0 / (2.0 * np.pi)) % 180.0)
+
+
 def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allowed=True):
     """Build a soft probability map for the curve in a track ROI.
 
@@ -2771,62 +2799,24 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
             color_mask = ((saturation > 50) & (value > 40) & (value < 240)).astype(np.uint8) * 255
 
     elif mode == "red":
-        # Red wraps around hue 0/180, so handle both ends
+        # Red spans both ends of OpenCV's circular hue range. A circular mask
+        # keeps hues near 179 and 0 together during adaptive refinement.
+        red_center = 0.0
+        red_band = 15.0
         if detected_hue is not None:
             hue_center, hue_range = detected_hue
-            # Only use detected hue if it's in the red-ish range (0-15 or 160-180)
             if hue_center <= 20 or hue_center >= 155:
-                # Use detected hue with adaptive range
-                if hue_center <= 20:
-                    h_lo = max(0, int(hue_center - hue_range))
-                    h_hi = min(25, int(hue_center + hue_range))
-                    lower1 = np.array([h_lo, 60, 40], dtype=np.uint8)
-                    upper1 = np.array([h_hi, 255, 255], dtype=np.uint8)
-                    color_mask = cv2.inRange(hsv, lower1, upper1)
-                else:
-                    h_lo = max(150, int(hue_center - hue_range))
-                    h_hi = min(180, int(hue_center + hue_range))
-                    lower2 = np.array([h_lo, 60, 40], dtype=np.uint8)
-                    upper2 = np.array([h_hi, 255, 255], dtype=np.uint8)
-                    color_mask = cv2.inRange(hsv, lower2, upper2)
-            else:
-                # Detected hue outside red range, use default
-                lower1 = np.array([0, 70, 40], dtype=np.uint8)
-                upper1 = np.array([15, 255, 255], dtype=np.uint8)
-                lower2 = np.array([160, 70, 40], dtype=np.uint8)
-                upper2 = np.array([180, 255, 255], dtype=np.uint8)
-                m1 = cv2.inRange(hsv, lower1, upper1)
-                m2 = cv2.inRange(hsv, lower2, upper2)
-                color_mask = cv2.bitwise_or(m1, m2)
-        else:
-            lower1 = np.array([0, 70, 40], dtype=np.uint8)
-            upper1 = np.array([15, 255, 255], dtype=np.uint8)
-            lower2 = np.array([160, 70, 40], dtype=np.uint8)
-            upper2 = np.array([180, 255, 255], dtype=np.uint8)
-            m1 = cv2.inRange(hsv, lower1, upper1)
-            m2 = cv2.inRange(hsv, lower2, upper2)
-            color_mask = cv2.bitwise_or(m1, m2)
+                red_center = float(hue_center)
+                red_band = float(np.clip(hue_range, 10.0, 25.0))
+        color_mask = _circular_hue_mask(hsv, red_center, red_band, 60, 40)
         
         # Refine with median hue from detected pixels
         nonzero = np.nonzero(color_mask)
         if len(nonzero[0]) > 50:
             h_channel = hsv[:, :, 0]
             valid_h = h_channel[nonzero]
-            med_h = float(np.median(valid_h))
-            band = 12.0
-            # Handle red's wrap-around at 0/180
-            if med_h <= 20:
-                h_lo = max(0, int(med_h - band))
-                h_hi = min(30, int(med_h - band))
-                dyn_lower = np.array([h_lo, 60, 40], dtype=np.uint8)
-                dyn_upper = np.array([h_hi, 255, 255], dtype=np.uint8)
-                color_mask = cv2.inRange(hsv, dyn_lower, dyn_upper)
-            elif med_h >= 160:
-                h_lo = max(150, int(med_h - band))
-                h_hi = min(180, int(med_h + band))
-                dyn_lower = np.array([h_lo, 60, 40], dtype=np.uint8)
-                dyn_upper = np.array([h_hi, 255, 255], dtype=np.uint8)
-                color_mask = cv2.inRange(hsv, dyn_lower, dyn_upper)
+            circular_center = _circular_hue_center(valid_h)
+            color_mask = _circular_hue_mask(hsv, circular_center, 12.0, 60, 40)
 
     elif mode == "blue":
         # Use detected hue if available, otherwise fall back to fixed blue range
@@ -3501,7 +3491,7 @@ def trace_curve_with_dp(
             prev = bin_img
         return skel_img
 
-    # Pre-skeletonize/thin the candidate mask to 1px centerlines first
+    # Build a centerline score without discarding the underlying soft map.
     bin_mask_for_skel = prob > 0.10
     skel = None
     if np.any(bin_mask_for_skel):
@@ -3516,10 +3506,6 @@ def trace_curve_with_dp(
         except Exception as e:
             print(f"Pre-skeletonization failed: {e}")
             skel = None
-
-    # Restrict candidate probability map to strictly the 1px centerline
-    if skel is not None and cv2.countNonZero(skel) > 0:
-        prob = np.where(skel > 0, prob, 0.0)
 
     # Live-wire style node score combining probability and centerline distance
     bin_mask = prob > 0.10
@@ -3553,10 +3539,11 @@ def trace_curve_with_dp(
         center_score = np.zeros_like(prob, dtype=np.float32)
 
     eps = 1e-6
-    live_score = np.power(prob, 0.7) * (0.15 + 0.85 * center_score)
-    # Boost with skeleton ridge to keep micro-bumps
-    if skeleton_score is not None:
-        live_score = np.maximum(live_score, 0.55 * skeleton_score + 0.05 * bin_mask.astype(np.float32))
+    live_score = np.power(prob, 0.7) * (0.35 + 0.65 * center_score)
+    # Skeleton and centerline evidence are bonuses rather than hard gates, so
+    # faint, dotted, or interrupted curve rows remain available to the DP.
+    live_score += 0.30 * skeleton_score
+    live_score += 0.15 * center_score * bin_mask.astype(np.float32)
     live_score = np.clip(live_score, eps, 1.0)
 
     # Blend in distance transform so the DP prefers the *center* of thick
@@ -3571,10 +3558,6 @@ def trace_curve_with_dp(
             _dist_norm = (_dist / _d_max).astype(np.float32)
             live_score = live_score * (0.7 + 0.3 * _dist_norm)
             live_score = np.clip(live_score, eps, 1.0)
-
-    # Strictly enforce thinned 1px centerline candidates (all other pixels are set to eps)
-    if skel is not None and cv2.countNonZero(skel) > 0:
-        live_score = np.where(skel > 0, live_score, eps)
 
     cost = -np.log(live_score)
 
@@ -3637,13 +3620,19 @@ def trace_curve_with_dp(
         horiz_kernel_w = max(3, int(round(w * 0.85)) if sonic_curve else w // 5)
         horiz_kern = cv2.getStructuringElement(cv2.MORPH_RECT, (horiz_kernel_w, 1))
         horiz_detected = cv2.morphologyEx(bin_mask.astype(np.uint8), cv2.MORPH_OPEN, horiz_kern)
-        horiz_row_frac = horiz_detected.mean(axis=1)
-        # Lower threshold so more horizontal rails get penalized
-        horiz_mask = horiz_row_frac > 0.20  # >20% of row survived wide-kernel opening → true grid line
-        if np.any(horiz_mask):
-            uniform_cost = float(-np.log(1e-5))  # Much stronger penalty
-            cost[horiz_mask, :] = uniform_cost
-            prob[horiz_mask, :] = 1e-5
+        horizontal_score = horiz_detected.astype(np.float32)
+        if float(horizontal_score.max()) > 0:
+            # Penalize the detected horizontal component while preserving
+            # centerline evidence where the real curve crosses the grid.
+            horizontal_score /= float(horizontal_score.max())
+            preserve_score = np.maximum(skeleton_score, center_score)
+            grid_penalty = 4.0 * horizontal_score * (1.0 - 0.75 * preserve_score)
+            cost += grid_penalty
+            prob *= np.clip(
+                1.0 - 0.85 * horizontal_score * (1.0 - 0.75 * preserve_score),
+                0.10,
+                1.0,
+            )
 
     # Run optimized DP (Forward Pass)
     xs_fwd, conf_fwd = fast_tracer.run_viterbi(
@@ -4462,7 +4451,16 @@ def trace_curve_multiscale(curve_mask, scale_min, scale_max, curve_type="GR", ma
     
     h, w = curve_mask.shape
     if h < 4 or w < 4:
-        return trace_curve_with_dp(curve_mask, scale_min, scale_max, curve_type, max_step, smooth_lambda, hot_side)
+        return trace_curve_with_dp(
+            curve_mask,
+            scale_min,
+            scale_max,
+            curve_type=curve_type,
+            max_step=max_step,
+            smooth_lambda=smooth_lambda,
+            curv_lambda=curv_lambda,
+            hot_side=hot_side,
+        )
     
     # Adaptive scale selection based on image content
     def adaptive_scale_selection(curve_mask, curve_type):
@@ -4535,7 +4533,16 @@ def trace_curve_multiscale(curve_mask, scale_min, scale_max, curve_type="GR", ma
     jaggedness_factor = max(0.5, min(2.0, 1.0 + edge_density * 5))
     
     if len(valid_scales) < 2:
-        return trace_curve_with_dp(curve_mask, scale_min, scale_max, curve_type, max_step, smooth_lambda, hot_side)
+        return trace_curve_with_dp(
+            curve_mask,
+            scale_min,
+            scale_max,
+            curve_type=curve_type,
+            max_step=max_step,
+            smooth_lambda=smooth_lambda,
+            curv_lambda=curv_lambda,
+            hot_side=hot_side,
+        )
     
     prob = curve_mask.astype(np.float32) / 255.0
     
@@ -7272,9 +7279,9 @@ def compute_depth_vector(nrows, top_depth, bottom_depth):
     ys = np.arange(nrows, dtype=np.float32)
     return top_depth + (ys / max(1, nrows-1)) * (bottom_depth - top_depth)
 
-def write_las_simple(depth, curve_data, depth_unit="FT", header_metadata=None):
+def write_las_simple(depth, curve_data, depth_unit="FT", header_metadata=None, null_val=-999.25):
     """Generate LAS 1.2-style file compatible with QuickSyn"""
-    null_val = -999.25
+    null_val = float(null_val) if np.isfinite(float(null_val)) else -999.25
     unit_token = "F" if depth_unit.upper().startswith("F") else depth_unit.upper()
     eol = "\r\n"
 
@@ -11408,22 +11415,22 @@ def pipeline_cc_cleanup(mask, min_size=20):
     return clean_mask
 
 def pipeline_skeletonize(mask):
-    """Skeletonization / Centerline Thinning."""
+    """Add a soft centerline bonus while preserving the probability map."""
     if mask is None or mask.size == 0:
         return mask
     _, binary = cv2.threshold(mask, 10, 255, cv2.THRESH_BINARY)
     if hasattr(cv2, 'ximgproc'):
         thinned = cv2.ximgproc.thinning(binary, thinningType=cv2.ximgproc.THINNING_ZHANGSUEN)
-        # Restore original probabilities where skeleton is present
-        result = np.zeros_like(mask)
-        result[thinned > 0] = mask[thinned > 0]
-        return result
     else:
         kernel = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
-        eroded = cv2.erode(binary, kernel, iterations=1)
-        result = np.zeros_like(mask)
-        result[eroded > 0] = mask[eroded > 0]
-        return result
+        thinned = cv2.erode(binary, kernel, iterations=1)
+
+    centerline = cv2.GaussianBlur(thinned.astype(np.float32) / 255.0, (3, 3), 0)
+    center_max = float(centerline.max())
+    if center_max > 0:
+        centerline /= center_max
+    base = mask.astype(np.float32) / 255.0
+    return np.clip((base + 0.25 * centerline) * 255.0, 0, 255).astype(np.uint8)
 
 
 def _connected_peak_centroid(
@@ -11506,12 +11513,26 @@ def _trace_ai_with_dp_fallback(
     smooth_lambda: float,
     curv_lambda: float,
     hot_side: Optional[str],
+    wrap_enabled: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray]:
     try:
-        xs = ai_tracer.trace(roi)
-        if xs.ndim != 1 or xs.size != roi.shape[0]:
-            raise ValueError('AI tracer returned an invalid output shape')
-        return xs.astype(np.float32), np.full(xs.shape, 0.95, dtype=np.float32)
+        heatmap = ai_tracer.predict_probability_map(roi)
+        if heatmap.shape != mask.shape:
+            raise ValueError('AI tracer returned an invalid heatmap shape')
+        visual_score = mask.astype(np.float32) / 255.0
+        combined_score = np.maximum(0.70 * visual_score, 0.45 * heatmap)
+        combined_mask = np.clip(combined_score * 255.0, 0, 255).astype(np.uint8)
+        return trace_curve_with_dp(
+            combined_mask,
+            scale_min=left_value,
+            scale_max=right_value,
+            curve_type=curve_type,
+            max_step=max_step,
+            smooth_lambda=smooth_lambda,
+            curv_lambda=curv_lambda,
+            hot_side=hot_side,
+            wrap_enabled=wrap_enabled,
+        )
     except Exception as exc:
         print(f"⚠️ AI Tracer failed for {curve_name}: {exc}")
         return trace_curve_with_dp(
@@ -11523,6 +11544,7 @@ def _trace_ai_with_dp_fallback(
             smooth_lambda=smooth_lambda,
             curv_lambda=curv_lambda,
             hot_side=hot_side,
+            wrap_enabled=wrap_enabled,
         )
 
 @app.route('/digitize', methods=['POST'])
@@ -11612,7 +11634,9 @@ def digitize():
     
     curve_data = {}
     curve_traces = {}
+    curve_trace_segments = {}
     curve_trace_debug = {}
+    curve_trace_metadata = {}
     curve_warnings = []
 
     for c in curves:
@@ -11625,6 +11649,9 @@ def digitize():
         left_value = float(c['left_value'])
         right_value = float(c['right_value'])
         wrap_enabled = bool(c.get('wrapped'))
+        decoder_mode = str(c.get('decoder_mode') or 'legacy_dp').lower().strip()
+        if decoder_mode not in {'legacy_dp', 'topology_dp'}:
+            decoder_mode = 'legacy_dp'
         mode = c.get('mode', 'black')
         hot_side = c.get('hot_side')
         pixel_perfect = bool(c.get('pixel_perfect'))
@@ -11719,16 +11746,67 @@ def digitize():
         # Use compute_prob_map for all modes - it has sophisticated edge detection
         # and centerline boost that works well
         mask = compute_prob_map(roi, mode=mode, ui_filters=curve_ui_filters)
+        classic_mask = mask.copy()
+
+        probability_mode = str(c.get('probability_mode') or 'classic').lower().strip()
+        if probability_mode not in (PHASE1_MODES | PHASE2_MODES):
+            probability_mode = 'classic'
+        phase1_model_path = os.environ.get('TURBOTIFF_PHASE1_MODEL_PATH')
+        phase2_auxiliary = {}
+        if probability_mode in PHASE2_MODES:
+            score_config = Phase2ScoreConfig(
+                centerline_weight=float(c.get('phase2_centerline_weight', 0.45)),
+                distance_weight=float(c.get('phase2_distance_weight', 0.30)),
+                stroke_weight=float(c.get('phase2_stroke_weight', 0.20)),
+                grid_weight=float(c.get('phase2_grid_weight', 0.15)),
+                phase2_weight=float(c.get('phase2_weight', 0.70)),
+                classic_weight=float(c.get('classic_weight', gopt.get('classic_weight', 0.30))),
+            )
+            mask, phase_metadata, phase2_auxiliary = build_phase2_probability(
+                roi,
+                mask,
+                mode=probability_mode,
+                phase2_model_path=os.environ.get('TURBOTIFF_PHASE2_MODEL_PATH'),
+                phase1_model_path=phase1_model_path,
+                device=os.environ.get('TURBOTIFF_PHASE2_DEVICE') or os.environ.get('TURBOTIFF_PHASE1_DEVICE') or None,
+                tile_height=gopt.get('neural_tile_height', 512),
+                overlap=gopt.get('neural_tile_overlap', 96),
+                score_config=score_config,
+            )
+        else:
+            mask, phase_metadata = build_phase1_probability(
+                roi,
+                mask,
+                mode=probability_mode,
+                model_path=phase1_model_path,
+                device=os.environ.get('TURBOTIFF_PHASE1_DEVICE') or None,
+                neural_weight=c.get('neural_weight', gopt.get('neural_weight', 0.65)),
+                classic_weight=c.get('classic_weight', gopt.get('classic_weight', 0.35)),
+                centerline_weight=c.get('centerline_weight', gopt.get('centerline_weight', 0.70)),
+                stroke_weight=c.get('stroke_weight', gopt.get('stroke_weight', 0.30)),
+                tile_height=gopt.get('neural_tile_height', 512),
+                overlap=gopt.get('neural_tile_overlap', 96),
+            )
+        phase2_active = phase_metadata.get('tracing_mode') in PHASE2_MODES
+        curve_trace_metadata[name] = phase_metadata
+        if phase_metadata.get('fallback_occurred'):
+            curve_warnings.append({
+                'curve': name,
+                'info': f"{probability_mode} inference failed; {phase_metadata.get('tracing_mode', 'classic')} was used.",
+                'neural_fallback': True,
+                'reason': phase_metadata.get('fallback_reason'),
+                'fallback_chain': phase_metadata.get('fallback_chain'),
+            })
 
         # Pipeline: Connected-Component Cleanup
-        if enable_cc_cleanup:
+        if enable_cc_cleanup and not phase2_active:
             mask = pipeline_cc_cleanup(mask, min_size=20)
 
         # Pipeline: Skeletonization / Thinning
-        if enable_skeletonization:
+        if enable_skeletonization and not phase2_active:
             mask = pipeline_skeletonize(mask)
 
-        if analysis_guidance:
+        if analysis_guidance and not phase2_active:
             mask = track_analysis.apply_curve_guidance(
                 mask,
                 roi,
@@ -11835,10 +11913,162 @@ def digitize():
                 flush=True,
             )
 
+        topology_result = None
+        topology_active = False
+
         # Optional pixel-perfect skeleton tracer (preserve every bump)
         if not enable_viterbi:
             # Simple argmax tracer already ran above, do nothing here
-            pass
+            phase_metadata.update({
+                'requested_decoder': decoder_mode,
+                'actual_decoder': 'row_argmax',
+                'decoder_fallback': decoder_mode == 'topology_dp',
+                'decoder_fallback_reason': 'Viterbi decoding is disabled for this curve.',
+                'fallback': decoder_mode == 'topology_dp',
+                'fallback_reason': 'Viterbi decoding is disabled for this curve.' if decoder_mode == 'topology_dp' else None,
+            })
+        elif decoder_mode == 'topology_dp':
+            requested_topology = str(c.get('decoder_topology') or '').lower().strip()
+            topology = requested_topology if requested_topology in {'bounded', 'cylindrical'} else (
+                'cylindrical' if wrap_enabled else 'bounded'
+            )
+            allow_topology_fallback = bool(c.get('topology_allow_legacy_fallback', True))
+            try:
+                mask_probability = mask.astype(np.float32) / 255.0
+                evidence = CurveEvidence(
+                    centerline_probability=phase2_auxiliary.get('centerline_probability', mask_probability),
+                    stroke_probability=phase2_auxiliary.get('stroke_probability'),
+                    distance_field=phase2_auxiliary.get('distance_field'),
+                    direction_field=phase2_auxiliary.get('direction_field'),
+                    grid_probability=phase2_auxiliary.get('grid_probability'),
+                    classic_probability=(
+                        classic_mask.astype(np.float32) / 255.0
+                        if probability_mode in {'classic', 'hybrid_phase1', 'hybrid_phase2'} else None
+                    ),
+                )
+                topology_max_step = max(1, min(int(c.get('topology_max_step', 12)), mask.shape[1] - 1))
+                topology_max_slope = max(
+                    1,
+                    min(int(c.get('topology_max_slope', topology_max_step)), topology_max_step),
+                )
+                decoder_config = DecoderConfig(
+                    topology=topology,
+                    max_step=topology_max_step,
+                    max_slope=topology_max_slope,
+                    slope_bins=max(3, min(int(c.get('topology_slope_bins', 25)), 65)),
+                    curvature_weight=max(0.0, float(c.get('topology_curvature_weight', 0.08))),
+                    direction_weight=max(0.0, float(c.get('topology_direction_weight', 0.20))),
+                    wrap_penalty=max(0.0, float(c.get('topology_wrap_penalty', 0.35))),
+                    edge_transition_width=max(1, int(c.get('topology_edge_width', 8))),
+                    maximum_wrap_count=max(0, int(c.get('topology_maximum_wrap_count', 4))),
+                    minimum_rows_between_wraps=max(0, int(c.get('topology_minimum_wrap_rows', 8))),
+                    beam_width=max(16, min(int(c.get('topology_beam_width', 96)), 512)),
+                    allow_legacy_fallback=allow_topology_fallback,
+                )
+                topology_result = decode_curve_path(evidence, decoder_config)
+                xs = topology_result.x_by_row.copy()
+                confidence = topology_result.confidence_by_row.copy()
+                topology_active = True
+                phase_metadata.update({
+                    'requested_decoder': 'topology_dp',
+                    'actual_decoder': 'topology_dp',
+                    'decoder_fallback': False,
+                    'decoder_fallback_reason': None,
+                    'fallback': False,
+                    'fallback_reason': None,
+                    'topology': topology,
+                    'track_width': int(mask.shape[1]),
+                    'maximum_wrap_count': int(decoder_config.maximum_wrap_count),
+                    'topology_decoder': topology_result.metadata,
+                    'wrap_events': topology_result.wrap_events,
+                    'wrap_index_by_row': topology_result.wrap_index_by_row.tolist(),
+                    'unwrapped_x_by_row': topology_result.unwrapped_x_by_row.tolist(),
+                    'slope_by_row': topology_result.slope_by_row.tolist(),
+                    'confidence_by_row': topology_result.confidence_by_row.tolist(),
+                })
+            except Exception as exc:
+                if not allow_topology_fallback:
+                    raise
+                phase_metadata.update({
+                    'requested_decoder': 'topology_dp',
+                    'actual_decoder': 'legacy_dp',
+                    'decoder_fallback': True,
+                    'decoder_fallback_reason': str(exc),
+                    'fallback': True,
+                    'fallback_reason': str(exc),
+                    'topology': topology,
+                })
+                curve_warnings.append({
+                    'curve': name,
+                    'info': 'Topology decoder failed; the same evidence was decoded with legacy DP.',
+                    'decoder_fallback': True,
+                    'reason': str(exc),
+                })
+                if phase2_active and phase2_auxiliary.get('direction_field') is not None and not wrap_enabled:
+                    xs = decode_phase2_path(
+                        mask.astype(np.float32) / 255.0,
+                        phase2_auxiliary['direction_field'],
+                        max_step=max_step_dp,
+                        smooth_lambda=dp_smooth_lambda,
+                        direction_weight=float(c.get('phase2_direction_weight', 0.15)),
+                    )
+                    confidence = np.zeros(xs.shape, dtype=np.float32)
+                else:
+                    xs, confidence = trace_curve_with_dp(
+                        mask,
+                        scale_min=left_value,
+                        scale_max=right_value,
+                        curve_type=curve_type,
+                        max_step=max_step_dp,
+                        smooth_lambda=dp_smooth_lambda,
+                        curv_lambda=dp_curv_lambda,
+                        hot_side=hot_side,
+                        wrap_enabled=wrap_enabled,
+                    )
+        elif phase2_active and phase2_auxiliary.get('direction_field') is not None:
+            phase_metadata.update({
+                'requested_decoder': 'legacy_dp',
+                'actual_decoder': 'legacy_dp',
+                'decoder_fallback': False,
+                'fallback': False,
+                'fallback_reason': None,
+                'topology': 'cylindrical' if wrap_enabled else 'bounded',
+            })
+            if wrap_enabled:
+                xs, confidence = trace_curve_with_dp(
+                    mask,
+                    scale_min=left_value,
+                    scale_max=right_value,
+                    curve_type=curve_type,
+                    max_step=max_step_dp,
+                    smooth_lambda=dp_smooth_lambda,
+                    curv_lambda=dp_curv_lambda,
+                    hot_side=hot_side,
+                    wrap_enabled=True,
+                )
+                phase_metadata['direction_adjustment_applied'] = False
+                phase_metadata['direction_adjustment_reason'] = 'Existing wrapped decoder retained; Phase 3 owns wrap-aware direction state.'
+            else:
+                xs = decode_phase2_path(
+                    mask.astype(np.float32) / 255.0,
+                    phase2_auxiliary['direction_field'],
+                    max_step=max_step_dp,
+                    smooth_lambda=dp_smooth_lambda,
+                    direction_weight=float(c.get('phase2_direction_weight', 0.15)),
+                )
+                confidence = np.zeros(xs.shape, dtype=np.float32)
+                phase_metadata['direction_adjustment_applied'] = True
+            confidence, confidence_summary = phase2_confidence(
+                xs,
+                mask.astype(np.float32) / 255.0,
+                phase2_auxiliary['centerline_probability'],
+                phase2_auxiliary['distance_field'],
+                phase2_auxiliary['direction_field'],
+                phase2_auxiliary['grid_probability'],
+                classic_probability=classic_mask,
+            )
+            phase_metadata['confidence_by_row'] = confidence.tolist()
+            phase_metadata['confidence_summary'] = confidence_summary
         elif ai_tracer.is_available() and trace_mode == "ai_tracer":
             xs, confidence = _trace_ai_with_dp_fallback(
                 roi,
@@ -11851,6 +12081,7 @@ def digitize():
                 dp_smooth_lambda,
                 dp_curv_lambda,
                 hot_side,
+                wrap_enabled,
             )
         elif pixel_perfect and mode in colored_modes:
             gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
@@ -11901,6 +12132,7 @@ def digitize():
                 smooth_lambda=dp_smooth_lambda,
                 curv_lambda=dp_curv_lambda,
                 hot_side=hot_side,
+                wrap_enabled=wrap_enabled,
             )
 
             # 2. Local Peak Search Fusion
@@ -12217,7 +12449,7 @@ def digitize():
             if wrap_enabled:
                 xs = np.mod(xs, float(width_px)).astype(np.float32)
 
-        if mode not in colored_modes and not preserve_black_detail:
+        if mode not in colored_modes and not phase2_active and not topology_active and not preserve_black_detail:
             try:
                 xs = suppress_black_grid_lock_runs(
                     roi,
@@ -12258,7 +12490,7 @@ def digitize():
         # saved black capture set.
 
         # For colored modes, apply specific enhancements (peaks, centerline refinement)
-        if mode in colored_modes:
+        if mode in colored_modes and not topology_active:
             if curve_type.upper() == "GR":
                 prob_map = mask.astype(np.float32) / 255.0
                 xs = ensure_gr_peak_crests(xs, prob_map, hot_side=hot_side, min_prob=0.01)
@@ -12335,7 +12567,7 @@ def digitize():
                             xs_refined_final[y] = x_min + local_peak_idx
                 
                 xs = xs_refined_final
-        else:
+        elif not phase2_active and not topology_active:
             # For non-colored modes, keep the original vertical-rail rejection logic
             xs_valid = xs[~np.isnan(xs)]
             if xs_valid.size > 0:
@@ -12356,7 +12588,28 @@ def digitize():
                 if std_x < std_threshold:
                     xs[:] = np.nan
 
-        vals, scale_meta = _scale_trace_values(c, xs, width_px)
+        if topology_result is not None:
+            topology_scale_type = str(c.get('scale_type') or 'linear').lower().strip()
+            if topology_scale_type not in {'linear', 'log'}:
+                topology_scale_type = 'linear'
+            vals = path_to_values(
+                xs,
+                topology_result.wrap_index_by_row,
+                TopologyScaleConfig(
+                    track_width=width_px,
+                    left_value=left_value,
+                    right_value=right_value,
+                    scale_type=topology_scale_type,
+                ),
+            )
+            scale_meta = {
+                'auto_wrapped': False,
+                'wrap_enabled': topology == 'cylindrical',
+                'scale_type': topology_scale_type,
+                'wrap_source': 'topology_decoder',
+            }
+        else:
+            vals, scale_meta = _scale_trace_values(c, xs, width_px)
 
         if scale_meta['auto_wrapped']:
             curve_warnings.append({
@@ -12391,6 +12644,18 @@ def digitize():
                     trace_points.append([x_img, y_img])
 
         curve_traces[name] = trace_points
+
+        if topology_result is not None:
+            curve_trace_segments[name] = [
+                {
+                    **segment.to_dict(),
+                    'points': [
+                        [float(left_px) + float(x), float(top) + float(row)]
+                        for x, row in segment.points
+                    ],
+                }
+                for segment in topology_result.visible_segments
+            ]
 
         if trace_debug_export and mode not in colored_modes:
             try:
@@ -12514,6 +12779,8 @@ def digitize():
         'depth_warnings': depth_warnings,
         'curve_warnings': curve_warnings,
         'curve_traces': curve_traces,
+        'curve_trace_segments': curve_trace_segments,
+        'curve_trace_metadata': curve_trace_metadata,
         'curve_trace_debug': curve_trace_debug if trace_debug_export else {},
         'ai_payload': ai_payload if include_heavy_response else None,
         'ai_summary': ai_summary if include_heavy_response else None,
@@ -13873,12 +14140,22 @@ def download_las_zip():
     curves = data.get('curves')
     header_metadata = data.get('header_metadata') or {}
     depth_unit = data.get('depth_unit', 'FT')
+    null_value = data.get('null_value', -999.25)
     
     if not depths or not curves:
         return jsonify({'error': 'Missing depth or curve data'}), 400
         
     try:
+        null_value = float(null_value)
+        if not np.isfinite(null_value):
+            raise ValueError('LAS null value must be finite')
         depth_arr = np.array(depths, dtype=np.float32)
+        if depth_arr.ndim != 1 or depth_arr.size == 0 or not np.all(np.isfinite(depth_arr)):
+            raise ValueError('Depths must be a non-empty finite one-dimensional array')
+        if depth_arr.size > 1:
+            depth_steps = np.diff(depth_arr)
+            if np.any(depth_steps == 0) or not (np.all(depth_steps > 0) or np.all(depth_steps < 0)):
+                raise ValueError('Depths must be strictly monotonic')
         
         # --- MERGE WRAPPED CURVES ---
         processed_curves = {}
@@ -13890,10 +14167,17 @@ def download_las_zip():
             if c_lower.endswith('_wrap') or c_lower.endswith('_wrapped'):
                 wrap_curves[curve_name] = curve_info
             else:
+                raw_values = curve_info.get('values', [])
+                if not isinstance(raw_values, list) or len(raw_values) != len(depth_arr):
+                    raise ValueError(f'Curve {curve_name} values must match the depth count')
+                numeric_values = np.asarray(raw_values, dtype=np.float64)
+                if np.any(np.isinf(numeric_values)):
+                    raise ValueError(f'Curve {curve_name} contains infinite values')
+                numeric_values[np.isnan(numeric_values)] = float(null_value)
                 # Make a deep copy to avoid mutating original dict if reused
                 processed_curves[curve_name] = {
                     'unit': curve_info.get('unit', ''),
-                    'values': list(curve_info.get('values', []))
+                    'values': numeric_values.tolist()
                 }
                 
         # Apply wrapped curve data to main curves
@@ -13915,13 +14199,15 @@ def download_las_zip():
                 main_vals = np.array(processed_curves[actual_main_name]['values'], dtype=np.float32)
                 wrap_vals = np.array(wrap_info.get('values', []), dtype=np.float32)
                 
-                # Check for length mismatch (shouldn't happen but be safe)
-                min_len = min(len(main_vals), len(wrap_vals))
+                if len(main_vals) != len(wrap_vals):
+                    raise ValueError(f'Wrapped curve {wrap_name} values must match main curve {actual_main_name}')
+                if np.any(np.isinf(wrap_vals)):
+                    raise ValueError(f'Wrapped curve {wrap_name} contains infinite values')
                 
                 # A value is valid if it's not nan and not the standard LAS null value
-                valid_wrap_mask = ~np.isnan(wrap_vals[:min_len]) & (wrap_vals[:min_len] != -999.25)
+                valid_wrap_mask = ~np.isnan(wrap_vals) & (wrap_vals != float(null_value))
                 
-                main_vals[:min_len][valid_wrap_mask] = wrap_vals[:min_len][valid_wrap_mask]
+                main_vals[valid_wrap_mask] = wrap_vals[valid_wrap_mask]
                 processed_curves[actual_main_name]['values'] = main_vals.tolist()
                 
                 # Inherit units if main curve doesn't have one and wrapped does
@@ -13944,7 +14230,7 @@ def download_las_zip():
                 }
                 
                 # Generate LAS content
-                las_content = write_las_simple(depth_arr, single_curve_data, depth_unit, header_metadata)
+                las_content = write_las_simple(depth_arr, single_curve_data, depth_unit, header_metadata, null_value)
                 
                 # Add to ZIP
                 # Filename: WellName_CurveName.las
