@@ -2512,7 +2512,12 @@ def suppress_grid_hough(gray, h_thresh_ratio=0.25, v_thresh_ratio=0.25):
     return cleaned
 
 
-def score_and_suppress_black_components(mask, xs_guide, curve_type=None):
+def score_and_suppress_black_components(
+    mask,
+    xs_guide,
+    curve_type=None,
+    use_guide_distance=False,
+):
     """Connected-Component (CC) Scoring to filter out grid/labels from black curves.
     
     Scores components based on aspect ratio, vertical continuity, thinness,
@@ -2577,17 +2582,31 @@ def score_and_suppress_black_components(mask, xs_guide, curve_type=None):
             else:
                 mean_dist = abs(float(centroids[label][0]) - w_mask / 2.0)
 
-            # 2. Rejection of horizontal grid lines / shelves
+            component_width_ratio = float(w) / max(1.0, float(w_mask))
+            component_height_ratio = float(h) / max(1.0, float(h_mask))
+
+            # 2. Rejection of horizontal grid lines / shelves. A vertically
+            # continuous curve may legitimately span much of the track while
+            # it makes large excursions, so absolute width is only suspicious
+            # when the component is also horizontally shaped or short.
             # Horizontal lines have high aspect ratio (w/h) and a wide horizontal span
             horiz_penalty = 1.0
             if aspect > 1.1:
                 # Penalize aspect ratio
                 horiz_penalty *= max(0.01, 1.0 - (aspect - 1.1) * 1.5)
             # Absolute width penalty: if component spans a significant chunk of track
-            w_ratio = float(w) / float(w_mask)
-            if w_ratio > 0.12:
-                horiz_penalty *= max(0.01, 1.0 - (w_ratio - 0.12) * 5.0)
-            if aspect > 2.0 or w_ratio > 0.25:
+            if component_width_ratio > 0.12 and component_height_ratio < 0.20:
+                horiz_penalty *= max(
+                    0.01,
+                    1.0 - (component_width_ratio - 0.12) * 5.0,
+                )
+            if (
+                aspect > 2.0
+                or (
+                    component_width_ratio > 0.25
+                    and component_height_ratio < 0.20
+                )
+            ):
                 horiz_penalty = min(horiz_penalty, 0.005)
 
             # 3. Rejection of annotations/text
@@ -2599,18 +2618,27 @@ def score_and_suppress_black_components(mask, xs_guide, curve_type=None):
 
             # 4. Global distance penalty (suppress track borders/other tracks)
             dist_penalty = 1.0
-            if mean_dist > 6.0:
-                dist_penalty *= np.exp(-0.04 * (mean_dist - 6.0))
-            if mean_dist > 35.0:
-                dist_penalty = min(dist_penalty, 0.005)
+            if use_guide_distance:
+                if mean_dist > 6.0:
+                    dist_penalty *= np.exp(-0.04 * (mean_dist - 6.0))
+                if mean_dist > 35.0:
+                    dist_penalty = min(dist_penalty, 0.005)
 
             # 5. Vertical continuity boost
-            # Vertically long components are much more likely to be the curve
-            continuity_boost = 1.0
-            if h > 40:
-                continuity_boost = 1.25
+            # Full-height, narrow components are rails, not evidence that
+            # should be strengthened merely because they are continuous.
+            looks_like_vertical_rail = (
+                component_height_ratio >= 0.25
+                and component_width_ratio <= 0.025
+            )
+            if looks_like_vertical_rail:
+                continuity_boost = 0.10
+            elif h > 40:
+                continuity_boost = 1.10
             elif h < 8 and mean_dist > 8.0:
                 continuity_boost = 0.1  # suppress short segments that are away from guide
+            else:
+                continuity_boost = 1.0
 
             # Combine scores
             score_mult = horiz_penalty * text_penalty * dist_penalty * continuity_boost
@@ -6343,9 +6371,15 @@ def enforce_local_trace_continuity(
         return xs
     circular = wrap_width is not None and float(wrap_width) > 1.0
     width = float(wrap_width) if circular else float(w)
-    step_limit = max(2.0, min(float(max_step), max(2.0, width * 0.06)))
+    step_limit = max(2.0, min(float(max_step), max(2.0, width * 0.25)))
     radius = int(round(search_radius)) if search_radius is not None else int(round(step_limit + 3.0))
-    radius = max(3, min(radius, max(3, int(round(width * 0.08)))))
+    radius = max(
+        3,
+        min(
+            radius,
+            max(3, min(32, int(round(width * 0.25)))),
+        ),
+    )
     # A real curve pixel normally persists over several rows.  This modest
     # vertical score rejects isolated grid intersections without demanding a
     # perfectly continuous scan.
@@ -12174,6 +12208,10 @@ def digitize():
             str(mode or '').strip().lower() == 'black'
             and bool(black_gr_names & {'GR', 'GAMMA', 'GAMMA RAY'})
         )
+        high_excursion_black = (
+            str(mode or '').strip().lower() == 'black'
+            and (is_black_gr or preserve_wiggles or crest_boost)
+        )
         hot_side = resolve_curve_hot_side(
             hot_side,
             left_value,
@@ -12306,11 +12344,11 @@ def digitize():
             })
 
         # Pipeline: Connected-Component Cleanup
-        if enable_cc_cleanup and not phase2_active:
+        if enable_cc_cleanup and not phase2_active and mode in colored_modes:
             mask = pipeline_cc_cleanup(mask, min_size=20)
 
         # Pipeline: Skeletonization / Thinning
-        if enable_skeletonization and not phase2_active:
+        if enable_skeletonization and not phase2_active and mode in colored_modes:
             mask = pipeline_skeletonize(mask)
 
         if analysis_guidance and not phase2_active:
@@ -12335,6 +12373,11 @@ def digitize():
                     'manual_review': True,
                     'regions': low_confidence_sections[:12],
                 })
+
+        # Preserve the detector evidence before the advisory first-pass guide
+        # scores components. Final black continuity validation must be able to
+        # see a genuine competing curve even when the guide chose a rail.
+        evidence_mask = mask.copy()
 
         if mode not in {"green", "red", "blue", "auto", "cyan", "magenta", "yellow", "orange", "purple"}:
             _pm = mask.astype(np.float32) / 255.0
@@ -12412,7 +12455,17 @@ def digitize():
             # raster rows. The previous 150-200px setting made Viterbi work
             # proportional to billions of transitions on tall logs and caused
             # Railway to return 502 while the worker continued for 20 minutes.
-            max_step_cap = max(3, min(32, int(os.environ.get('TURBOTIFF_MAX_STEP_CAP', '10'))))
+            default_step_cap = 28 if high_excursion_black else 10
+            try:
+                configured_cap = int(
+                    os.environ.get(
+                        'TURBOTIFF_MAX_STEP_CAP',
+                        str(default_step_cap),
+                    )
+                )
+            except (TypeError, ValueError):
+                configured_cap = default_step_cap
+            max_step_cap = max(3, min(32, configured_cap))
             max_step_dp = min(max_step_dp, max_step_cap)
             print(
                 f"[digitize-curve-start] curve={name} mode={mode} "
@@ -12789,7 +12842,12 @@ def digitize():
                         wrap_enabled=wrap_enabled,
                     )
                     if xs_guide is not None and xs_guide.size > 0:
-                        mask = score_and_suppress_black_components(mask, xs_guide, curve_type=curve_type)
+                        mask = score_and_suppress_black_components(
+                            mask,
+                            xs_guide,
+                            curve_type=curve_type,
+                            use_guide_distance=False,
+                        )
                 except Exception as e:
                     print(f"⚠️ score_and_suppress_black_components failed: {e}")
 
@@ -12954,6 +13012,11 @@ def digitize():
         # actual printed excursions we are trying to follow.
 
         width_px = mask.shape[1]
+        final_step = (
+            max(18.0, min(30.0, float(width_px) * 0.06))
+            if high_excursion_black
+            else 7.0
+        )
         classic_black_cleanup = (
             mode not in colored_modes
             and not phase2_active
@@ -12974,9 +13037,9 @@ def digitize():
                     xs = np.asarray(xs, dtype=np.float32).copy()
                 else:
                     xs = enforce_local_trace_continuity(
-                        mask,
+                        evidence_mask,
                         xs,
-                        max_step=max(4.0, min(8.0, float(width_px) * 0.025)),
+                        max_step=final_step,
                         wrap_width=width_px if wrap_enabled else None,
                     )
             except Exception:
@@ -13164,9 +13227,9 @@ def digitize():
                 # This is intentionally the last coordinate-changing tracing
                 # operation before canonical conversion.
                 xs = enforce_local_trace_continuity(
-                    mask,
+                    evidence_mask,
                     xs,
-                    max_step=12.0 if is_black_gr else 7.0,
+                    max_step=final_step,
                     wrap_width=wrap_width,
                 )
             except Exception:
