@@ -90,6 +90,43 @@ def test_sonic_hot_ink_refines_partial_candidate_without_filling_gap(monkeypatch
     assert float(np.median(refined[21:])) > 50.0
 
 
+def test_sonic_hot_ink_rejects_unconnected_horizontal_shelf_endpoints():
+    height, width = 190, 140
+    rows = np.arange(height, dtype=np.float32)
+    expected = 66.0 + 9.0 * np.sin(rows / 21.0)
+    roi = np.full((height, width, 3), 255, dtype=np.uint8)
+    curve_points = np.column_stack((
+        np.rint(expected).astype(np.int32),
+        rows.astype(np.int32),
+    ))
+    cv2.polylines(
+        roi,
+        [curve_points.reshape(-1, 1, 2)],
+        False,
+        (0, 0, 0),
+        2,
+        cv2.LINE_AA,
+    )
+
+    shelf_rows = np.asarray([30, 55, 80, 105, 130, 155], dtype=np.int32)
+    for row in shelf_rows:
+        # These dark shelves cross the real curve but their far endpoints do
+        # not continue vertically into curve ink.
+        cv2.line(roi, (12, int(row)), (126, int(row)), (0, 0, 0), 2)
+
+    refined = web_app.refine_black_sonic_trace_to_hot_ink(
+        roi,
+        (expected - 12.0).astype(np.float32),
+        hot_side="right",
+        search_radius=75,
+    )
+
+    shelf_values = refined[shelf_rows]
+    supported = np.isfinite(shelf_values)
+    assert np.all(np.abs(shelf_values[supported] - 126.0) > 25.0)
+    assert float(np.nanmedian(np.abs(refined - expected))) < 5.0
+
+
 def test_wrapped_sonic_refinement_switches_crest_side_with_visible_branch():
     height, width = 210, 120
     rows = np.arange(height, dtype=np.float32)

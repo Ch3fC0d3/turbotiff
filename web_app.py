@@ -6944,6 +6944,36 @@ def refine_black_sonic_trace_to_hot_ink(
             else:
                 selected_edge = run_left
                 distance = max(0.0, current - float(run_right))
+            anchor_gap = (
+                0.0
+                if run_left <= center <= run_right
+                else min(
+                    abs(float(run_left) - current),
+                    abs(float(run_right) - current),
+                )
+            )
+            if wrap_enabled:
+                anchor_gap = min(anchor_gap, float(w) - anchor_gap)
+            if anchor_gap > float(radius):
+                continue
+
+            # Score the proposed endpoint itself, not the strongest pixel
+            # somewhere else in the run. A horizontal grid/annotation stroke
+            # may cross the incoming anchor and have strong support near that
+            # crossing while its distant endpoint is unrelated to the curve.
+            endpoint_support = float(support[y, selected_edge])
+            endpoint_x0 = max(0, selected_edge - 2)
+            endpoint_x1 = min(w, selected_edge + 3)
+            upper_connected = bool(np.any(
+                dark[max(0, y - 4):y, endpoint_x0:endpoint_x1]
+            ))
+            lower_connected = bool(np.any(
+                dark[y + 1:min(h, y + 5), endpoint_x0:endpoint_x1]
+            ))
+            if endpoint_support < 0.12 or not (
+                upper_connected or lower_connected
+            ):
+                continue
             edge_like_rail = (
                 selected_edge <= int(round(w * 0.08))
                 or selected_edge >= int(round(w * 0.78))
@@ -6951,7 +6981,8 @@ def refine_black_sonic_trace_to_hot_ink(
             if edge_like_rail:
                 continue
             score = (
-                support_peak
+                0.55 * support_peak
+                + 0.65 * endpoint_support
                 - 1.5 * rail_occupancy
                 - (0.003 if wrap_enabled else 0.0005) * distance
                 + 0.01 * min(run_width, 30)
