@@ -6362,10 +6362,14 @@ def enforce_local_trace_continuity(
         return delta
 
     for y in range(n):
+        # Upstream rejection is authoritative. Do not let the local search
+        # recreate a coordinate on a row deliberately marked unsupported.
+        if not np.isfinite(xs[y]):
+            gap_rows += 1
+            continue
+
         if last_x is None:
-            proposed = float(xs[y]) if np.isfinite(xs[y]) else np.nan
-            if not np.isfinite(proposed):
-                continue
+            proposed = float(xs[y])
             center = int(round(proposed))
             if circular:
                 cols = np.mod(np.arange(center - 1, center + 2), w)
@@ -7028,7 +7032,7 @@ def refine_black_trace_to_dark_run_center(
     return xs_ref
 
 
-def recenter_black_trace_post_dp(roi_bgr, xs, wrap_width=None):
+def recenter_black_trace_post_dp(roi_bgr, xs, wrap_width=None, preserve_missing=True):
     """
     A purely mathematical post-processing step to center an edge-hugging black trace.
     It looks at the dark ink immediately around the existing trace and shifts the 
@@ -7117,24 +7121,149 @@ def recenter_black_trace_post_dp(roi_bgr, xs, wrap_width=None):
             # Mark it unsupported; a later stage must not bridge it.
             xs_centered[y] = np.nan
             
-    # Smooth only existing supported samples; grid gaps remain missing.
+    # Smooth only existing supported samples. Pandas rolling operations with
+    # min_periods=1 calculate values inside NaN gaps from their neighbours, so
+    # explicitly restore the support mask after filtering. This includes both
+    # gaps supplied by the caller and grid intersections rejected above.
     try:
         import pandas as pd
         values = _unwrap_trace_for_filtering(xs_centered, wrap_width) if circular else xs_centered
-        s = pd.Series(values)
-        xs_centered = s.to_numpy()
-        
-        # Apply a rolling median to remove jagged 1-pixel snaps, then a light mean
-        s2 = pd.Series(xs_centered)
+        supported = np.isfinite(values)
+
+        # Apply a rolling median to remove jagged 1-pixel snaps, then a light
+        # mean, without allowing either filter to claim unsupported rows.
+        s2 = pd.Series(values)
         s2 = s2.rolling(window=5, center=True, min_periods=1).median()
         s2 = s2.rolling(window=3, center=True, min_periods=1).mean()
-        xs_centered = s2.to_numpy()
+        smoothed = s2.to_numpy(dtype=np.float32)
+        xs_centered = np.asarray(values, dtype=np.float32).copy()
+        xs_centered[supported] = smoothed[supported]
+        if preserve_missing:
+            xs_centered[~supported] = np.nan
         if circular:
-            xs_centered = np.mod(xs_centered, float(wrap_width))
+            xs_centered[supported] = np.mod(xs_centered[supported], float(wrap_width))
     except Exception:
         pass
         
     return xs_centered
+
+
+def bounded_gr_crest_snap(mask, xs, hot_side=None, max_shift=15, candidate_rows_only=True, wrap_width=None):
+    """Move only likely GR crest rows to nearby, connected curve evidence.
+
+    Unlike ``ensure_gr_peak_crests``, this helper never scans a full image row.
+    It considers local extrema in the existing trace, searches no farther than
+    ``max_shift`` pixels, and accepts only ink connected to the current sample.
+    Missing rows remain missing.
+    """
+    if mask is None or xs is None or hot_side not in ("left", "right"):
+        return xs
+    if not hasattr(xs, "size") or xs.size < 3:
+        return xs
+
+    prob = np.asarray(mask)
+    if prob.ndim == 3:
+        prob = cv2.cvtColor(prob, cv2.COLOR_BGR2GRAY)
+    if prob.ndim != 2 or prob.size == 0:
+        return xs
+    prob = prob.astype(np.float32)
+    if float(np.nanmax(prob)) > 1.0:
+        prob /= 255.0
+
+    h, w = prob.shape
+    out = np.asarray(xs, dtype=np.float32).copy()
+    supported = np.isfinite(out)
+    if not np.any(supported):
+        return out
+
+    circular = wrap_width is not None and float(wrap_width) > 1.0
+    metric = _unwrap_trace_for_filtering(out, wrap_width) if circular else out.copy()
+    direction = 1.0 if hot_side == "right" else -1.0
+    hot_metric = metric * direction
+    search_limit = max(1, min(15, int(round(float(max_shift)))))
+
+    candidate_rows = []
+    if candidate_rows_only:
+        finite_rows = np.where(np.isfinite(hot_metric[:min(h, out.size)]))[0]
+        for y in finite_rows:
+            before = hot_metric[max(0, y - 3):y]
+            after = hot_metric[y + 1:min(hot_metric.size, y + 4)]
+            before = before[np.isfinite(before)]
+            after = after[np.isfinite(after)]
+            if before.size == 0 or after.size == 0:
+                continue
+            current = float(hot_metric[y])
+            prominence = min(
+                current - float(np.min(before)),
+                current - float(np.min(after)),
+            )
+            if (
+                prominence >= 0.75
+                and current >= float(np.max(before)) - 0.5
+                and current >= float(np.max(after)) - 0.5
+            ):
+                candidate_rows.append(int(y))
+
+        # A broad printed crest can produce several adjacent candidates. Keep
+        # one representative row per cluster so tall-log work stays bounded.
+        clustered = []
+        for y in candidate_rows:
+            if not clustered or y - clustered[-1][-1] > 5:
+                clustered.append([y])
+            else:
+                clustered[-1].append(y)
+        candidate_rows = [
+            max(group, key=lambda row: float(hot_metric[row]))
+            for group in clustered
+        ]
+    else:
+        candidate_rows = list(np.where(supported[:min(h, out.size)])[0])
+
+    evidence_threshold = 0.05
+    for y in candidate_rows:
+        x_current = float(out[y])
+        x_visible = x_current % float(w) if circular else x_current
+        center = int(round(x_visible))
+        if center < 0 or center >= w:
+            continue
+
+        x0 = max(0, center - (2 if hot_side == "right" else search_limit))
+        x1 = min(w, center + (search_limit if hot_side == "right" else 2) + 1)
+        on = prob[y, x0:x1] >= evidence_threshold
+        if not np.any(on):
+            continue
+
+        relative_center = center - x0
+        ink = np.where(on)[0]
+        anchor = int(ink[int(np.argmin(np.abs(ink - relative_center)))])
+        if abs(anchor - relative_center) > 2:
+            continue
+
+        left = anchor
+        right = anchor
+        while left > 0 and bool(on[left - 1]):
+            left -= 1
+        while right + 1 < on.size and bool(on[right + 1]):
+            right += 1
+        target = x0 + (right if hot_side == "right" else left)
+        shift = float(target - center)
+        if abs(shift) > float(search_limit):
+            continue
+
+        # A lone horizontal grid pixel is not credible curve evidence.
+        yy0 = max(0, y - 1)
+        yy1 = min(h, y + 2)
+        xx0 = max(0, target - 1)
+        xx1 = min(w, target + 2)
+        if np.count_nonzero(prob[yy0:yy1, xx0:xx1] >= evidence_threshold) < 2:
+            continue
+
+        out[y] = float(x_current + shift)
+        if circular:
+            out[y] %= float(wrap_width)
+
+    out[~supported] = np.nan
+    return out
 
 
 def suppress_black_grid_lock_runs(roi_bgr, xs, curve_type=None, wrap_width=None):
@@ -12037,6 +12166,14 @@ def digitize():
             curve_name=name,
             preserve_wiggles=preserve_wiggles,
         )
+        black_gr_names = {
+            str(curve_type or '').strip().upper(),
+            str(name or '').strip().upper(),
+        }
+        is_black_gr = (
+            str(mode or '').strip().lower() == 'black'
+            and bool(black_gr_names & {'GR', 'GAMMA', 'GAMMA RAY'})
+        )
         hot_side = resolve_curve_hot_side(
             hot_side,
             left_value,
@@ -12704,7 +12841,17 @@ def digitize():
             # drew a horizontal line to the chart edge. Rolling-median
             # deviation > ~45 px is almost never a real excursion on a log
             # track because legitimate peaks are curved, not instantaneous.
-            if not preserve_black_detail:
+            if is_black_gr:
+                try:
+                    xs = guard_trace_outliers_rolling_median(
+                        xs,
+                        window=15,
+                        max_deviation=30.0,
+                        wrap_width=mask.shape[1] if wrap_enabled else None,
+                    )
+                except Exception:
+                    pass
+            elif not preserve_black_detail:
                 try:
                     xs = guard_trace_outliers_rolling_median(
                         xs,
@@ -12719,7 +12866,7 @@ def digitize():
             # line over several rows instead of the darkest single-row crest.
             # This avoids horizontal grid bars and filled blocks pulling the
             # trace into shelf artifacts.
-            if not preserve_black_detail:
+            if not preserve_black_detail and not is_black_gr:
                 try:
                     xs = refine_black_trace_to_continuous_line(
                         roi,
@@ -12734,7 +12881,7 @@ def digitize():
 
             # Second outlier pass: the line-following pass is conservative,
             # but keep the tighter guard as protection against noisy scans.
-            if not preserve_black_detail:
+            if not preserve_black_detail and not is_black_gr:
                 try:
                     xs = guard_trace_outliers_rolling_median(
                         xs,
@@ -12747,7 +12894,7 @@ def digitize():
 
             # Velocity guard: micro-crests jump 10-20 px in 1-2 rows.
             # Real geology moves gradually. Cap |dx/dy| to ~6 px/row.
-            if not preserve_black_detail:
+            if not preserve_black_detail and not is_black_gr:
                 try:
                     xs = guard_trace_velocity(
                         xs,
@@ -12759,7 +12906,7 @@ def digitize():
 
             # Median filter: remove 1-3 row horizontal glitches that survive
             # the outlier guards. The colored pipeline already does this.
-            if not preserve_black_detail:
+            if not preserve_black_detail and not is_black_gr:
                 try:
                     from scipy.signal import medfilt
                     xs_filled = _unwrap_trace_for_filtering(
@@ -12774,6 +12921,19 @@ def digitize():
                     if wrap_enabled:
                         xs_smooth = np.mod(xs_smooth, float(mask.shape[1]))
                     xs[valid_mask] = xs_smooth[valid_mask]
+                except Exception:
+                    pass
+
+            if is_black_gr:
+                try:
+                    xs = bounded_gr_crest_snap(
+                        mask,
+                        xs,
+                        hot_side=hot_side,
+                        max_shift=15,
+                        candidate_rows_only=True,
+                        wrap_width=mask.shape[1] if wrap_enabled else None,
+                    )
                 except Exception:
                     pass
 
@@ -12794,14 +12954,18 @@ def digitize():
         # actual printed excursions we are trying to follow.
 
         width_px = mask.shape[1]
+        classic_black_cleanup = (
+            mode not in colored_modes
+            and not phase2_active
+            and not topology_active
+            and not preserve_black_detail
+        )
 
-        # Final evidence/continuity gate.  Do this after all optional snapping
-        # passes, because those passes can otherwise select a distant grid bar
-        # for a single row.  Wrapped sonic traces deliberately move between
-        # chart branches, so a one-branch local gate would reject their real
-        # excursions and pin them to a rail.  Keep their established cyclic
-        # interpolation path until they use the topology decoder end-to-end.
-        if xs.size > 0:
+        # Final evidence/continuity gate.
+        # Pipelines that do not use the classic black cleanup retain their
+        # existing gate here. Classic black curves are validated later, after
+        # every coordinate-changing refinement and fallback has finished.
+        if xs.size > 0 and not classic_black_cleanup:
             try:
                 if wrap_enabled and preserve_black_detail:
                     # The black-detail path may contain genuine unsupported
@@ -12815,41 +12979,6 @@ def digitize():
                         max_step=max(4.0, min(8.0, float(width_px) * 0.025)),
                         wrap_width=width_px if wrap_enabled else None,
                     )
-            except Exception:
-                pass
-
-        if mode not in colored_modes and not phase2_active and not topology_active and not preserve_black_detail:
-            try:
-                xs = suppress_black_grid_lock_runs(
-                    roi,
-                    xs,
-                    curve_type=curve_type,
-                    wrap_width=width_px if wrap_enabled else None,
-                )
-            except Exception:
-                pass
-
-            try:
-                # Finish black mode the same way the successful color path
-                # does: re-center after the grid-lock cleanup, not before it.
-                # This keeps the line on the middle of the visible black ink
-                # instead of on the stroke edge or a nearby rail.
-                xs = refine_to_stroke_centerline(
-                    mask,
-                    xs,
-                    threshold_ratio=0.45,
-                    window_size=16,
-                    wrap_width=width_px if wrap_enabled else None,
-                )
-            except Exception:
-                pass
-
-            try:
-                xs = recenter_black_trace_post_dp(
-                    roi,
-                    xs,
-                    wrap_width=width_px if wrap_enabled else None,
-                )
             except Exception:
                 pass
 
@@ -13004,6 +13133,44 @@ def digitize():
                 # Slow curves like DTC/RHOB can legitimately have low std.
                 if std_x < std_threshold:
                     xs[:] = np.nan
+
+        if classic_black_cleanup:
+            wrap_width = width_px if wrap_enabled else None
+            try:
+                # Recenter before rail rejection. The support mask is restored
+                # after rolling filters so an existing gap can never reappear.
+                xs = recenter_black_trace_post_dp(
+                    roi,
+                    xs,
+                    wrap_width=wrap_width,
+                    preserve_missing=True,
+                )
+            except Exception:
+                pass
+
+            try:
+                # Rail rejection follows every operation that can select a
+                # different dark run.
+                xs = suppress_black_grid_lock_runs(
+                    roi,
+                    xs,
+                    curve_type=curve_type,
+                    wrap_width=wrap_width,
+                )
+            except Exception:
+                pass
+
+            try:
+                # This is intentionally the last coordinate-changing tracing
+                # operation before canonical conversion.
+                xs = enforce_local_trace_continuity(
+                    mask,
+                    xs,
+                    max_step=12.0 if is_black_gr else 7.0,
+                    wrap_width=wrap_width,
+                )
+            except Exception:
+                pass
 
         topology_scale_type = str(c.get('scale_type') or 'linear').lower().strip()
         if topology_scale_type not in {'linear', 'log', 'centered'}:

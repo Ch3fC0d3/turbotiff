@@ -243,6 +243,63 @@ class TrainingDataRegressionTests(unittest.TestCase):
             self.assertEqual(meta['scale_type'], curve['scale_type'])
 
 
+class BlackGrFinalizationRegressionTests(unittest.TestCase):
+    def test_recenter_preserves_rejected_rows(self):
+        roi = np.full((9, 21, 3), 255, dtype=np.uint8)
+        roi[:, 9:12] = 0
+        xs = np.array([10, 10, np.nan, np.nan, 10, 10, 10, 10, 10], dtype=np.float32)
+
+        result = web_app.recenter_black_trace_post_dp(
+            roi,
+            xs,
+            preserve_missing=True,
+        )
+
+        self.assertTrue(np.isnan(result[2]))
+        self.assertTrue(np.isnan(result[3]))
+        self.assertTrue(np.all(np.isfinite(result[[0, 1, 4, 5, 6, 7, 8]])))
+
+    def test_final_continuity_gate_does_not_recreate_rejected_rows(self):
+        mask = np.zeros((9, 21), dtype=np.uint8)
+        mask[:, 10] = 255
+        xs = np.array([10, 10, np.nan, np.nan, 10, 10, 10, 10, 10], dtype=np.float32)
+
+        result = web_app.enforce_local_trace_continuity(mask, xs, max_step=12.0)
+
+        self.assertTrue(np.isnan(result[2]))
+        self.assertTrue(np.isnan(result[3]))
+        self.assertEqual(float(result[4]), 10.0)
+
+    def test_bounded_gr_snap_moves_only_local_crest_to_connected_evidence(self):
+        mask = np.zeros((9, 30), dtype=np.uint8)
+        xs = np.array([5, 6, 7, 8, 9, 8, 7, 6, 5], dtype=np.float32)
+        for row, x in enumerate(xs.astype(int)):
+            mask[row, x] = 255
+        mask[4, 9:15] = 255
+        mask[3:6, 13:15] = 255
+
+        result = web_app.bounded_gr_crest_snap(
+            mask,
+            xs,
+            hot_side='right',
+            max_shift=15,
+            candidate_rows_only=True,
+        )
+
+        self.assertEqual(float(result[4]), 14.0)
+        np.testing.assert_array_equal(result[[0, 1, 2, 6, 7, 8]], xs[[0, 1, 2, 6, 7, 8]])
+        self.assertLessEqual(float(np.nanmax(np.abs(result - xs))), 15.0)
+
+    def test_bounded_gr_snap_preserves_missing_rows(self):
+        mask = np.full((7, 20), 255, dtype=np.uint8)
+        xs = np.array([5, 6, np.nan, np.nan, 7, 6, 5], dtype=np.float32)
+
+        result = web_app.bounded_gr_crest_snap(mask, xs, hot_side='right')
+
+        self.assertTrue(np.isnan(result[2]))
+        self.assertTrue(np.isnan(result[3]))
+
+
 class EndpointSecurityRegressionTests(unittest.TestCase):
     def setUp(self):
         web_app.app.config.update(TESTING=True)
