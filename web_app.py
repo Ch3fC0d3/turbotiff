@@ -12037,11 +12037,6 @@ def digitize():
             curve_name=name,
             preserve_wiggles=preserve_wiggles,
         )
-        preserve_black_gr_crests = (
-            str(mode or '').strip().lower() == 'black'
-            and ({str(curve_type or '').strip().upper(), str(name or '').strip().upper()}
-                 & {'GR', 'GAMMA', 'GAMMA RAY'})
-        )
         hot_side = resolve_curve_hot_side(
             hot_side,
             left_value,
@@ -12709,7 +12704,7 @@ def digitize():
             # drew a horizontal line to the chart edge. Rolling-median
             # deviation > ~45 px is almost never a real excursion on a log
             # track because legitimate peaks are curved, not instantaneous.
-            if not preserve_black_detail and not preserve_black_gr_crests:
+            if not preserve_black_detail:
                 try:
                     xs = guard_trace_outliers_rolling_median(
                         xs,
@@ -12724,7 +12719,7 @@ def digitize():
             # line over several rows instead of the darkest single-row crest.
             # This avoids horizontal grid bars and filled blocks pulling the
             # trace into shelf artifacts.
-            if not preserve_black_detail and not preserve_black_gr_crests:
+            if not preserve_black_detail:
                 try:
                     xs = refine_black_trace_to_continuous_line(
                         roi,
@@ -12739,7 +12734,7 @@ def digitize():
 
             # Second outlier pass: the line-following pass is conservative,
             # but keep the tighter guard as protection against noisy scans.
-            if not preserve_black_detail and not preserve_black_gr_crests:
+            if not preserve_black_detail:
                 try:
                     xs = guard_trace_outliers_rolling_median(
                         xs,
@@ -12752,7 +12747,7 @@ def digitize():
 
             # Velocity guard: micro-crests jump 10-20 px in 1-2 rows.
             # Real geology moves gradually. Cap |dx/dy| to ~6 px/row.
-            if not preserve_black_detail and not preserve_black_gr_crests:
+            if not preserve_black_detail:
                 try:
                     xs = guard_trace_velocity(
                         xs,
@@ -12764,7 +12759,7 @@ def digitize():
 
             # Median filter: remove 1-3 row horizontal glitches that survive
             # the outlier guards. The colored pipeline already does this.
-            if not preserve_black_detail and not preserve_black_gr_crests:
+            if not preserve_black_detail:
                 try:
                     from scipy.signal import medfilt
                     xs_filled = _unwrap_trace_for_filtering(
@@ -12817,11 +12812,7 @@ def digitize():
                     xs = enforce_local_trace_continuity(
                         mask,
                         xs,
-                        max_step=(
-                            max(8.0, min(16.0, float(width_px) * 0.06))
-                            if preserve_black_gr_crests
-                            else max(4.0, min(8.0, float(width_px) * 0.025))
-                        ),
+                        max_step=max(4.0, min(8.0, float(width_px) * 0.025)),
                         wrap_width=width_px if wrap_enabled else None,
                     )
             except Exception:
@@ -12838,39 +12829,29 @@ def digitize():
             except Exception:
                 pass
 
-            if preserve_black_gr_crests:
-                try:
-                    # Restore the evidence-backed crest tips only after rail
-                    # cleanup so later centering cannot pull them inward.
-                    xs = ensure_gr_peak_crests(
-                        xs,
-                        mask.astype(np.float32) / 255.0,
-                        hot_side=hot_side,
-                        max_dx_pixels=30,
-                    )
-                except Exception:
-                    pass
-            else:
-                try:
-                    # Finish smooth black modes by re-centering after grid cleanup.
-                    xs = refine_to_stroke_centerline(
-                        mask,
-                        xs,
-                        threshold_ratio=0.45,
-                        window_size=16,
-                        wrap_width=width_px if wrap_enabled else None,
-                    )
-                except Exception:
-                    pass
+            try:
+                # Finish black mode the same way the successful color path
+                # does: re-center after the grid-lock cleanup, not before it.
+                # This keeps the line on the middle of the visible black ink
+                # instead of on the stroke edge or a nearby rail.
+                xs = refine_to_stroke_centerline(
+                    mask,
+                    xs,
+                    threshold_ratio=0.45,
+                    window_size=16,
+                    wrap_width=width_px if wrap_enabled else None,
+                )
+            except Exception:
+                pass
 
-                try:
-                    xs = recenter_black_trace_post_dp(
-                        roi,
-                        xs,
-                        wrap_width=width_px if wrap_enabled else None,
-                    )
-                except Exception:
-                    pass
+            try:
+                xs = recenter_black_trace_post_dp(
+                    roi,
+                    xs,
+                    wrap_width=width_px if wrap_enabled else None,
+                )
+            except Exception:
+                pass
 
         # Likewise, skip the old final non-GR black crest snap. The dark-run
         # recenter helper now already biases wide rows toward the reading-side
