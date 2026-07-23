@@ -2581,16 +2581,14 @@
                 step5Checked: step5Checkbox ? !!step5Checkbox.checked : null,
                 step2Checked: step2Checkbox ? !!step2Checkbox.checked : null,
                 hadWrapLayer: !!(foundBefore && foundBefore.entry && foundBefore.entry.wrapLayer),
+                originalWrapLayer: foundBefore && foundBefore.entry && foundBefore.entry.wrapLayer
+                    ? clonePersistenceValue(foundBefore.entry.wrapLayer) : null,
             };
-            if (!ctx.track.wrapped) {
-                if (step5Checkbox) step5Checkbox.checked = true;
-                ctx.track.wrapped = true;
-                s5UpdateTrackWrapped({ deferCurveMutation: true });
-            }
             pendingWrapPair = {
                 curveKey: ctx.curveKey, track: ctx.track, candidate: null,
                 datasetGeneration: committedDatasetGeneration, originalWrapConfig,
                 sourceRevision: getCurveLayerRevision(ctx.curveKey, 'main'),
+                requestedWrappedState: true,
             };
             updateWrapPairControls();
             updateScaleWrapStatus(ctx.curveKey);
@@ -2717,7 +2715,15 @@
             } catch (error) {
                 setWrapMarkersForCurve(operation.curveId, operation.originalMarkers);
                 commitCurveLayerValues(operation.curveId, 'main', operation.originalValues, { clearWrapMarkers: false, rebuildTrace: false, reason: `${operation.reason}_rollback` });
-                if (wrapLayerBefore) context.entry.wrapLayer = wrapLayerBefore; else delete context.entry.wrapLayer;
+                restorePendingWrapConfiguration({
+                    curveKey: operation.curveId,
+                    track: findTrackByCurveId(operation.curveId),
+                    originalWrapConfig: {
+                        ...(operation.originalWrapConfig || {}),
+                        hadWrapLayer: !!wrapLayerBefore,
+                        originalWrapLayer: wrapLayerBefore,
+                    },
+                });
                 rebuildCurveTraceFromDigitized(operation.curveId, 'main', { preserveBezierCache: true });
                 showStatus(`Wrap was not applied: ${error.message}`, 'error');
                 return { changed: false, reason: 'transaction_failed' };
@@ -2760,7 +2766,15 @@
             // Finish the deferred Step 2 wrapped-mode mutation only now.
             const curveIndex = findCurveCardIndex(pendingWrapPair.curveKey);
             const step2Checkbox = curveIndex >= 0 ? document.getElementById(`wrapped${curveIndex}`) : null;
-            if (step2Checkbox && step2Checkbox.checked) step2Checkbox.dispatchEvent(new Event('change'));
+            const step5Checkbox = document.getElementById('s5TrackWrapped');
+            if (pendingWrapPair.requestedWrappedState) {
+                pendingWrapPair.track.wrapped = true;
+                if (step5Checkbox) step5Checkbox.checked = true;
+                if (step2Checkbox && !step2Checkbox.checked) {
+                    step2Checkbox.checked = true;
+                    step2Checkbox.dispatchEvent(new Event('change'));
+                }
+            }
             const pairId = ordered[0].wrap_pair_id;
             pendingWrapPair = null;
             updateWrapPairControls();
@@ -2771,20 +2785,35 @@
 
         function s5CancelWrapPair() {
             const pending = pendingWrapPair;
-            if (pending && pending.originalWrapConfig && pending.track) {
-                const original = pending.originalWrapConfig;
-                pending.track.wrapped = original.trackWrapped;
-                const curveIndex = findCurveCardIndex(pending.curveKey);
-                const step5 = document.getElementById('s5TrackWrapped');
-                const step2 = curveIndex >= 0 ? document.getElementById(`wrapped${curveIndex}`) : null;
-                if (step5 && original.step5Checked != null) step5.checked = original.step5Checked;
-                if (step2 && original.step2Checked != null) step2.checked = original.step2Checked;
-            }
+            restorePendingWrapConfiguration(pending);
             pendingWrapPair = null;
             updateWrapPairControls();
             if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
             updateScaleWrapStatus();
             showStatus('Wrap cancelled.', 'info');
+        }
+
+        function restorePendingWrapConfiguration(pending) {
+            if (!pending || !pending.originalWrapConfig) return;
+            const original = pending.originalWrapConfig;
+            const found = findDigitizedCurveEntry(pending.curveKey);
+            if (!original.hadWrapLayer && found && found.entry && found.entry.wrapLayer) {
+                removeCurveWrapLayer(pending.curveKey, { reason: 'cancel_pending_wrap_remove_layer', rebuildTrace: false });
+            } else if (original.hadWrapLayer && original.originalWrapLayer) {
+                const layer = original.originalWrapLayer;
+                // Replace rather than merge: Ctrl+Z must restore the precise pre-wrap layer,
+                // including its metadata, not retain fields created by the confirmed edit.
+                if (found && found.entry && found.entry.wrapLayer) {
+                    removeCurveWrapLayer(pending.curveKey, { reason: 'cancel_pending_wrap_replace_layer', rebuildTrace: false });
+                }
+                createOrReplaceCurveWrapLayer(pending.curveKey, layer.values || [], layer, { reason: 'cancel_pending_wrap_restore_layer', rebuildTrace: false });
+            }
+            if (pending.track) pending.track.wrapped = !!original.trackWrapped;
+            const curveIndex = findCurveCardIndex(pending.curveKey);
+            const step5 = document.getElementById('s5TrackWrapped');
+            const step2 = curveIndex >= 0 ? document.getElementById(`wrapped${curveIndex}`) : null;
+            if (step5 && original.step5Checked != null) step5.checked = original.step5Checked;
+            if (step2 && original.step2Checked != null) step2.checked = original.step2Checked;
         }
 
         function cancelPendingWrapPair(reason = 'workspace_changed') {
@@ -8663,16 +8692,14 @@
                 if (!context || !Array.isArray(last.originalValues)) return;
                 setWrapMarkersForCurve(last.curveId, last.originalMarkers || []);
                 const track = findTrackByCurveId(last.curveId);
-                if (last.originalWrapConfig && track) {
-                    track.wrapped = !!last.originalWrapConfig.trackWrapped;
-                    const index = findCurveCardIndex(last.curveId);
-                    const step5 = document.getElementById('s5TrackWrapped');
-                    const step2 = index >= 0 ? document.getElementById(`wrapped${index}`) : null;
-                    if (step5 && last.originalWrapConfig.step5Checked != null) step5.checked = last.originalWrapConfig.step5Checked;
-                    if (step2 && last.originalWrapConfig.step2Checked != null) step2.checked = last.originalWrapConfig.step2Checked;
-                }
-                if (last.originalWrapLayer) context.entry.wrapLayer = clonePersistenceValue(last.originalWrapLayer);
-                else if (last.originalWrapConfig && last.originalWrapConfig.hadWrapLayer === false) delete context.entry.wrapLayer;
+                restorePendingWrapConfiguration({
+                    curveKey: last.curveId,
+                    track,
+                    originalWrapConfig: {
+                        ...(last.originalWrapConfig || {}),
+                        originalWrapLayer: last.originalWrapLayer || (last.originalWrapConfig && last.originalWrapConfig.originalWrapLayer) || null,
+                    },
+                });
                 commitCurveLayerValues(last.curveId, 'main', last.originalValues, {
                     clearWrapMarkers: false, rebuildTrace: true, cancelInteraction: true, reason: 'undo_wrap_pair_transform',
                 });

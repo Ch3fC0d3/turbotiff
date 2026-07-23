@@ -2524,8 +2524,8 @@ def score_and_suppress_black_components(mask, xs_guide, curve_type=None):
 
     h_mask, w_mask = mask.shape
     try:
-        # Interpolate NaNs in guide line so we have a continuous baseline
-        xs_guide_filled = pd.Series(xs_guide).interpolate(method='linear', limit_direction='both').ffill().bfill().to_numpy()
+        # A guide is advisory, never evidence for a fabricated curve bridge.
+        xs_guide_filled = np.asarray(xs_guide, dtype=np.float32).copy()
     except Exception:
         xs_guide_filled = xs_guide
 
@@ -3433,19 +3433,15 @@ def trace_curve_with_dp(
         finite = np.isfinite(xs_small)
         if not np.any(finite):
             return np.full(h, np.nan, dtype=np.float32), np.zeros(h, dtype=np.float32)
-        xs_full = np.interp(
-            target_rows,
-            source_rows[finite],
-            xs_small[finite],
-        ).astype(np.float32)
+        # Keep unsupported decoder rows as gaps when returning to full
+        # resolution.  A single global np.interp would bridge them.
+        xs_full = _resample_supported_rows(source_rows, xs_small, target_rows)
         conf_values = np.asarray(conf_small, dtype=np.float32)
-        conf_finite = np.isfinite(conf_values)
+        conf_finite = np.isfinite(conf_values) & finite
         if np.any(conf_finite):
-            conf_full = np.interp(
-                target_rows,
-                source_rows[conf_finite],
-                conf_values[conf_finite],
-            ).astype(np.float32)
+            conf_full = _resample_supported_rows(
+                source_rows, np.where(finite, conf_values, np.nan), target_rows
+            )
         else:
             conf_full = np.zeros(h, dtype=np.float32)
         return xs_full, conf_full
@@ -3676,25 +3672,8 @@ def trace_curve_with_dp(
     xs_bwd = xs_bwd_flipped[::-1]
     conf_bwd = conf_bwd_flipped[::-1]
 
-    # Each directional pass already follows a smooth DP path, but the fast
-    # tracer marks low-probability rows as NaN. On black scans that creates
-    # tiny one-row dropouts right where the curve crosses grid lines, and the
-    # forward/backward merge then "zipper switches" onto the other branch.
-    # Interpolating the per-pass dropouts preserves each branch's continuity
-    # before we decide which direction to trust per span.
-    try:
-        if xs_fwd.size:
-            xs_fwd = pd.Series(xs_fwd).interpolate(
-                method='linear',
-                limit_direction='both',
-            ).to_numpy(dtype=np.float32)
-        if xs_bwd.size:
-            xs_bwd = pd.Series(xs_bwd).interpolate(
-                method='linear',
-                limit_direction='both',
-            ).to_numpy(dtype=np.float32)
-    except Exception:
-        pass
+    # Preserve decoder dropouts as unsupported evidence.  Filling either pass
+    # here would create a bridge before the evidence gate can reject it.
     
     # Merge Forward and Backward results with a continuity-aware branch choice.
     # The forward/backward passes can occasionally lock onto different rails on
@@ -4409,10 +4388,7 @@ def trace_curve_pixel_perfect(mask: np.ndarray, grayscale: np.ndarray = None, bg
         if np.isfinite(x_new):
             prev_x = x_new
 
-    # Fill small gaps with linear interpolation (more permissive to bridge gaps)
-    s = pd.Series(xs)
-    s = s.interpolate(method='linear', limit_direction='both', limit=25)
-    xs = s.to_numpy(dtype=np.float32)
+    # Missing peak rows remain unsupported.  Do not connect separate ink runs.
 
     # No inertia smoothing to keep every wiggle
 
@@ -4861,11 +4837,11 @@ def trace_curve_multiscale(curve_mask, scale_min, scale_max, curve_type="GR", ma
         if np.sum(valid_mask) < 5:
             return xs_refined, curv_conf
         
-        # Fill NaNs for curvature calculation
+        # Curvature cannot safely span a missing-evidence section.  Leave the
+        # path untouched rather than creating temporary bridge geometry.
+        if not valid_mask.all():
+            return xs_refined, curv_conf
         xs_smooth = xs.copy()
-        xs_smooth[~valid_mask] = np.interp(np.where(~valid_mask)[0], 
-                                          np.where(valid_mask)[0], 
-                                          xs[valid_mask])
         
         # Calculate curvature (second derivative)
         curvature = np.gradient(np.gradient(xs_smooth))
@@ -5978,12 +5954,123 @@ def _unwrap_trace_for_filtering(xs, wrap_width):
     for idx in range(values.size):
         current = float(values[idx])
         if not np.isfinite(current):
+            # Do not infer a post-gap coordinate or wrap cycle from the point
+            # before unsupported image evidence.
+            previous = np.nan
             continue
         if np.isfinite(previous):
-            current += round((float(previous) - current) / width) * width
+            # Legacy visible coordinates can be migrated only at a credible
+            # opposite-edge transition.  Choosing the mathematically nearest
+            # cycle for an arbitrary large visible move would guess a wrap.
+            previous_cycle = math.floor(float(previous) / width)
+            previous_visible = float(previous) - previous_cycle * width
+            # Migration is deliberately stricter than interactive pair
+            # validation: only points close to the physical rails justify
+            # inferring a legacy wrap without an explicit cycle.
+            edge_zone = width * 0.15
+            if previous_visible >= width - edge_zone and current <= edge_zone:
+                current += (previous_cycle + 1) * width
+            elif previous_visible <= edge_zone and current >= width - edge_zone:
+                current += (previous_cycle - 1) * width
+            else:
+                current += previous_cycle * width
             values[idx] = current
         previous = current
     return values
+
+
+def _resample_supported_rows(source_rows, values, target_rows):
+    """Resample contiguous finite runs only; unsupported rows remain NaN."""
+    source = np.asarray(source_rows, dtype=np.float32)
+    samples = np.asarray(values, dtype=np.float32)
+    target = np.asarray(target_rows, dtype=np.float32)
+    result = np.full(target.shape, np.nan, dtype=np.float32)
+    start = 0
+    while start < samples.size:
+        while start < samples.size and not np.isfinite(samples[start]):
+            start += 1
+        if start >= samples.size:
+            break
+        end = start + 1
+        while end < samples.size and np.isfinite(samples[end]):
+            end += 1
+        rows = source[start:end]
+        run = samples[start:end]
+        if run.size == 1:
+            result[np.isclose(target, rows[0])] = run[0]
+        else:
+            inside = (target >= rows[0]) & (target <= rows[-1])
+            result[inside] = np.interp(target[inside], rows, run).astype(np.float32)
+        start = end
+    return result
+
+
+# This is intentionally a code-level inventory.  Tests require every remaining
+# interpolation primitive below to be accounted for before new ones are added.
+APPROVED_INTERPOLATION_PATHS = {
+    "_resample_supported_rows": "segment-local resampling of finite runs only",
+    "resample_values_by_continuous_sections": "segment-local depth resampling only",
+    "ml_predict_curve": "model raster upsampling; detector output is evidence-gated before canonical construction",
+}
+
+
+def split_supported_trace_segments(xs, support_mask=None, explicit_breaks=None, wrap_events=None):
+    """Return inclusive row spans that cannot be joined to one another.
+
+    Missing values, rejected evidence, explicit breaks, and unresolved wrap
+    events all begin a new section.  This helper deliberately has no fill
+    behavior: callers must opt in to evidence-gated local reconstruction.
+    """
+    values = np.asarray(xs, dtype=np.float32)
+    support = np.ones(values.shape, dtype=bool) if support_mask is None else np.asarray(support_mask, dtype=bool)
+    if support.shape != values.shape:
+        raise ValueError("support_mask must match xs")
+    breaks = {int(row) for row in (explicit_breaks or []) if 0 < int(row) < values.size}
+    breaks.update(int(row) for row in (wrap_events or []) if 0 < int(row) < values.size)
+    segments, start = [], None
+    for row, value in enumerate(values):
+        starts_new = row in breaks
+        supported = np.isfinite(value) and bool(support[row])
+        if start is not None and (starts_new or not supported):
+            segments.append((start, row - 1))
+            start = None
+        if supported and start is None:
+            start = row
+    if start is not None:
+        segments.append((start, values.size - 1))
+    return segments
+
+
+def can_fill_trace_gap(start_row, end_row, probability, binary_mask=None,
+                       explicit_breaks=None, wrap_events=None, max_gap_rows=0,
+                       minimum_support=0.0):
+    """Allow a local fill only when every missing row has measured support.
+
+    The conservative default rejects all fills.  Probability/mask evidence is
+    required, and a break or unresolved wrap always wins over proximity.
+    """
+    if probability is None or end_row <= start_row + 1:
+        return False
+    gap_rows = range(int(start_row) + 1, int(end_row))
+    if len(gap_rows) > int(max_gap_rows):
+        return False
+    blocked = {int(row) for row in (explicit_breaks or [])}
+    blocked.update(int(row) for row in (wrap_events or []))
+    if any(row in blocked for row in range(int(start_row) + 1, int(end_row) + 1)):
+        return False
+    prob = np.asarray(probability)
+    if prob.ndim > 1:
+        # A row is supported only if the detector still has credible ink.
+        support = np.nanmax(prob, axis=1)
+    else:
+        support = prob
+    if any(row < 0 or row >= support.size or not np.isfinite(support[row]) or support[row] < minimum_support for row in gap_rows):
+        return False
+    if binary_mask is not None:
+        mask = np.asarray(binary_mask)
+        if any(row < 0 or row >= mask.shape[0] or not np.any(mask[row]) for row in gap_rows):
+            return False
+    return True
 
 
 def build_canonical_trace(
@@ -6140,11 +6227,9 @@ def guard_trace_outliers_rolling_median(xs, window=21, max_deviation=45.0, wrap_
     if not outliers.any():
         return xs
     s[outliers] = np.nan
-    s = s.interpolate(method="linear", limit_direction="both", limit=50)
-    result = s.to_numpy(dtype=np.float32)
-    if wrap_width is not None and float(wrap_width) > 1.0:
-        result = np.mod(result, float(wrap_width)).astype(np.float32)
-    return result
+    # Outliers are gaps; do not interpolate them or convert the continuous
+    # coordinate back to a visible wrapped position in processing code.
+    return s.to_numpy(dtype=np.float32)
 
 
 def guard_trace_velocity(xs, max_dx=6.0, wrap_width=None):
@@ -6166,11 +6251,7 @@ def guard_trace_velocity(xs, max_dx=6.0, wrap_width=None):
     if not spikes.any():
         return xs
     s[spikes] = np.nan
-    s = s.interpolate(method="linear", limit_direction="both", limit=10)
-    result = s.to_numpy(dtype=np.float32)
-    if wrap_width is not None and float(wrap_width) > 1.0:
-        result = np.mod(result, float(wrap_width)).astype(np.float32)
-    return result
+    return s.to_numpy(dtype=np.float32)
 
 
 def enforce_local_trace_continuity(
@@ -6464,10 +6545,8 @@ def refine_black_sonic_trace_to_hot_ink(
             bool(wrap_enabled),
         )
         finite_fraction = float(np.mean(np.isfinite(candidate_path)))
-        if finite_fraction >= 0.60:
-            result[:n] = pd.Series(candidate_path).interpolate(
-                limit_direction="both",
-            ).rolling(
+        if finite_fraction >= 0.60 and np.isfinite(candidate_path).all():
+            result[:n] = pd.Series(candidate_path).rolling(
                 5,
                 center=True,
                 min_periods=1,
@@ -6577,7 +6656,7 @@ def refine_black_trace_to_continuous_line(
 
     try:
         guide_values = _unwrap_trace_for_filtering(xs_ref[:n], wrap_width) if circular else xs_ref[:n]
-        filled = pd.Series(guide_values).interpolate(method="linear", limit_direction="both").ffill().bfill()
+        filled = pd.Series(guide_values)
         if filled.isna().any():
             return xs_ref
         guide_win = max(9, int(guide_window) | 1)
@@ -6587,7 +6666,9 @@ def refine_black_trace_to_continuous_line(
                 guide_win,
                 min_periods=max(3, min(9, guide_win // 3)),
                 center=True,
-            ).median().bfill().ffill()
+            ).median()
+            if guide_series.isna().any():
+                return xs_ref
         else:
             guide_series = filled
         raw_guide = filled.to_numpy(dtype=np.float32)
@@ -6978,15 +7059,14 @@ def recenter_black_trace_post_dp(roi_bgr, xs, wrap_width=None):
                 xs_centered[y] %= float(wrap_width)
         elif blob_width > 40:
             # It's a grid intersection. Don't center on the whole track.
-            # Mark as NaN so we can interpolate through it
+            # Mark it unsupported; a later stage must not bridge it.
             xs_centered[y] = np.nan
             
-    # Apply interpolation to fill the grid intersection gaps
+    # Smooth only existing supported samples; grid gaps remain missing.
     try:
         import pandas as pd
         values = _unwrap_trace_for_filtering(xs_centered, wrap_width) if circular else xs_centered
         s = pd.Series(values)
-        s = s.interpolate(method='linear', limit_direction='both', limit=20)
         xs_centered = s.to_numpy()
         
         # Apply a rolling median to remove jagged 1-pixel snaps, then a light mean
@@ -7113,17 +7193,7 @@ def suppress_black_grid_lock_runs(roi_bgr, xs, curve_type=None, wrap_width=None)
     for s, e in spans:
         interp_values[s:e + 1] = np.nan
 
-    try:
-        xs_ref = pd.Series(interp_values).interpolate(
-            method='linear',
-            limit_direction='both',
-            limit=max(25, int(xs_ref.size * 0.03)),
-            limit_area=None,
-        ).to_numpy(dtype=np.float32)
-        if circular:
-            xs_ref = np.mod(xs_ref, float(wrap_width)).astype(np.float32)
-    except Exception:
-        pass
+    xs_ref = interp_values.astype(np.float32)
 
     return xs_ref
 
@@ -7451,9 +7521,6 @@ def remove_outliers_and_smooth(xs, window=5, outlier_threshold=3.0):
     if window > 1:
         s = s.rolling(window, min_periods=1, center=True).median()
     
-    # Interpolate remaining gaps
-    s = s.interpolate(limit_direction="both", limit=50)
-    
     return s.to_numpy(dtype=np.float32)
 
 
@@ -7519,7 +7586,8 @@ def smooth_nanmedian(series, window):
         window += 1
     if window > 1:
         s = s.rolling(window, min_periods=1, center=True).median()
-    return s.interpolate(limit_direction="both", limit=50).to_numpy(dtype=np.float32)
+    # Median smoothing never converts missing evidence into a measurement.
+    return s.to_numpy(dtype=np.float32)
 
 def compute_depth_vector(nrows, top_depth, bottom_depth):
     ys = np.arange(nrows, dtype=np.float32)
@@ -12344,11 +12412,7 @@ def digitize():
                     crest_boost=crest_boost,
                 )
             width_px = mask.shape[1]
-            # Fill gaps gently to avoid dropping rows
-            if xs.size:
-                s = pd.Series(xs)
-                s = s.interpolate(method='linear', limit_direction='both', limit=max(10, int(xs.size * 0.02)))
-                xs = s.to_numpy(dtype=np.float32)
+            # Preserve unsupported detector rows for canonical break creation.
             # Hybrid post-processing: force missed ink peaks onto the curve
             prob = mask.astype(np.float32) / 255.0
             if crest_boost:
@@ -12455,8 +12519,7 @@ def digitize():
             # We don't run it here to avoid the downsampling smoothing out the sharp tips.
             
             # 8. Minimal cleanup only - NO aggressive snapping to far-away peaks
-            s = pd.Series(xs)
-            xs = s.interpolate(method='linear', limit_direction='both', limit=max(25, int(xs.size * 0.02))).to_numpy(dtype=np.float32)
+            # No post-detector fill: missing rows carry evidence provenance.
             
             # Map the horizontal coordinate back; row count never changed.
             xs = xs / 2.0
@@ -12686,14 +12749,10 @@ def digitize():
         if xs.size > 0:
             try:
                 if wrap_enabled and preserve_black_detail:
-                    gap_values = _unwrap_trace_for_filtering(xs, width_px)
-                    xs = pd.Series(gap_values).interpolate(
-                        method='linear',
-                        limit_direction='both',
-                        limit=25,
-                        limit_area=None,
-                    ).ffill(limit=25).bfill(limit=25).to_numpy(dtype=np.float32)
-                    xs = np.mod(xs, float(width_px)).astype(np.float32)
+                    # The black-detail path may contain genuine unsupported
+                    # rows.  Preserve them for the canonical trace rather
+                    # than bridging them with a cyclic display coordinate.
+                    xs = np.asarray(xs, dtype=np.float32).copy()
                 else:
                     xs = enforce_local_trace_continuity(
                         mask,
@@ -13409,17 +13468,10 @@ def refine_edit():
             return jsonify({'success': True, 'refinedX': float(edit_x), 'confidence': 0.0,
                             'originalX': float(edit_x), 'refinedPath': []})
         
-        # UNIVERSAL GAP FILLING (Same as main loop):
-        # Fill gaps from grid removal so the refined path is continuous
+        # Refinement is preview assistance only; preserve unsupported rows.
         if xs_refined is not None and xs_refined.size > 0:
             try:
-                s = pd.Series(xs_refined)
-                # Use at least 25px gap fill to bridge grid cuts
-                max_gap = 25
-                s = s.interpolate(method='linear', limit_direction='both', limit=max_gap, limit_area=None)
-                if s.isna().any():
-                    s = s.ffill(limit=max_gap).bfill(limit=max_gap)
-                xs_refined = s.to_numpy(dtype=np.float32)
+                xs_refined = np.asarray(xs_refined, dtype=np.float32).copy()
             except Exception:
                 pass
 
@@ -13880,10 +13932,8 @@ def _trace_points_to_row_x(
         if 0 <= row < xs.size and np.isfinite(x_image):
             xs[row] = x_image - float(left_px)
 
-    finite = np.isfinite(xs)
-    if finite.any() and not finite.all():
-        rows = np.arange(xs.size, dtype=np.float32)
-        xs[~finite] = np.interp(rows[~finite], rows[finite], xs[finite]).astype(np.float32)
+    # User preferences may contain sparse annotations.  Missing rows remain
+    # missing rather than becoming an authoritative reconstructed trace.
     return xs
 
 

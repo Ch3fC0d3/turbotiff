@@ -33,6 +33,32 @@ def test_missing_rows_are_explicit_non_interpolable_section_boundaries():
     assert trace["unwrapped_x"][1:3] == [None, None]
 
 
+def test_gap_does_not_guess_a_wrap_cycle_for_the_next_supported_row():
+    trace = build_canonical_trace(
+        np.array([98, np.nan, 2], dtype=np.float32),
+        100,
+        wrapped=True,
+    )
+
+    # There is no confirmed transition across the missing evidence, so the
+    # final point remains in its supplied/display cycle rather than being
+    # unwrapped relative to the point before the gap.
+    assert trace["unwrapped_x"] == [98.0, None, 2.0]
+    assert trace["wrap_cycle"] == [0, 0, 0]
+    assert trace["explicit_breaks"] == [1, 2]
+
+
+def test_legacy_visible_trace_only_infers_a_wrap_at_opposite_track_edges():
+    trace = build_canonical_trace(
+        np.array([20, 90], dtype=np.float32),
+        100,
+        wrapped=True,
+    )
+
+    assert trace["unwrapped_x"] == [20.0, 90.0]
+    assert trace["wrap_cycle"] == [0, 0]
+
+
 def test_las_calibration_uses_unwrapped_coordinates_across_multiple_cycles():
     trace = build_canonical_trace(
         np.array([97, 99, 1, 3], dtype=np.float32),

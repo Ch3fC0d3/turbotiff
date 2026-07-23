@@ -2343,7 +2343,9 @@ def test_trace_continuity_gate_keeps_missing_evidence_as_gaps_not_bridges():
     assert "result[y] = candidate" in gate_source
     assert "xs = enforce_local_trace_continuity(" in source[digitize_start:display_start]
     assert "if wrap_enabled and preserve_black_detail:" in source[digitize_start:display_start]
-    assert "gap_values = _unwrap_trace_for_filtering(xs, width_px)" in source[digitize_start:display_start]
+    final_gate_source = source[digitize_start:display_start]
+    assert "unsupported\n                    # rows" in final_gate_source
+    assert ".interpolate(" not in final_gate_source
     assert ".interpolate(" not in source[display_start:display_end]
 
 
@@ -2364,6 +2366,9 @@ def test_linked_wrap_pair_tool_validates_edges_and_preserves_render_breaks():
     evidence_source = source[evidence_start:evidence_end]
     add_wrap_source = _function_source(source, "s5AddWrapPairAtImageCoords", "s5ConfirmWrapPair")
     begin_wrap_source = _function_source(source, "s5BeginAddWrapPair", "s5AddWrapPairAtImageCoords")
+    cancel_wrap_source = _function_source(source, "s5CancelWrapPair", "cancelPendingWrapPair")
+    restore_wrap_source = _function_source(source, "restorePendingWrapConfiguration", "cancelPendingWrapPair")
+    undo_wrap_source = _function_source(source, "undoLastCurveEdit", "beginCurveEditInteraction")
     display_builder_source = _function_source(source, "buildDisplayTracePointsFromDigitized", "rebuildCurveTraceFromDigitized")
     renderer_source = _function_source(source, "renderCurveTraceOverlays", "clearDepthOverlays")
 
@@ -2381,7 +2386,16 @@ def test_linked_wrap_pair_tool_validates_edges_and_preserves_render_breaks():
     assert "Could not find the opposite wrap point. Click where the curve resumes on the other side." in add_wrap_source
     assert "await_second_click" in add_wrap_source
     assert "snapWrapClickToImageEvidence" in add_wrap_source
-    assert "s5UpdateTrackWrapped({ deferCurveMutation: true });" in begin_wrap_source
+    assert "requestedWrappedState: true" in begin_wrap_source
+    assert "originalWrapLayer" in begin_wrap_source
+    assert "restorePendingWrapConfiguration(pending);" in cancel_wrap_source
+    assert "cancel_pending_wrap_remove_layer" in restore_wrap_source
+    assert "cancel_pending_wrap_replace_layer" in restore_wrap_source
+    assert "cancel_pending_wrap_restore_layer" in restore_wrap_source
+    assert "removeCurveWrapLayer(pending.curveKey" in restore_wrap_source
+    assert "createOrReplaceCurveWrapLayer(pending.curveKey" in restore_wrap_source
+    assert "restorePendingWrapConfiguration({" in undo_wrap_source
+    assert "originalWrapLayer: last.originalWrapLayer" in undo_wrap_source
     assert "canonicalUnwrapped" in display_builder_source
     assert "Missing rows are unsupported evidence" in display_builder_source
 
