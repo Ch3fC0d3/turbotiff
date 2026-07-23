@@ -12904,7 +12904,9 @@ def digitize():
                 if xs.size > 0:
                     xs = smooth_trace_supported_sections(
                         xs,
-                        window=5,
+                        # A short local pass removes pixel stair-steps without
+                        # flattening the sharp crests that identify this trace.
+                        window=3,
                         wrap_width=mask.shape[1] if wrap_enabled else None,
                     )
             except Exception:
