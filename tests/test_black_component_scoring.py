@@ -131,3 +131,90 @@ def test_wrong_rail_guide_does_not_erase_high_excursion_curve():
     assert float(np.mean(scored[:, 30])) < float(
         np.mean(scored[np.arange(height), np.rint(expected).astype(np.int32)])
     )
+
+
+def test_black_high_excursion_preserves_connected_horizontal_tips():
+    height, width = 240, 180
+    rows = np.arange(height, dtype=np.float32)
+    spine = 92.0 + 7.0 * np.sin(rows / 18.0)
+    mask = np.zeros((height, width), dtype=np.uint8)
+    spine_points = np.column_stack(
+        (np.rint(spine).astype(np.int32), rows.astype(np.int32))
+    )
+    cv2.polylines(
+        mask,
+        [spine_points.reshape(-1, 1, 2)],
+        False,
+        255,
+        2,
+        cv2.LINE_AA,
+    )
+
+    # Alternating-side connected excursions. For a right-reading curve the
+    # expected value is the right endpoint (the spine on leftward strokes).
+    excursions = [
+        (28, 'right', 43),
+        (57, 'left', 38),
+        (86, 'right', 51),
+        (119, 'left', 44),
+        (151, 'right', 47),
+        (184, 'left', 41),
+        (214, 'right', 45),
+    ]
+    expected_rows = []
+    expected_tips = []
+    for y, side, length in excursions:
+        anchor_x = int(round(float(spine[y])))
+        tip_x = anchor_x + length if side == 'right' else anchor_x - length
+        cv2.line(mask, (anchor_x, y), (tip_x, y), 255, 2, cv2.LINE_AA)
+        expected_rows.append(y)
+        expected_tips.append(float(tip_x if side == 'right' else anchor_x))
+
+    # Periodic grid lines and rails remain strong but lower-confidence than
+    # the curve evidence supplied by the detector.
+    for x in range(15, width, 20):
+        cv2.line(mask, (x, 0), (x, height - 1), 85, 1)
+    for y in range(12, height, 24):
+        cv2.line(mask, (0, y), (width - 1, y), 85, 1)
+
+    # Faint and broken curve portions must become local gaps, not rail bridges.
+    mask[132:135, :] = np.minimum(mask[132:135, :], 45)
+    mask[201, :] = 0
+
+    anchors, _ = web_app.trace_curve_with_dp(
+        mask,
+        scale_min=0.0,
+        scale_max=150.0,
+        curve_type='GR',
+        max_step=28,
+        smooth_lambda=0.001,
+        curv_lambda=0.001,
+        hot_side='right',
+    )
+    traced = web_app.project_anchor_to_connected_hot_edge(
+        mask,
+        anchors,
+        hot_side='right',
+        max_extension=max(40, int(width * 0.40)),
+        vertical_radius=3,
+    )
+
+    expected_rows = np.asarray(expected_rows, dtype=np.int32)
+    expected_tips = np.asarray(expected_tips, dtype=np.float32)
+    tip_errors = np.abs(traced[expected_rows] - expected_tips)
+    finite_errors = tip_errors[np.isfinite(tip_errors)]
+
+    assert finite_errors.size >= int(np.ceil(0.80 * expected_rows.size))
+    assert float(np.median(finite_errors)) < 6.0
+    assert float(np.percentile(finite_errors, 90)) < 12.0
+    assert float(np.mean(tip_errors <= 10.0)) >= 0.80
+
+    longest_vertical = 0
+    current_vertical = 0
+    for previous, current in zip(traced[:-1], traced[1:]):
+        if np.isfinite(previous) and np.isfinite(current) and abs(float(current - previous)) <= 0.5:
+            current_vertical += 1
+            longest_vertical = max(longest_vertical, current_vertical)
+        else:
+            current_vertical = 0
+    assert longest_vertical < 20

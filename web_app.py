@@ -7300,6 +7300,181 @@ def bounded_gr_crest_snap(mask, xs, hot_side=None, max_shift=15, candidate_rows_
     return out
 
 
+def project_anchor_to_connected_hot_edge(
+    mask,
+    anchors,
+    hot_side,
+    max_extension,
+    vertical_radius=3,
+    wrap_width=None,
+):
+    """Project continuity anchors to the reading-side end of their curve ink.
+
+    The DP anchor chooses the branch. This function removes full-track grid
+    rows and rails from a private connectivity mask, finds the 2-D component
+    touching each anchor, and returns only that component's nearby hot-side
+    endpoint. It never searches an unrelated component.
+    """
+    if mask is None or anchors is None or hot_side not in ("left", "right"):
+        return anchors
+    if not hasattr(anchors, "size") or anchors.size == 0:
+        return anchors
+
+    prob = np.asarray(mask)
+    if prob.ndim == 3:
+        prob = cv2.cvtColor(prob, cv2.COLOR_BGR2GRAY)
+    if prob.ndim != 2 or prob.size == 0:
+        return anchors
+    prob = prob.astype(np.float32)
+    if float(np.nanmax(prob)) > 1.0:
+        prob /= 255.0
+
+    h, w = prob.shape
+    source = np.asarray(anchors, dtype=np.float32)
+    out = np.full(source.shape, np.nan, dtype=np.float32)
+    supported = np.isfinite(source)
+    if not np.any(supported):
+        return out
+
+    # A low floor keeps faint/broken curve ink available. Periodic full-track
+    # grid evidence is removed by occupancy, not by raising this threshold.
+    binary = prob >= 0.04
+    row_occupancy = np.mean(binary, axis=1)
+    column_occupancy = np.mean(binary, axis=0)
+    full_grid_rows = row_occupancy >= 0.55
+    full_grid_columns = column_occupancy >= 0.55
+    connectivity = binary.copy()
+    # Keep high-confidence curve ink where it crosses a grid row/column; only
+    # remove the lower-confidence periodic support surrounding that crossing.
+    strong_curve = prob >= 0.55
+    vertical_crossing = np.zeros_like(binary)
+    vertical_crossing[1:-1, :] = binary[:-2, :] & binary[2:, :]
+    horizontal_crossing = np.zeros_like(binary)
+    horizontal_crossing[:, 1:-1] = binary[:, :-2] & binary[:, 2:]
+    connectivity[full_grid_rows, :] &= (
+        strong_curve[full_grid_rows, :]
+        | vertical_crossing[full_grid_rows, :]
+    )
+    connectivity[:, full_grid_columns] &= (
+        strong_curve[:, full_grid_columns]
+        | horizontal_crossing[:, full_grid_columns]
+    )
+
+    n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
+        connectivity.astype(np.uint8),
+        8,
+    )
+    if n_labels <= 1:
+        return out
+
+    valid_component = np.ones(n_labels, dtype=bool)
+    valid_component[0] = False
+    for label in range(1, n_labels):
+        _x, _y, comp_w, comp_h, area = [int(v) for v in stats[label]]
+        width_ratio = float(comp_w) / max(1.0, float(w))
+        height_ratio = float(comp_h) / max(1.0, float(h))
+        looks_like_rail = height_ratio >= 0.25 and width_ratio <= 0.025
+        looks_like_full_grid = width_ratio >= 0.75 and height_ratio <= 0.08
+        if area <= 1 or looks_like_rail or looks_like_full_grid:
+            valid_component[label] = False
+
+    radius_y = max(1, min(8, int(vertical_radius)))
+    extension = max(1, min(int(max_extension), max(1, w - 1)))
+    circular = wrap_width is not None and float(wrap_width) > 1.0
+
+    for y in np.where(supported[:min(h, source.size)])[0]:
+        anchor = float(source[y])
+        flank_start = max(0, int(y) - (2 * radius_y + 2))
+        flank_left_end = max(0, int(y) - radius_y)
+        flank_right_start = min(source.size, int(y) + radius_y + 1)
+        flank_end = min(source.size, int(y) + (2 * radius_y + 3))
+        local_anchor_values = np.concatenate((
+            source[flank_start:flank_left_end],
+            source[flank_right_start:flank_end],
+        ))
+        if not np.isfinite(local_anchor_values).any():
+            local_anchor_values = source[
+                max(0, int(y) - radius_y):min(source.size, int(y) + radius_y + 1)
+            ]
+        local_anchor_values = local_anchor_values[np.isfinite(local_anchor_values)]
+        if local_anchor_values.size:
+            if circular:
+                local_metric = _unwrap_trace_for_filtering(
+                    local_anchor_values.astype(np.float32),
+                    wrap_width,
+                )
+                trend_anchor = float(np.median(local_metric)) % float(w)
+                visible_current = anchor % float(w)
+                trend_delta = visible_current - trend_anchor
+                trend_delta -= round(trend_delta / float(w)) * float(w)
+            else:
+                trend_anchor = float(np.median(local_anchor_values))
+                visible_current = anchor
+                trend_delta = visible_current - trend_anchor
+            # Horizontal grid intersections can pull a few DP rows far along
+            # the grid. Seed connectivity from the recent branch trend instead.
+            if abs(trend_delta) > max(6.0, min(15.0, float(w) * 0.05)):
+                visible_anchor = trend_anchor
+            else:
+                visible_anchor = visible_current
+        else:
+            visible_anchor = anchor % float(w) if circular else anchor
+        center = int(round(visible_anchor))
+        if center < 0 or center >= w:
+            continue
+
+        y0 = max(0, int(y) - radius_y)
+        y1 = min(h, int(y) + radius_y + 1)
+        x0 = max(0, center - 6)
+        x1 = min(w, center + 7)
+        local_labels = labels[y0:y1, x0:x1]
+        candidate_labels = np.unique(local_labels)
+        candidate_labels = candidate_labels[
+            (candidate_labels > 0) & valid_component[candidate_labels]
+        ]
+        if candidate_labels.size == 0:
+            continue
+
+        # Pick the component whose actual pixels are closest to the anchor.
+        best_label = None
+        best_distance = float('inf')
+        for label in candidate_labels:
+            yy, xx = np.where(local_labels == int(label))
+            if xx.size == 0:
+                continue
+            distance = np.min(
+                np.abs((xx + x0).astype(np.float32) - visible_anchor)
+                + 0.5 * np.abs((yy + y0).astype(np.float32) - float(y))
+            )
+            if float(distance) < best_distance:
+                best_distance = float(distance)
+                best_label = int(label)
+        if best_label is None or best_distance > 7.5:
+            continue
+
+        band = labels[y0:y1]
+        yy, xx = np.where(band == best_label)
+        if xx.size == 0:
+            continue
+        if hot_side == "right":
+            permitted = xx <= visible_anchor + float(extension)
+            endpoint = np.max(xx[permitted]) if np.any(permitted) else None
+        else:
+            permitted = xx >= visible_anchor - float(extension)
+            endpoint = np.min(xx[permitted]) if np.any(permitted) else None
+        if endpoint is None:
+            continue
+
+        endpoint = float(endpoint)
+        if abs(endpoint - visible_anchor) > float(extension):
+            continue
+        out[y] = endpoint
+        if circular:
+            out[y] %= float(wrap_width)
+
+    return out
+
+
 def suppress_black_grid_lock_runs(roi_bgr, xs, curve_type=None, wrap_width=None):
     """Remove suspicious black-mode lock-ons to grid-like columns.
 
@@ -12828,7 +13003,7 @@ def digitize():
         else:
             # 1. Run a first-pass guide only when component suppression uses it.
             # Sonic detail mode performs its own crest-aware whole-path pass.
-            if not preserve_black_detail:
+            if not preserve_black_detail and not high_excursion_black:
                 try:
                     xs_guide, _ = trace_curve_with_dp(
                         mask,
@@ -12851,9 +13026,11 @@ def digitize():
                 except Exception as e:
                     print(f"⚠️ score_and_suppress_black_components failed: {e}")
 
-            # For black/other modes, use DP with smoothness constraints (using filtered mask!)
+            # High-excursion black curves use the complete detector evidence.
+            # The DP result is a continuity anchor, not the final measurement.
+            tracing_mask = evidence_mask if high_excursion_black else mask
             xs, confidence = trace_curve_with_dp(
-                mask,
+                tracing_mask,
                 scale_min=left_value,
                 scale_max=right_value,
                 curve_type=curve_type,
@@ -12864,52 +13041,54 @@ def digitize():
                 wrap_enabled=wrap_enabled,
             )
 
-            # Snap the DP path toward obvious local maxima in the prob mask
-            xs = refine_trace_with_local_maxima(mask, xs, **refine_kwargs)
+            if high_excursion_black:
+                xs = project_anchor_to_connected_hot_edge(
+                    evidence_mask,
+                    xs,
+                    hot_side=hot_side,
+                    max_extension=max(40, int(mask.shape[1] * 0.40)),
+                    vertical_radius=3,
+                    wrap_width=mask.shape[1] if wrap_enabled else None,
+                )
+            else:
+                # Snap the DP path toward obvious local maxima in the prob mask
+                xs = refine_trace_with_local_maxima(mask, xs, **refine_kwargs)
 
             # Skip the aggressive peak/valley pusher for black traces. On
             # dense black logs it can snap sideways onto neighboring rails or
             # filled blocks, which is what creates the horizontal "shelf"
             # artifacts. DP + local maxima already finds the right branch;
             # re-center on the stroke body instead of pushing to extrema.
-            try:
-                # Give black traces a wider recentering window so thick strokes
-                # can settle onto the body of the ink instead of staying pinned
-                # near whichever edge the DP pass first touched.
-                xs = refine_to_stroke_centerline(mask, xs, threshold_ratio=0.55, window_size=14)
-            except Exception:
-                pass
+            if not high_excursion_black:
+                try:
+                    # Give black traces a wider recentering window so thick strokes
+                    # can settle onto the body of the ink instead of staying pinned
+                    # near whichever edge the DP pass first touched.
+                    xs = refine_to_stroke_centerline(mask, xs, threshold_ratio=0.55, window_size=14)
+                except Exception:
+                    pass
 
-            try:
-                # Probability maps still bias toward one stroke edge on dense
-                # black logs. Recenter once more against the raw dark stroke
-                # body in the grayscale ROI so the trace sits in the visual
-                # middle of the black ink.
-                xs = refine_black_trace_to_dark_run_center(
-                    roi,
-                    xs,
-                    hot_side=hot_side,
-                    curve_type=curve_type,
-                )
-            except Exception:
-                pass
+            if not high_excursion_black:
+                try:
+                    # Probability maps still bias toward one stroke edge on dense
+                    # black logs. Recenter once more against the raw dark stroke
+                    # body in the grayscale ROI so the trace sits in the visual
+                    # middle of the black ink.
+                    xs = refine_black_trace_to_dark_run_center(
+                        roi,
+                        xs,
+                        hot_side=hot_side,
+                        curve_type=curve_type,
+                    )
+                except Exception:
+                    pass
 
             # Guard against spurious "left-shooting" / "right-shooting" jumps
             # where DP briefly locked onto a grid rail or noise column and
             # drew a horizontal line to the chart edge. Rolling-median
             # deviation > ~45 px is almost never a real excursion on a log
             # track because legitimate peaks are curved, not instantaneous.
-            if is_black_gr:
-                try:
-                    xs = guard_trace_outliers_rolling_median(
-                        xs,
-                        window=15,
-                        max_deviation=30.0,
-                        wrap_width=mask.shape[1] if wrap_enabled else None,
-                    )
-                except Exception:
-                    pass
-            elif not preserve_black_detail:
+            if not preserve_black_detail and not high_excursion_black:
                 try:
                     xs = guard_trace_outliers_rolling_median(
                         xs,
@@ -12924,7 +13103,7 @@ def digitize():
             # line over several rows instead of the darkest single-row crest.
             # This avoids horizontal grid bars and filled blocks pulling the
             # trace into shelf artifacts.
-            if not preserve_black_detail and not is_black_gr:
+            if not preserve_black_detail and not high_excursion_black:
                 try:
                     xs = refine_black_trace_to_continuous_line(
                         roi,
@@ -12939,7 +13118,7 @@ def digitize():
 
             # Second outlier pass: the line-following pass is conservative,
             # but keep the tighter guard as protection against noisy scans.
-            if not preserve_black_detail and not is_black_gr:
+            if not preserve_black_detail and not high_excursion_black:
                 try:
                     xs = guard_trace_outliers_rolling_median(
                         xs,
@@ -12952,7 +13131,7 @@ def digitize():
 
             # Velocity guard: micro-crests jump 10-20 px in 1-2 rows.
             # Real geology moves gradually. Cap |dx/dy| to ~6 px/row.
-            if not preserve_black_detail and not is_black_gr:
+            if not preserve_black_detail and not high_excursion_black:
                 try:
                     xs = guard_trace_velocity(
                         xs,
@@ -12964,7 +13143,7 @@ def digitize():
 
             # Median filter: remove 1-3 row horizontal glitches that survive
             # the outlier guards. The colored pipeline already does this.
-            if not preserve_black_detail and not is_black_gr:
+            if not preserve_black_detail and not high_excursion_black:
                 try:
                     from scipy.signal import medfilt
                     xs_filled = _unwrap_trace_for_filtering(
@@ -12982,20 +13161,7 @@ def digitize():
                 except Exception:
                     pass
 
-            if is_black_gr:
-                try:
-                    xs = bounded_gr_crest_snap(
-                        mask,
-                        xs,
-                        hot_side=hot_side,
-                        max_shift=15,
-                        candidate_rows_only=True,
-                        wrap_width=mask.shape[1] if wrap_enabled else None,
-                    )
-                except Exception:
-                    pass
-
-            if preserve_black_detail:
+            if preserve_black_detail and not high_excursion_black:
                 try:
                     xs = refine_black_sonic_trace_to_hot_ink(
                         roi,
@@ -13179,7 +13345,7 @@ def digitize():
         elif not phase2_active and not topology_active:
             # For non-colored modes, keep the original vertical-rail rejection logic
             xs_valid = xs[~np.isnan(xs)]
-            if xs_valid.size > 0:
+            if xs_valid.size > 0 and not high_excursion_black:
                 dyn_range = float(np.nanmax(xs_valid) - np.nanmin(xs_valid))
                 min_dyn = max(4.0, 0.02 * float(width_px))
                 if dyn_range < min_dyn:
@@ -13199,17 +13365,18 @@ def digitize():
 
         if classic_black_cleanup:
             wrap_width = width_px if wrap_enabled else None
-            try:
-                # Recenter before rail rejection. The support mask is restored
-                # after rolling filters so an existing gap can never reappear.
-                xs = recenter_black_trace_post_dp(
-                    roi,
-                    xs,
-                    wrap_width=wrap_width,
-                    preserve_missing=True,
-                )
-            except Exception:
-                pass
+            if not high_excursion_black:
+                try:
+                    # Recenter before rail rejection. The support mask is restored
+                    # after rolling filters so an existing gap can never reappear.
+                    xs = recenter_black_trace_post_dp(
+                        roi,
+                        xs,
+                        wrap_width=wrap_width,
+                        preserve_missing=True,
+                    )
+                except Exception:
+                    pass
 
             try:
                 # Rail rejection follows every operation that can select a
