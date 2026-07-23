@@ -12922,6 +12922,25 @@ def digitize():
                     column = int(np.clip(round(float(xs[row])), 0, rail_columns.size - 1))
                     if rail_columns[column]:
                         xs[row] = np.nan
+
+                # Some scanned grids are dashed at horizontal rules, so their
+                # full-column occupancy is below 45%.  Detect the remaining
+                # signature directly in the proposed path: a long run sitting
+                # within one pixel on a moderately persistent ink column.
+                run_start = 0
+                while run_start < xs.size:
+                    if not np.isfinite(xs[run_start]):
+                        run_start += 1
+                        continue
+                    anchor = float(xs[run_start])
+                    run_end = run_start + 1
+                    while run_end < xs.size and np.isfinite(xs[run_end]) and abs(float(xs[run_end]) - anchor) <= 1.0:
+                        run_end += 1
+                    if run_end - run_start >= 12:
+                        column = int(np.clip(round(anchor), 0, column_occupancy.size - 1))
+                        if column_occupancy[column] >= 0.10:
+                            xs[run_start:run_end] = np.nan
+                    run_start = run_end
             except Exception:
                 pass
 
