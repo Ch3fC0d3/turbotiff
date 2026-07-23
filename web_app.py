@@ -12918,10 +12918,12 @@ def digitize():
                 column_occupancy = np.mean(mask > 0, axis=0)
                 rail_columns = column_occupancy >= 0.45
                 finite_rows = np.where(np.isfinite(xs))[0]
+                rejected_rail_rows = 0
                 for row in finite_rows:
                     column = int(np.clip(round(float(xs[row])), 0, rail_columns.size - 1))
                     if rail_columns[column]:
                         xs[row] = np.nan
+                        rejected_rail_rows += 1
 
                 # Some scanned grids are dashed at horizontal rules, so their
                 # full-column occupancy is below 45%.  Detect the remaining
@@ -12940,7 +12942,14 @@ def digitize():
                         column = int(np.clip(round(anchor), 0, column_occupancy.size - 1))
                         if column_occupancy[column] >= 0.10:
                             xs[run_start:run_end] = np.nan
+                            rejected_rail_rows += run_end - run_start
                     run_start = run_end
+
+                # A candidate that is mostly rejected rail is not a partly
+                # valid curve.  Leave it unavailable so the UI never presents
+                # dotted false evidence as a usable trace.
+                if finite_rows.size and rejected_rail_rows / float(finite_rows.size) >= 0.25:
+                    xs[:] = np.nan
             except Exception:
                 pass
 
