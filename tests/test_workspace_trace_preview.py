@@ -2329,7 +2329,7 @@ def test_optional_curve_pipeline_imports_cannot_prevent_core_app_boot():
     assert "def build_phase1_probability(roi, classic_mask, **_kwargs):" in source
 
 
-def test_trace_continuity_gate_keeps_missing_evidence_as_gaps_not_bridges():
+def test_trace_continuity_gate_preserves_gaps_except_bounded_wrapped_sonic_repair():
     source = WEB_APP.read_text(encoding="utf-8")
     gate_start = source.index("def enforce_local_trace_continuity(")
     gate_end = source.index("def should_preserve_black_trace_detail(", gate_start)
@@ -2344,8 +2344,9 @@ def test_trace_continuity_gate_keeps_missing_evidence_as_gaps_not_bridges():
     assert "xs = enforce_local_trace_continuity(" in source[digitize_start:display_start]
     assert "if wrap_enabled and preserve_black_detail:" in source[digitize_start:display_start]
     final_gate_source = source[digitize_start:display_start]
-    assert "unsupported\n                    # rows" in final_gate_source
-    assert ".interpolate(" not in final_gate_source
+    assert "gap_values = _unwrap_trace_for_filtering(xs, width_px)" in final_gate_source
+    assert 'limit=25' in final_gate_source
+    assert "xs = np.mod(xs, float(width_px))" in final_gate_source
     assert ".interpolate(" not in source[display_start:display_end]
 
 

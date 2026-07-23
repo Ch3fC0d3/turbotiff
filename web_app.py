@@ -6376,6 +6376,7 @@ APPROVED_INTERPOLATION_PATHS = {
     "resample_values_by_continuous_sections": "segment-local depth resampling only",
     "ml_predict_curve": "model raster upsampling; detector output is evidence-gated before canonical construction",
     "refine_black_sonic_trace_to_hot_ink": "restored detector-local sonic continuity before canonical conversion",
+    "digitize_wrapped_sonic_continuity": "restored bounded continuity in unwrapped coordinates for wrapped sonic traces",
 }
 
 
@@ -13563,10 +13564,19 @@ def digitize():
                     # including horizontal movement. Preserve its row gaps.
                     xs = np.asarray(xs, dtype=np.float32).copy()
                 elif wrap_enabled and preserve_black_detail:
-                    # The black-detail path may contain genuine unsupported
-                    # rows.  Preserve them for the canonical trace rather
-                    # than bridging them with a cyclic display coordinate.
-                    xs = np.asarray(xs, dtype=np.float32).copy()
+                    # Restore the afternoon wrapped-sonic continuity pass.
+                    # Work in the continuous coordinate so a left/right wrap
+                    # never interpolates through the middle of the track.
+                    gap_values = _unwrap_trace_for_filtering(xs, width_px)
+                    xs = pd.Series(gap_values).interpolate(
+                        method="linear",
+                        limit_direction="both",
+                        limit=25,
+                        limit_area=None,
+                    ).ffill(limit=25).bfill(limit=25).to_numpy(
+                        dtype=np.float32
+                    )
+                    xs = np.mod(xs, float(width_px)).astype(np.float32)
                 else:
                     xs = enforce_local_trace_continuity(
                         evidence_mask,
