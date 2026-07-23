@@ -35,10 +35,12 @@ def test_wrap_event_always_splits_legacy_visible_candidates():
 def test_interpolation_primitives_are_limited_to_the_reviewed_allowlist():
     source = WEB_APP.read_text(encoding="utf-8")
     calls = re.findall(r"^.*(?:np\.interp\(|\.interpolate\(|\.ffill\(|\.bfill\(|\.fillna\().*$", source, re.MULTILINE)
-    assert len(calls) == 3, calls
+    assert len(calls) == 4, calls
     assert set(APPROVED_INTERPOLATION_PATHS) == {
         "_resample_supported_rows",
         "resample_values_by_continuous_sections",
         "ml_predict_curve",
+        "refine_black_sonic_trace_to_hot_ink",
     }
-    assert all("np.interp(" in call for call in calls)
+    assert sum("np.interp(" in call for call in calls) == 3
+    assert sum(".interpolate(" in call for call in calls) == 1

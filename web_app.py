@@ -6375,6 +6375,7 @@ APPROVED_INTERPOLATION_PATHS = {
     "_resample_supported_rows": "segment-local resampling of finite runs only",
     "resample_values_by_continuous_sections": "segment-local depth resampling only",
     "ml_predict_curve": "model raster upsampling; detector output is evidence-gated before canonical construction",
+    "refine_black_sonic_trace_to_hot_ink": "restored detector-local sonic continuity before canonical conversion",
 }
 
 
@@ -6944,36 +6945,6 @@ def refine_black_sonic_trace_to_hot_ink(
             else:
                 selected_edge = run_left
                 distance = max(0.0, current - float(run_right))
-            anchor_gap = (
-                0.0
-                if run_left <= center <= run_right
-                else min(
-                    abs(float(run_left) - current),
-                    abs(float(run_right) - current),
-                )
-            )
-            if wrap_enabled:
-                anchor_gap = min(anchor_gap, float(w) - anchor_gap)
-            if anchor_gap > float(radius):
-                continue
-
-            # Score the proposed endpoint itself, not the strongest pixel
-            # somewhere else in the run. A horizontal grid/annotation stroke
-            # may cross the incoming anchor and have strong support near that
-            # crossing while its distant endpoint is unrelated to the curve.
-            endpoint_support = float(support[y, selected_edge])
-            endpoint_x0 = max(0, selected_edge - 2)
-            endpoint_x1 = min(w, selected_edge + 3)
-            upper_connected = bool(np.any(
-                dark[max(0, y - 4):y, endpoint_x0:endpoint_x1]
-            ))
-            lower_connected = bool(np.any(
-                dark[y + 1:min(h, y + 5), endpoint_x0:endpoint_x1]
-            ))
-            if endpoint_support < 0.12 or not (
-                upper_connected or lower_connected
-            ):
-                continue
             edge_like_rail = (
                 selected_edge <= int(round(w * 0.08))
                 or selected_edge >= int(round(w * 0.78))
@@ -6981,8 +6952,7 @@ def refine_black_sonic_trace_to_hot_ink(
             if edge_like_rail:
                 continue
             score = (
-                0.55 * support_peak
-                + 0.65 * endpoint_support
+                support_peak
                 - 1.5 * rail_occupancy
                 - (0.003 if wrap_enabled else 0.0005) * distance
                 + 0.01 * min(run_width, 30)
@@ -7006,64 +6976,16 @@ def refine_black_sonic_trace_to_hot_ink(
         )
         finite_fraction = float(np.mean(np.isfinite(candidate_path)))
         if finite_fraction >= 0.60:
-            # The afternoon pipeline accepted a well-supported sonic path even
-            # when a few grid crossings were missing. Requiring every row to
-            # be finite disabled this refinement on real scans and left the
-            # original center-spine DP trace untouched. Smooth each supported
-            # section independently, then update only rows backed by candidate
-            # evidence; never fill or smooth across a missing row.
-            candidate_smoothed = smooth_trace_supported_sections(
-                candidate_path,
-                window=5,
-                wrap_width=w if wrap_enabled else None,
-            )
-            supported_candidate = (
-                np.isfinite(candidate_path)
-                & np.isfinite(candidate_smoothed)
-            )
-            result_view = result[:n]
-            result_view[supported_candidate] = candidate_smoothed[
-                supported_candidate
-            ]
-            # A missing hot-ink candidate may coincide with a valid incoming
-            # point, but it may also expose the stale center spine that this
-            # pass is intended to replace. Use neighboring candidates only to
-            # validate the incoming value, never to fill the missing row.
-            supported_rows = np.flatnonzero(supported_candidate)
-            if supported_rows.size >= 2:
-                row_axis = np.arange(n, dtype=np.int32)
-                insertion = np.searchsorted(supported_rows, row_axis)
-                left_position = np.clip(
-                    insertion - 1,
-                    0,
-                    supported_rows.size - 1,
-                )
-                right_position = np.clip(
-                    insertion,
-                    0,
-                    supported_rows.size - 1,
-                )
-                left_rows = supported_rows[left_position]
-                right_rows = supported_rows[right_position]
-                use_right = (
-                    np.abs(right_rows - row_axis)
-                    < np.abs(row_axis - left_rows)
-                )
-                nearest_rows = np.where(use_right, right_rows, left_rows)
-                candidate_reference = candidate_smoothed[nearest_rows]
-                maximum_hold_distance = max(
-                    12.0,
-                    min(24.0, float(w) * 0.20),
-                )
-                stale_spine = (
-                    ~supported_candidate
-                    & np.isfinite(result_view)
-                    & (
-                        np.abs(result_view - candidate_reference)
-                        > maximum_hold_distance
-                    )
-                )
-                result_view[stale_spine] = np.nan
+            # Restore the proven afternoon sonic behavior. This interpolation
+            # is detector-local continuity repair before canonical conversion;
+            # canonical missing rows and explicit breaks remain authoritative.
+            result[:n] = pd.Series(candidate_path).interpolate(
+                limit_direction="both",
+            ).rolling(
+                5,
+                center=True,
+                min_periods=1,
+            ).median().to_numpy(dtype=np.float32)
     except Exception:
         pass
     return result

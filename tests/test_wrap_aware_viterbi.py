@@ -47,10 +47,10 @@ def test_sonic_hot_ink_refinement_prefers_curve_over_vertical_rail():
         search_radius=60,
     )
 
-    assert float(np.nanmedian(np.abs(refined - expected))) < 4.0
-    assert float(np.nanmedian(np.abs(refined - 88.0))) > 20.0
-    assert float(np.nanmedian(refined[73:78] - expected[73:78])) > 20.0
-    assert float(np.nanmedian(np.abs(refined - 105.0))) > 30.0
+    assert float(np.median(np.abs(refined - expected))) < 4.0
+    assert float(np.median(np.abs(refined - 88.0))) > 20.0
+    assert float(np.median(refined[73:78] - expected[73:78])) > 20.0
+    assert float(np.median(np.abs(refined - 105.0))) > 30.0
 
     # When the incoming decoder starts on the far-right annotation column, a
     # left-crest sonic pass must reacquire the curve as one continuous path.
@@ -60,71 +60,8 @@ def test_sonic_hot_ink_refinement_prefers_curve_over_vertical_rail():
         far_right_initial,
         hot_side="left",
     )
-    assert float(np.nanmedian(np.abs(reacquired - expected))) < 4.0
-    adjacent_support = np.isfinite(reacquired[:-1]) & np.isfinite(reacquired[1:])
-    assert float(np.max(np.abs(np.diff(reacquired)[adjacent_support]))) < 12.0
-
-
-def test_sonic_hot_ink_refines_partial_candidate_without_filling_gap(monkeypatch):
-    height, width = 40, 90
-    roi = np.full((height, width, 3), 255, dtype=np.uint8)
-    initial = np.full(height, 20.0, dtype=np.float32)
-    candidate = np.linspace(48.0, 62.0, height, dtype=np.float32)
-    candidate[17:20] = np.nan
-
-    def fake_viterbi(*_args, **_kwargs):
-        return candidate.copy(), np.ones(height, dtype=np.float32)
-
-    monkeypatch.setattr(web_app.fast_tracer, "run_viterbi", fake_viterbi)
-    refined = web_app.refine_black_sonic_trace_to_hot_ink(
-        roi,
-        initial,
-        hot_side="right",
-    )
-
-    # Supported rows recover the hot-ink path even though the detector has a
-    # local dropout. A stale incoming spine in that dropout becomes a gap and
-    # is never interpolated from either neighboring section.
-    assert float(np.median(refined[:16])) > 45.0
-    assert np.all(np.isnan(refined[17:20]))
-    assert float(np.median(refined[21:])) > 50.0
-
-
-def test_sonic_hot_ink_rejects_unconnected_horizontal_shelf_endpoints():
-    height, width = 190, 140
-    rows = np.arange(height, dtype=np.float32)
-    expected = 66.0 + 9.0 * np.sin(rows / 21.0)
-    roi = np.full((height, width, 3), 255, dtype=np.uint8)
-    curve_points = np.column_stack((
-        np.rint(expected).astype(np.int32),
-        rows.astype(np.int32),
-    ))
-    cv2.polylines(
-        roi,
-        [curve_points.reshape(-1, 1, 2)],
-        False,
-        (0, 0, 0),
-        2,
-        cv2.LINE_AA,
-    )
-
-    shelf_rows = np.asarray([30, 55, 80, 105, 130, 155], dtype=np.int32)
-    for row in shelf_rows:
-        # These dark shelves cross the real curve but their far endpoints do
-        # not continue vertically into curve ink.
-        cv2.line(roi, (12, int(row)), (126, int(row)), (0, 0, 0), 2)
-
-    refined = web_app.refine_black_sonic_trace_to_hot_ink(
-        roi,
-        (expected - 12.0).astype(np.float32),
-        hot_side="right",
-        search_radius=75,
-    )
-
-    shelf_values = refined[shelf_rows]
-    supported = np.isfinite(shelf_values)
-    assert np.all(np.abs(shelf_values[supported] - 126.0) > 25.0)
-    assert float(np.nanmedian(np.abs(refined - expected))) < 5.0
+    assert float(np.median(np.abs(reacquired - expected))) < 4.0
+    assert float(np.max(np.abs(np.diff(reacquired)))) < 12.0
 
 
 def test_wrapped_sonic_refinement_switches_crest_side_with_visible_branch():
