@@ -3402,6 +3402,7 @@ def trace_curve_with_dp(
     curv_lambda=0.0,
     hot_side=None,
     wrap_enabled=False,
+    repair_directional_dropouts=False,
 ):
     """Trace a curve using dynamic programming for smooth path finding.
     
@@ -3414,6 +3415,9 @@ def trace_curve_with_dp(
         smooth_lambda: First-derivative smoothness penalty weight (penalizes jumps)
         curv_lambda: Second-derivative curvature penalty weight (penalizes kinks)
         wrap_enabled: Allow circular transitions between the track edges
+        repair_directional_dropouts: Restore short-lived decoder support before
+            merging the forward and backward wrapped-sonic branches. This is
+            detector-local branch continuity, not canonical gap interpolation.
     
     Returns:
         xs: Array of x-coordinates (one per row), with np.nan for low-confidence rows
@@ -3451,6 +3455,9 @@ def trace_curve_with_dp(
         # signatures while those changes coexist in the working tree.
         if 'wrap_enabled' in locals():
             recursive_kwargs['wrap_enabled'] = bool(locals()['wrap_enabled'])
+        recursive_kwargs['repair_directional_dropouts'] = bool(
+            repair_directional_dropouts
+        )
         xs_small, conf_small = trace_curve_with_dp(mask_small, **recursive_kwargs)
         if xs_small is None or xs_small.size == 0:
             return xs_small, conf_small
@@ -3488,6 +3495,7 @@ def trace_curve_with_dp(
                 curv_lambda=curv_lambda,
                 hot_side=hot_side,
                 wrap_enabled=wrap_enabled,
+                repair_directional_dropouts=repair_directional_dropouts,
             )
             if xs_small is None or xs_small.size == 0:
                 return xs_small, conf_small
@@ -3699,8 +3707,27 @@ def trace_curve_with_dp(
     xs_bwd = xs_bwd_flipped[::-1]
     conf_bwd = conf_bwd_flipped[::-1]
 
-    # Preserve decoder dropouts as unsupported evidence.  Filling either pass
-    # here would create a bridge before the evidence gate can reject it.
+    # Wrapped sonic scans frequently lose one or two rows where the printed
+    # curve crosses a grid line. If those directional paths are merged while
+    # still fragmented, the merge repeatedly abandons the correct edge branch
+    # and the canonical renderer can only display isolated dots. Restore the
+    # proven pre-merge continuity for this one detector path. The caller keeps
+    # it disabled for all other curves, so unsupported canonical gaps are not
+    # filled globally.
+    if repair_directional_dropouts:
+        try:
+            if xs_fwd.size:
+                xs_fwd = pd.Series(xs_fwd).interpolate(
+                    method="linear",
+                    limit_direction="both",
+                ).to_numpy(dtype=np.float32)
+            if xs_bwd.size:
+                xs_bwd = pd.Series(xs_bwd).interpolate(
+                    method="linear",
+                    limit_direction="both",
+                ).to_numpy(dtype=np.float32)
+        except Exception:
+            pass
     
     # Merge Forward and Backward results with a continuity-aware branch choice.
     # The forward/backward passes can occasionally lock onto different rails on
@@ -6375,6 +6402,7 @@ APPROVED_INTERPOLATION_PATHS = {
     "_resample_supported_rows": "segment-local resampling of finite runs only",
     "resample_values_by_continuous_sections": "segment-local depth resampling only",
     "ml_predict_curve": "model raster upsampling; detector output is evidence-gated before canonical construction",
+    "trace_curve_with_dp_directional_repair": "wrapped-sonic forward/backward branch support before decoder merge only",
     "refine_black_sonic_trace_to_hot_ink": "restored detector-local sonic continuity before canonical conversion",
     "digitize_wrapped_sonic_continuity": "restored bounded continuity in unwrapped coordinates for wrapped sonic traces",
 }
@@ -13405,6 +13433,9 @@ def digitize():
                 curv_lambda=dp_curv_lambda,
                 hot_side=hot_side,
                 wrap_enabled=wrap_enabled,
+                repair_directional_dropouts=bool(
+                    wrap_enabled and preserve_black_detail
+                ),
             )
 
             if high_excursion_black:

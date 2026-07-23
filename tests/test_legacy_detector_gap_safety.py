@@ -38,15 +38,16 @@ def test_interpolation_primitives_are_limited_to_the_reviewed_allowlist():
         r"np\.interp\(|\.interpolate\(|\.ffill\(|\.bfill\(|\.fillna\(",
         source,
     )
-    assert len(calls) == 7, calls
+    assert len(calls) == 9, calls
     assert set(APPROVED_INTERPOLATION_PATHS) == {
         "_resample_supported_rows",
         "resample_values_by_continuous_sections",
         "ml_predict_curve",
+        "trace_curve_with_dp_directional_repair",
         "refine_black_sonic_trace_to_hot_ink",
         "digitize_wrapped_sonic_continuity",
     }
     assert calls.count("np.interp(") == 3
-    assert calls.count(".interpolate(") == 2
+    assert calls.count(".interpolate(") == 4
     assert calls.count(".ffill(") == 1
     assert calls.count(".bfill(") == 1

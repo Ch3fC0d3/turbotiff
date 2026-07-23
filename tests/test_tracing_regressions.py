@@ -56,6 +56,57 @@ class ViterbiRegressionTests(unittest.TestCase):
         np.testing.assert_array_equal(xs, np.ones(3, dtype=np.float32))
         np.testing.assert_array_equal(confidence, np.zeros(3, dtype=np.float32))
 
+    def test_wrapped_sonic_can_repair_directional_dropouts_before_merge(self):
+        mask = np.zeros((5, 8), dtype=np.uint8)
+        mask[:, 1:7] = 255
+        directional = np.array([1.0, np.nan, 3.0, np.nan, 5.0], dtype=np.float32)
+        confidence = np.ones(5, dtype=np.float32)
+
+        with patch.object(
+            web_app.fast_tracer,
+            "run_viterbi",
+            side_effect=[
+                (directional.copy(), confidence.copy()),
+                (directional[::-1].copy(), confidence[::-1].copy()),
+            ],
+        ):
+            traced, _ = web_app.trace_curve_with_dp(
+                mask,
+                scale_min=30.0,
+                scale_max=110.0,
+                curve_type="DTC",
+                max_step=3,
+                wrap_enabled=True,
+                repair_directional_dropouts=True,
+            )
+
+        np.testing.assert_allclose(traced, [1.0, 2.0, 3.0, 4.0, 5.0])
+
+    def test_directional_dropouts_remain_missing_by_default(self):
+        mask = np.zeros((5, 8), dtype=np.uint8)
+        mask[:, 1:7] = 255
+        directional = np.array([1.0, np.nan, 3.0, np.nan, 5.0], dtype=np.float32)
+        confidence = np.ones(5, dtype=np.float32)
+
+        with patch.object(
+            web_app.fast_tracer,
+            "run_viterbi",
+            side_effect=[
+                (directional.copy(), confidence.copy()),
+                (directional[::-1].copy(), confidence[::-1].copy()),
+            ],
+        ):
+            traced, _ = web_app.trace_curve_with_dp(
+                mask,
+                scale_min=0.0,
+                scale_max=100.0,
+                curve_type="GR",
+                max_step=3,
+            )
+
+        self.assertTrue(np.isnan(traced[1]))
+        self.assertTrue(np.isnan(traced[3]))
+
 
 class NeuralTraceRegressionTests(unittest.TestCase):
     def test_probability_map_decodes_to_one_coordinate_per_row(self):
