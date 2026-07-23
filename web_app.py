@@ -3360,7 +3360,7 @@ def compute_prob_map(roi_bgr, mode="black", ui_filters=None, _dual_polarity_allo
             try:
                 # Penalize long straight-line evidence, but keep a floor so the
                 # curve can survive where it legitimately crosses a grid line.
-                prob *= np.clip(1.0 - 0.92 * black_grid_score, 0.03, 1.0)
+                prob *= np.clip(1.0 - 0.999 * black_grid_score, 0.001, 1.0)
                 if black_residual_score is not None and black_residual_score.size == prob.size:
                     prob = np.maximum(prob, 0.55 * black_residual_score)
             except Exception:
@@ -3616,15 +3616,19 @@ def trace_curve_with_dp(
     if h >= 4 and w >= 2:
         col_frac = bin_mask.mean(axis=0)
         # Lower threshold so we catch dashed or interrupted vertical grid lines.
-        # It's a soft penalty, so a truly straight curve can still power through it.
-        rail_thresh = 0.40 if curve_type_upper == 'GR' else 0.50
+        rail_thresh = 0.30 if curve_type_upper == 'GR' else 0.40
         rail_mask = col_frac > rail_thresh
         # Expand to runs of length >=2 using a 2-wide moving window (grid lines are usually 2+ px wide)
         rail_run = np.convolve(rail_mask.astype(np.float32), np.ones(2, dtype=np.float32), mode='same') >= 1.5
         if np.any(rail_run):
-            # Increase the rail penalty so the trace actively avoids vertical grids
-            rail_weight = 12.0 if curve_type_upper == 'GR' else 8.0
-            cost += (rail_weight * rail_run.astype(np.float32))[np.newaxis, :]
+            # Increase base weight, but gate it by probability
+            rail_weight = 40.0 if curve_type_upper == 'GR' else 30.0
+            
+            # Probability-gated penalty: strong curve signals ignore the rail penalty.
+            # Grid lines have low prob (due to compute_prob_map) so they take the full penalty.
+            penalty_mask = rail_run.astype(np.float32)[np.newaxis, :]
+            prob_gate = np.clip(1.0 - live_score, 0.0, 1.0)
+            cost += rail_weight * penalty_mask * np.power(prob_gate, 2.0)
 
     # Use live_score for Viterbi likelihoods
     prob = live_score
