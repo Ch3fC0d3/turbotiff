@@ -2362,7 +2362,7 @@ def test_linked_wrap_pair_tool_validates_edges_and_preserves_render_breaks():
     validation_end = source.index("function getWrapEvidencePoint(", validation_start)
     validation_source = source[validation_start:validation_end]
     evidence_start = source.index("function findBlackCurveEvidence(")
-    evidence_end = source.index("function updateWrapPairControls(", evidence_start)
+    evidence_end = source.index("function snapWrapClickToImageEvidence(", evidence_start)
     evidence_source = source[evidence_start:evidence_end]
     add_wrap_source = _function_source(source, "s5AddWrapPairAtImageCoords", "s5ConfirmWrapPair")
     begin_wrap_source = _function_source(source, "s5BeginAddWrapPair", "s5AddWrapPairAtImageCoords")
@@ -2388,7 +2388,7 @@ def test_linked_wrap_pair_tool_validates_edges_and_preserves_render_breaks():
     assert "snapWrapClickToImageEvidence" in add_wrap_source
     assert "requestedWrappedState: true" in begin_wrap_source
     assert "originalWrapLayer" in begin_wrap_source
-    assert "restorePendingWrapConfiguration(pending);" in cancel_wrap_source
+    assert "cancelPendingWrapTransition('cancel_button');" in cancel_wrap_source
     assert "cancel_pending_wrap_remove_layer" in restore_wrap_source
     assert "cancel_pending_wrap_replace_layer" in restore_wrap_source
     assert "cancel_pending_wrap_restore_layer" in restore_wrap_source

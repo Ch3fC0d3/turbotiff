@@ -1954,12 +1954,11 @@
                                         <div class="field" style="grid-column:1/-1;">
                                             <label>Scale Wrap Assist</label>
                                             <div class="scale-wrap-controls" style="display:flex; gap:4px;">
-                                                <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5BeginAddWrapPair()">Add Wrap</button>
-                                                <button type="button" class="btn" id="s5ConfirmWrapBtn" style="padding:3px 6px;font-size:0.75em;" onclick="s5ConfirmWrapPair()" disabled>Confirm</button>
+                                                <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5BeginAddWrapTransition()">Add Wrap</button>
                                                 <button type="button" class="btn" id="s5CancelWrapBtn" style="padding:3px 6px;font-size:0.75em;" onclick="s5CancelWrapPair()" disabled>Cancel</button>
                                                 <button type="button" class="btn" style="padding:3px 6px;font-size:0.75em;" onclick="s5DeleteWrapPairNearMouse()">Delete Wrap</button>
                                             </div>
-                                            <div id="s5WrapStatus" class="scale-wrap-status">Click Add Wrap, then click the curve where it reaches either track edge.</div>
+                                            <div id="s5WrapStatus" class="scale-wrap-status">Click Add Wrap, then click the exit and re-entry points at opposite track edges.</div>
                                         </div>
                                         <div class="field" style="grid-column:1/-1;">
                                             <label>LAS mnemonic / unit</label>
@@ -2099,7 +2098,8 @@
         let curveIndexToTraceKey = null; // { [curveIndex:number]: string } mapping from UI curve index to curve_traces key
         let editUndoStack = [];          // stack of { curveKey, idx, oldValue, oldTraceX } for Ctrl+Z
         let curveWrapMarkers = {};       // { [curveKey]: [{ depthIndex, cycle, edge, xImg, wrap_pair_id, createdAt }] }
-        let pendingWrapPair = null;      // one-click candidate awaiting Confirm / Cancel
+        let pendingWrapTransition = null; // preview-only two-click transition
+        let pendingWrapPair = null; // retired compatibility state; never populated
         let lastDigitizeRequestConfig = null;
         let lastDigitizePreviewFilters = null;
         let lastDigitizeHeaderMetadata = null;
@@ -2537,6 +2537,104 @@
             return evidence ? { xImg: evidence.xImg, yImg: evidence.yImg } : { xImg, yImg };
         }
 
+        function snapWrapPointToMask({ track, boundary, clickX, clickY }) {
+            const left = Math.min(Number(track.leftX), Number(track.rightX));
+            const right = Math.max(Number(track.leftX), Number(track.rightX));
+            const width = right - left;
+            const edgeZone = Math.max(6, width * 0.12);
+            const evidence = findBlackCurveEvidence(track, boundary, clickX, clickY, {
+                edgeFraction: 0.12,
+                radiusX: edgeZone,
+                radiusY: Math.max(8, Math.min(48, getWrapPairToleranceRows() * 3)),
+                minimumScore: 135,
+            });
+            if (!evidence) return null;
+            const x = Number(evidence.xImg);
+            if (!Number.isFinite(x) || (boundary === 'left' ? x > left + edgeZone : x < right - edgeZone)) return null;
+            const depthIndex = getDepthIndexAtImageY(evidence.yImg);
+            return Number.isInteger(depthIndex)
+                ? { xImg: x, yImg: evidence.yImg, depthIndex, confidence: evidence.score || 1, boundary }
+                : null;
+        }
+
+        function s5BeginAddWrapTransition() {
+            const ctx = getSelectedWrapCurveContext();
+            const found = ctx && findDigitizedCurveEntry(ctx.curveKey);
+            if (!ctx || !ctx.track || !found || !found.entry) return showStatus('Select a digitized curve before adding a wrap.', 'info');
+            const index = findCurveCardIndex(ctx.curveKey);
+            const step2 = index >= 0 ? document.getElementById(`wrapped${index}`) : null;
+            const step5 = document.getElementById('s5TrackWrapped');
+            const traceKey = getActiveCurveTraceKey(ctx.curveKey) || ctx.curveKey;
+            pendingWrapTransition = {
+                interactionId: `wrap-${Date.now()}`, curveId: ctx.curveKey, curveKey: ctx.curveKey, layer: 'main',
+                trackSnapshot: clonePersistenceValue(ctx.track), datasetGeneration: committedDatasetGeneration,
+                sourceRevision: getCurveLayerRevision(ctx.curveKey, 'main'), firstPoint: null, firstBoundary: null, expectedBoundary: null,
+                originalState: {
+                    markers: getWrapMarkersForCurve(ctx.curveKey), mainValues: found.entry.values.slice(), trackWrapped: !!ctx.track.wrapped,
+                    step2Checked: step2 ? !!step2.checked : null, step5Checked: step5 ? !!step5.checked : null,
+                    hadWrapLayer: !!found.entry.wrapLayer, wrapLayerSnapshot: found.entry.wrapLayer ? clonePersistenceValue(found.entry.wrapLayer) : null,
+                    tracePoints: lastCurveTraces && Array.isArray(lastCurveTraces[traceKey]) ? lastCurveTraces[traceKey].map(p => Array.isArray(p) ? p.slice() : p) : [],
+                },
+            };
+            showStatus('Click where the curve exits at either track boundary.', 'info');
+        }
+
+        function cancelPendingWrapTransition(reason = 'cancelled') {
+            if (!pendingWrapTransition) return false;
+            pendingWrapTransition = null;
+            if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
+            updateScaleWrapStatus();
+            return true;
+        }
+
+        function s5AddWrapTransitionAtImageCoords(xImg, yImg) {
+            const pending = pendingWrapTransition;
+            if (!pending) return false;
+            if (pending.datasetGeneration !== committedDatasetGeneration || !isCurveLayerRevisionCurrent(pending.curveKey, 'main', pending.sourceRevision)) {
+                cancelPendingWrapTransition('stale'); showStatus('Wrap cancelled because the curve data changed.', 'warning'); return true;
+            }
+            const track = pending.trackSnapshot, left = Math.min(track.leftX, track.rightX), right = Math.max(track.leftX, track.rightX);
+            const width = right - left, edgeZone = Math.max(6, width * 0.12);
+            if (xImg < left || xImg > right || Math.min(Math.abs(xImg - left), Math.abs(xImg - right)) > edgeZone) {
+                showStatus(pending.firstPoint ? 'The second point must be on the opposite side of the track.' : 'Click where the curve exits at either track boundary.', 'warning'); return true;
+            }
+            const boundary = Math.abs(xImg - left) <= Math.abs(xImg - right) ? 'left' : 'right';
+            if (pending.expectedBoundary && boundary !== pending.expectedBoundary) { showStatus('The second point must be on the opposite side of the track.', 'warning'); return true; }
+            const point = snapWrapPointToMask({ track, boundary, clickX: xImg, clickY: yImg });
+            if (!point) { showStatus('No curve evidence was found there. Click directly on the curve near the boundary.', 'warning'); return true; }
+            if (!pending.firstPoint) {
+                pending.firstPoint = point; pending.firstBoundary = boundary; pending.expectedBoundary = boundary === 'left' ? 'right' : 'left';
+                showStatus('Now click where the curve resumes on the opposite side.', 'info'); return true;
+            }
+            if (Math.abs(point.depthIndex - pending.firstPoint.depthIndex) > getWrapPairToleranceRows()) { showStatus('The two wrap points are too far apart vertically. Click the matching point on the opposite side.', 'warning'); return true; }
+            return commitWrapTransition(pending, point);
+        }
+
+        function commitWrapTransition(pending, secondPoint) {
+            const context = getCurveLayerContext(pending.curveKey, 'main');
+            if (!context || isLayerLocked('main', context.entry)) { showStatus('Unlock the Main Line before adding a wrap.', 'warning'); return true; }
+            const ordered = [pending.firstPoint, secondPoint].sort((a, b) => a.depthIndex - b.depthIndex);
+            const cycleBefore = getWrapCycleForDepth(pending.curveKey, Math.max(0, ordered[0].depthIndex - 1));
+            const cycleDelta = ordered[0].boundary === 'right' && ordered[1].boundary === 'left' ? 1 : -1;
+            const id = getNextWrapPairId(pending.curveKey);
+            const markers = pending.originalState.markers.concat([
+                { ...ordered[0], edge: ordered[0].boundary, cycle: cycleBefore, pair_role: 'exit', wrap_pair_id: id, createdAt: Date.now(), source: 'manual_mask_snap' },
+                { ...ordered[1], edge: ordered[1].boundary, cycle: cycleBefore + cycleDelta, pair_role: 'entry', wrap_pair_id: id, createdAt: Date.now() + 1, source: 'manual_mask_snap' },
+            ]).sort((a, b) => a.depthIndex - b.depthIndex || a.createdAt - b.createdAt);
+            const nextValues = buildWrapAdjustedValues(pending.curveKey, context.values, pending.trackSnapshot, markers);
+            const traceKey = getActiveCurveTraceKey(pending.curveKey) || pending.curveKey;
+            const result = commitWrapPairTransform({ curveId: pending.curveKey, nextMarkers: markers, nextValues,
+                originalMarkers: pending.originalState.markers, originalValues: pending.originalState.mainValues,
+                originalTracePoints: pending.originalState.tracePoints, traceKey,
+                originalWrapConfig: { trackWrapped: pending.originalState.trackWrapped, step2Checked: pending.originalState.step2Checked, step5Checked: pending.originalState.step5Checked, hadWrapLayer: pending.originalState.hadWrapLayer, originalWrapLayer: pending.originalState.wrapLayerSnapshot }, reason: 'wrap_transition' });
+            if (!result.changed) return true;
+            const liveTrack = findTrackByCurveId(pending.curveKey); if (liveTrack) liveTrack.wrapped = true;
+            const index = findCurveCardIndex(pending.curveKey), step2 = index >= 0 ? document.getElementById(`wrapped${index}`) : null, step5 = document.getElementById('s5TrackWrapped');
+            if (step5) step5.checked = true; if (step2 && !step2.checked) { step2.checked = true; step2.dispatchEvent(new Event('change')); }
+            pendingWrapTransition = null; updateScaleWrapStatus(pending.curveKey); if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
+            showStatus('Wrap added. The trace now continues from the opposite boundary.', 'success'); return true;
+        }
+
         function getWrapEvidencePoint(curveKey, track, edge, targetDepthIndex) {
             const targetY = getPixelYForDepthIndex(targetDepthIndex);
             const left = Math.min(Number(track.leftX), Number(track.rightX));
@@ -2560,10 +2658,8 @@
         }
 
         function updateWrapPairControls() {
-            const confirm = document.getElementById('s5ConfirmWrapBtn');
             const cancel = document.getElementById('s5CancelWrapBtn');
-            if (confirm) confirm.disabled = !(pendingWrapPair && pendingWrapPair.candidate);
-            if (cancel) cancel.disabled = !pendingWrapPair;
+            if (cancel) cancel.disabled = !pendingWrapTransition;
         }
 
         function s5BeginAddWrapPair() {
@@ -2784,9 +2880,7 @@
         }
 
         function s5CancelWrapPair() {
-            const pending = pendingWrapPair;
-            restorePendingWrapConfiguration(pending);
-            pendingWrapPair = null;
+            cancelPendingWrapTransition('cancel_button');
             updateWrapPairControls();
             if (lastCurveTraces) renderCurveTraceOverlays(lastCurveTraces);
             updateScaleWrapStatus();
@@ -2817,9 +2911,7 @@
         }
 
         function cancelPendingWrapPair(reason = 'workspace_changed') {
-            if (!pendingWrapPair) return false;
-            s5CancelWrapPair();
-            return true;
+            return cancelPendingWrapTransition(reason);
         }
 
         function s5DeleteWrapPairNearMouse() {
@@ -4587,6 +4679,14 @@
             const tourBackdrop = document.getElementById('guidedTourBackdrop');
             if (tourBackdrop) {
                 tourBackdrop.addEventListener('click', skipWorkspaceTour);
+            }
+        });
+
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape' && pendingWrapTransition) {
+                event.preventDefault();
+                cancelPendingWrapTransition('escape');
+                showStatus('Wrap cancelled.', 'info');
             }
         });
 
@@ -11138,8 +11238,8 @@
             // One-click linked wrap tool takes precedence over curve dragging.
             // It deliberately accepts only an edge-side click and creates the
             // opposite-side candidate for confirmation.
-            if (event.button === 0 && pendingWrapPair) {
-                if (s5AddWrapPairAtImageCoords(xImg, yImg)) {
+            if (event.button === 0 && pendingWrapTransition) {
+                if (s5AddWrapTransitionAtImageCoords(xImg, yImg)) {
                     event.preventDefault();
                     event.stopPropagation();
                     return;
