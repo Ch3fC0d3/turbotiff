@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import cv2
 import numpy as np
 
@@ -138,20 +140,16 @@ def test_black_high_excursion_preserves_connected_horizontal_tips():
     rows = np.arange(height, dtype=np.float32)
     spine = 92.0 + 7.0 * np.sin(rows / 18.0)
     mask = np.zeros((height, width), dtype=np.uint8)
-    spine_points = np.column_stack(
-        (np.rint(spine).astype(np.int32), rows.astype(np.int32))
-    )
-    cv2.polylines(
-        mask,
-        [spine_points.reshape(-1, 1, 2)],
-        False,
-        255,
-        2,
-        cv2.LINE_AA,
-    )
 
-    # Alternating-side connected excursions. For a right-reading curve the
-    # expected value is the right endpoint (the spine on leftward strokes).
+    # Full-width grid and rail evidence is present before the stronger curve.
+    for x in range(15, width, 20):
+        cv2.line(mask, (x, 0), (x, height - 1), 85, 1)
+    for y in range(12, height, 24):
+        cv2.line(mask, (0, y), (width - 1, y), 85, 1)
+
+    # The curve itself is one continuous path. At each excursion it leaves the
+    # central region, traverses a nearly horizontal segment, and returns below
+    # it; there is no fixed left/right reading side.
     excursions = [
         (28, 'right', 43),
         (57, 'left', 38),
@@ -163,19 +161,32 @@ def test_black_high_excursion_preserves_connected_horizontal_tips():
     ]
     expected_rows = []
     expected_tips = []
+    curve_x = spine.copy()
     for y, side, length in excursions:
-        anchor_x = int(round(float(spine[y])))
-        tip_x = anchor_x + length if side == 'right' else anchor_x - length
-        cv2.line(mask, (anchor_x, y), (tip_x, y), 255, 2, cv2.LINE_AA)
+        direction = 1.0 if side == 'right' else -1.0
+        tip_x = float(spine[y]) + direction * float(length)
+        for offset in range(-3, 4):
+            weight = 1.0 - abs(float(offset)) / 3.0
+            row = y + offset
+            curve_x[row] = (
+                (1.0 - weight) * float(spine[row])
+                + weight * tip_x
+            )
         expected_rows.append(y)
-        expected_tips.append(float(tip_x if side == 'right' else anchor_x))
+        expected_tips.append(tip_x)
+    curve_points = np.column_stack((
+        np.rint(curve_x).astype(np.int32),
+        rows.astype(np.int32),
+    ))
 
-    # Periodic grid lines and rails remain strong but lower-confidence than
-    # the curve evidence supplied by the detector.
-    for x in range(15, width, 20):
-        cv2.line(mask, (x, 0), (x, height - 1), 85, 1)
-    for y in range(12, height, 24):
-        cv2.line(mask, (0, y), (width - 1, y), 85, 1)
+    cv2.polylines(
+        mask,
+        [np.asarray(curve_points, dtype=np.int32).reshape(-1, 1, 2)],
+        False,
+        255,
+        1,
+        cv2.LINE_8,
+    )
 
     # Faint and broken curve portions must become local gaps, not rail bridges.
     mask[132:135, :] = np.minimum(mask[132:135, :], 45)
@@ -191,12 +202,9 @@ def test_black_high_excursion_preserves_connected_horizontal_tips():
         curv_lambda=0.001,
         hot_side='right',
     )
-    traced = web_app.project_anchor_to_connected_hot_edge(
+    traced, _, diagnostics = web_app.trace_black_skeleton_graph(
         mask,
-        anchors,
-        hot_side='right',
-        max_extension=max(40, int(width * 0.40)),
-        vertical_radius=3,
+        guide=anchors,
     )
 
     expected_rows = np.asarray(expected_rows, dtype=np.int32)
@@ -208,6 +216,9 @@ def test_black_high_excursion_preserves_connected_horizontal_tips():
     assert float(np.median(finite_errors)) < 6.0
     assert float(np.percentile(finite_errors, 90)) < 12.0
     assert float(np.mean(tip_errors <= 10.0)) >= 0.80
+    assert diagnostics['trace_strategy'] == 'black_skeleton_graph'
+    assert diagnostics['skeleton_component_count'] > 0
+    assert diagnostics['path_pixel_count'] >= diagnostics['finite_output_rows']
 
     longest_vertical = 0
     current_vertical = 0
@@ -218,3 +229,66 @@ def test_black_high_excursion_preserves_connected_horizontal_tips():
         else:
             current_vertical = 0
     assert longest_vertical < 20
+
+
+def test_real_span_failure_uses_bidirectional_graph_excursions():
+    """Regression for the production scan that stayed on the cyan spine.
+
+    The fixture is the reported preview capture. The old cyan overlay is used
+    only as the deliberately imperfect seed and is removed from detector
+    evidence before tracing.
+    """
+    fixture = (
+        Path(__file__).parent
+        / "fixtures"
+        / "black_span_spine_failure.png"
+    )
+    image = cv2.imread(str(fixture), cv2.IMREAD_COLOR)
+    assert image is not None
+
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    cyan = cv2.inRange(
+        hsv,
+        np.asarray([75, 80, 80], dtype=np.uint8),
+        np.asarray([105, 255, 255], dtype=np.uint8),
+    )
+    guide = np.full(image.shape[0], np.nan, dtype=np.float32)
+    for row in range(image.shape[0]):
+        colored_x = np.where(cyan[row] > 0)[0]
+        if colored_x.size:
+            guide[row] = float(np.median(colored_x))
+    supported_guide = np.where(np.isfinite(guide))[0]
+    assert supported_guide.size
+    guide[:] = np.interp(
+        np.arange(guide.size),
+        supported_guide,
+        guide[supported_guide],
+    )
+
+    clean = image.copy()
+    overlay_pixels = cv2.dilate(
+        cyan,
+        np.ones((5, 5), dtype=np.uint8),
+    ) > 0
+    clean[overlay_pixels] = 255
+    probability = web_app.compute_prob_map(clean, mode="black")
+    traced, _, diagnostics = web_app.trace_black_skeleton_graph(
+        probability,
+        guide=guide,
+    )
+
+    inside_track = (
+        np.isfinite(traced)
+        & (traced > 5)
+        & (traced < image.shape[1] - 5)
+    )
+    displacement = traced - guide
+    assert np.count_nonzero(inside_track & (displacement < -20)) >= 50
+    assert np.count_nonzero(inside_track & (displacement > 20)) >= 20
+    assert float(np.nanmedian(np.abs(displacement[inside_track]))) >= 20.0
+    assert diagnostics["trace_strategy"] == "black_skeleton_graph"
+    assert diagnostics["graph_branch_count"] > 0
+    assert diagnostics["path_pixel_count"] > 0
+    assert diagnostics["finite_output_rows"] == int(
+        np.count_nonzero(np.isfinite(traced))
+    )

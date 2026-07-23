@@ -80,7 +80,6 @@ from datetime import datetime, timedelta, timezone
 import tempfile
 import textwrap
 import time
-import heapq
 from collections import defaultdict
 import cv2
 import numpy as np
@@ -3914,6 +3913,336 @@ def trace_curve_skeleton_path(mask: np.ndarray) -> Tuple[np.ndarray, np.ndarray]
         x = int(x_prev)
     conf = np.where(np.isfinite(xs_path), 1.0, 0.0).astype(np.float32)
     return xs_path, conf
+
+
+def trace_black_skeleton_graph(
+    mask: np.ndarray,
+    guide: np.ndarray = None,
+) -> Tuple[np.ndarray, np.ndarray, Dict[str, Any]]:
+    """Trace black curve ink as an 8-connected 2-D skeleton path.
+
+    Horizontal pixels are graph edges, not competing samples in one raster
+    row. A loose DP guide ranks overlapping candidates but never removes
+    evidence or chooses left/right endpoints. At graph branches, the walk
+    favours continuation of the incoming direction. The final row samples are
+    derived from resolved paths and remain missing where no section is
+    supported.
+    """
+    diagnostics = {
+        'trace_strategy': 'black_skeleton_graph',
+        'skeleton_component_count': 0,
+        'graph_branch_count': 0,
+        'path_pixel_count': 0,
+        'finite_output_rows': 0,
+    }
+    if mask is None or not hasattr(mask, 'size') or mask.size == 0:
+        return np.array([]), np.array([]), diagnostics
+
+    prob = np.asarray(mask)
+    if prob.ndim == 3:
+        prob = cv2.cvtColor(prob, cv2.COLOR_BGR2GRAY)
+    if prob.ndim != 2:
+        return np.array([]), np.array([]), diagnostics
+    prob = prob.astype(np.float32)
+    if float(np.nanmax(prob)) > 1.0:
+        prob /= 255.0
+    h, w = prob.shape
+    if h < 2 or w < 2:
+        return (
+            np.full(h, np.nan, dtype=np.float32),
+            np.zeros(h, dtype=np.float32),
+            diagnostics,
+        )
+
+    binary = prob >= 0.04
+    row_occupancy = np.mean(binary, axis=1)
+    column_occupancy = np.mean(binary, axis=0)
+    grid_rows = row_occupancy >= 0.55
+    grid_columns = column_occupancy >= 0.55
+    vertical_crossing = np.zeros_like(binary)
+    vertical_crossing[1:-1] = binary[:-2] & binary[2:]
+    horizontal_crossing = np.zeros_like(binary)
+    horizontal_crossing[:, 1:-1] = binary[:, :-2] & binary[:, 2:]
+    evidence = binary.copy()
+    # A dark grid rail is itself "strong" evidence, so intensity cannot be
+    # used to retain pixels on a detected rail. Keep only pixels that visibly
+    # continue through the rail in the perpendicular direction. This creates
+    # a private tracing mask; the displayed source image remains untouched.
+    evidence[grid_rows] &= vertical_crossing[grid_rows]
+    evidence[:, grid_columns] &= horizontal_crossing[:, grid_columns]
+
+    if guide is not None:
+        guide_arr = np.asarray(guide, dtype=np.float32).reshape(-1)
+        if guide_arr.size == h and np.isfinite(guide_arr).any():
+            finite = np.where(np.isfinite(guide_arr))[0]
+            guide_metric = guide_arr.copy()
+            # Guide filling is search-only. It never enters canonical output.
+            guide_metric[:] = np.interp(
+                np.arange(h, dtype=np.float32),
+                finite.astype(np.float32),
+                guide_arr[finite].astype(np.float32),
+            )
+        else:
+            guide_metric = np.full(h, float(w) / 2.0, dtype=np.float32)
+    else:
+        guide_metric = np.full(h, float(w) / 2.0, dtype=np.float32)
+
+    binary_u8 = evidence.astype(np.uint8) * 255
+    if cv2.countNonZero(binary_u8) == 0:
+        return (
+            np.full(h, np.nan, dtype=np.float32),
+            np.zeros(h, dtype=np.float32),
+            diagnostics,
+        )
+    if hasattr(cv2, 'ximgproc'):
+        skeleton = cv2.ximgproc.thinning(
+            binary_u8,
+            thinningType=cv2.ximgproc.THINNING_ZHANGSUEN,
+        )
+    else:
+        skeleton = _skeletonize_binary(binary_u8)
+    skeleton_on = skeleton > 0
+    if not np.any(skeleton_on):
+        return (
+            np.full(h, np.nan, dtype=np.float32),
+            np.zeros(h, dtype=np.float32),
+            diagnostics,
+        )
+
+    neighbor_count = cv2.filter2D(
+        skeleton_on.astype(np.uint8),
+        cv2.CV_16S,
+        np.ones((3, 3), dtype=np.uint8),
+        borderType=cv2.BORDER_CONSTANT,
+    ) - skeleton_on.astype(np.int16)
+    diagnostics['graph_branch_count'] = int(
+        np.count_nonzero(skeleton_on & (neighbor_count > 2))
+    )
+
+    component_count, component_labels, stats, _ = cv2.connectedComponentsWithStats(
+        skeleton_on.astype(np.uint8),
+        8,
+    )
+    diagnostics['skeleton_component_count'] = max(0, int(component_count - 1))
+    xs_out = np.full(h, np.nan, dtype=np.float32)
+    confidence = np.zeros(h, dtype=np.float32)
+    selected_path_pixels = 0
+    candidate_sections = []
+    directions = [
+        (-1, -1), (-1, 0), (-1, 1),
+        (0, -1), (0, 1),
+        (1, -1), (1, 0), (1, 1),
+    ]
+
+    for label in range(1, component_count):
+        x0, y0, comp_w, comp_h, area = [int(v) for v in stats[label]]
+        if area < 3 or comp_h < 2:
+            continue
+        width_ratio = float(comp_w) / float(w)
+        height_ratio = float(comp_h) / float(h)
+        if height_ratio >= 0.25 and width_ratio <= 0.025:
+            continue
+        if width_ratio >= 0.75 and height_ratio <= 0.08:
+            continue
+
+        crop = component_labels[y0:y0 + comp_h, x0:x0 + comp_w] == label
+        local_nodes = np.argwhere(crop)
+        node_count = int(local_nodes.shape[0])
+        if node_count < 2:
+            continue
+        global_node_y = local_nodes[:, 0] + y0
+        global_node_x = local_nodes[:, 1] + x0
+        # The first DP result is a ranking hint only. A deliberately wrong
+        # guide may sit on a remote rail, so distance must never reject an
+        # otherwise credible connected component.
+        minimum_guide_distance = float(np.min(np.abs(
+            global_node_x.astype(np.float32)
+            - guide_metric[global_node_y]
+        )))
+        node_map = np.full(crop.shape, -1, dtype=np.int32)
+        node_map[local_nodes[:, 0], local_nodes[:, 1]] = np.arange(
+            node_count, dtype=np.int32
+        )
+
+        top_local_y = int(np.min(local_nodes[:, 0]))
+        start_nodes = np.where(local_nodes[:, 0] <= top_local_y + 1)[0]
+        if not start_nodes.size:
+            continue
+        start_node = min(
+            start_nodes.tolist(),
+            key=lambda node: abs(
+                float(local_nodes[node, 1] + x0)
+                - float(guide_metric[local_nodes[node, 0] + y0])
+            ),
+        )
+
+        # Resolve the component as a directional graph walk, not as the
+        # shortest top-to-bottom route. Shortest-path search systematically
+        # chooses a convenient central spine and skips long valid horizontal
+        # excursions. The walk instead keeps its incoming direction through
+        # intersections and permits repeated same-row graph steps.
+        path_nodes = [int(start_node)]
+        visited_nodes = {int(start_node)}
+        recent_vectors = [(1.0, 0.0)]
+        current_node = int(start_node)
+        previous_node = -1
+        max_walk_steps = max(2, node_count)
+
+        for _ in range(max_walk_steps):
+            local_y, local_x = [int(v) for v in local_nodes[current_node]]
+            trend_y = float(np.mean([vector[0] for vector in recent_vectors]))
+            trend_x = float(np.mean([vector[1] for vector in recent_vectors]))
+            trend_norm = math.hypot(trend_y, trend_x)
+            if trend_norm <= 1e-6:
+                trend_y, trend_x, trend_norm = 1.0, 0.0, 1.0
+
+            candidates = []
+            for direction_index, (dy, dx) in enumerate(directions):
+                ny = local_y + dy
+                nx = local_x + dx
+                if ny < 0 or nx < 0 or ny >= comp_h or nx >= comp_w:
+                    continue
+                next_node = int(node_map[ny, nx])
+                if (
+                    next_node < 0
+                    or next_node == previous_node
+                    or next_node in visited_nodes
+                ):
+                    continue
+
+                global_y = ny + y0
+                global_x = nx + x0
+                direction_norm = math.hypot(float(dy), float(dx))
+                alignment = (
+                    (trend_y * float(dy) + trend_x * float(dx))
+                    / (trend_norm * direction_norm)
+                )
+                grid_direction_penalty = 0.0
+                if dy == 0 and bool(grid_rows[global_y]):
+                    grid_direction_penalty += 7.0
+                if dx == 0 and bool(grid_columns[global_x]):
+                    grid_direction_penalty += 7.0
+                backward_penalty = 2.0 if dy < 0 and trend_y >= 0 else 0.0
+                guide_penalty = 0.003 * abs(
+                    float(global_x) - float(guide_metric[global_y])
+                )
+                score = (
+                    5.0 * alignment
+                    + 1.2 * float(dy)
+                    + 2.5 * float(prob[global_y, global_x])
+                    - grid_direction_penalty
+                    - backward_penalty
+                    - guide_penalty
+                )
+                candidates.append((
+                    score,
+                    float(prob[global_y, global_x]),
+                    float(dy),
+                    next_node,
+                    (float(dy), float(dx)),
+                ))
+
+            if not candidates:
+                break
+            candidates.sort(reverse=True)
+            _, _, _, next_node, vector = candidates[0]
+            previous_node = current_node
+            current_node = int(next_node)
+            path_nodes.append(current_node)
+            visited_nodes.add(current_node)
+            recent_vectors.append(vector)
+            if len(recent_vectors) > 5:
+                recent_vectors.pop(0)
+
+        if len(path_nodes) < 2:
+            continue
+        path_coords = local_nodes[np.asarray(path_nodes, dtype=np.int32)]
+        path_y = path_coords[:, 0] + y0
+        path_x = path_coords[:, 1] + x0
+        selected_path_pixels += int(path_x.size)
+
+        section_rows = []
+        section_x = []
+        section_confidence = []
+        for row in np.unique(path_y):
+            # Resample strictly from the resolved graph walk, never from all
+            # pixels in its connected component. Grid crossings can connect a
+            # desired curve to unrelated ink; component-wide row sampling
+            # would silently re-admit those rejected branches.
+            path_row = path_y == row
+            row_x = path_x[path_row].astype(np.float32)
+            if row_x.size == 0:
+                continue
+            guide_x = float(guide_metric[int(row)])
+            # A nearly horizontal resolved path has several pixels at one
+            # depth. Preserve its actual excursion in either direction.
+            chosen_x = float(row_x[int(np.argmax(np.abs(row_x - guide_x)))])
+            chosen_confidence = float(prob[int(row), int(round(chosen_x))])
+            section_rows.append(int(row))
+            section_x.append(chosen_x)
+            section_confidence.append(chosen_confidence)
+
+        if section_rows:
+            rows_array = np.asarray(section_rows, dtype=np.int32)
+            x_array = np.asarray(section_x, dtype=np.float32)
+            confidence_array = np.asarray(section_confidence, dtype=np.float32)
+            order = np.argsort(rows_array)
+            rows_array = rows_array[order]
+            x_array = x_array[order]
+            confidence_array = confidence_array[order]
+            candidate_sections.append({
+                'rows': rows_array,
+                'x': x_array,
+                'confidence': confidence_array,
+                'mean_confidence': float(np.mean(confidence_array)),
+                'path_pixel_count': int(path_x.size),
+                'start_y': int(rows_array[0]),
+                'end_y': int(rows_array[-1]),
+                'start_x': float(x_array[0]),
+                'end_x': float(x_array[-1]),
+                'score': (
+                    float(rows_array.size)
+                    * (0.75 + float(np.mean(confidence_array)))
+                    - 0.35 * minimum_guide_distance
+                ),
+            })
+
+    # Resolve all credible continuous sections independently. A broken scan can
+    # legitimately contain several path sections; selecting one global chain
+    # would discard the top and bottom of a tall log. At overlapping rows,
+    # evidence strength wins first and the loose guide is only a tie-breaker.
+    if candidate_sections:
+        row_rank = np.full(h, -np.inf, dtype=np.float32)
+        selected_path_pixels = int(sum(
+            section['path_pixel_count']
+            for section in candidate_sections
+            if section['mean_confidence'] >= 0.16
+        ))
+        for section in candidate_sections:
+            if section['mean_confidence'] < 0.16:
+                continue
+            for row, x_value, row_confidence in zip(
+                section['rows'],
+                section['x'],
+                section['confidence'],
+            ):
+                row = int(row)
+                rank = (
+                    3.0 * float(section['mean_confidence'])
+                    + 0.006 * min(100, int(section['rows'].size))
+                    + 0.5 * float(row_confidence)
+                    - 0.002 * abs(
+                        float(x_value) - float(guide_metric[row])
+                    )
+                )
+                if rank > float(row_rank[row]):
+                    row_rank[row] = rank
+                    xs_out[row] = float(x_value)
+                    confidence[row] = float(row_confidence)
+
+    diagnostics['path_pixel_count'] = int(selected_path_pixels)
+    diagnostics['finite_output_rows'] = int(np.count_nonzero(np.isfinite(xs_out)))
+    return xs_out, confidence, diagnostics
 
 
 def _skeletonize_binary(bin_img: np.ndarray) -> np.ndarray:
@@ -12383,10 +12712,33 @@ def digitize():
             str(mode or '').strip().lower() == 'black'
             and bool(black_gr_names & {'GR', 'GAMMA', 'GAMMA RAY'})
         )
+        high_excursion_names = {
+            'GR', 'GAMMA', 'GAMMA RAY',
+            'CALI', 'CAL', 'CALIPER', 'HCAL', 'DCAL',
+            'SPAN', 'C1', 'C2', 'C3', 'C4',
+        }
+        named_high_excursion = bool(black_gr_names & high_excursion_names) or any(
+            token in identifier
+            for identifier in black_gr_names
+            for token in ('CALIP', 'SPAN')
+        )
         high_excursion_black = (
             str(mode or '').strip().lower() == 'black'
-            and (is_black_gr or preserve_wiggles or crest_boost)
+            and (named_high_excursion or preserve_wiggles or crest_boost)
         )
+        trace_runtime_diagnostics = {
+            'trace_strategy': 'legacy_dp',
+            'high_excursion_black': bool(high_excursion_black),
+            'curve_type': str(curve_type or ''),
+            'mode': str(mode or ''),
+            'preserve_wiggles': bool(preserve_wiggles),
+            'crest_boost': bool(crest_boost),
+            'hot_side': hot_side,
+            'skeleton_component_count': 0,
+            'graph_branch_count': 0,
+            'path_pixel_count': 0,
+            'finite_output_rows': 0,
+        }
         hot_side = resolve_curve_hot_side(
             hot_side,
             left_value,
@@ -13042,14 +13394,11 @@ def digitize():
             )
 
             if high_excursion_black:
-                xs = project_anchor_to_connected_hot_edge(
+                xs, confidence, skeleton_diagnostics = trace_black_skeleton_graph(
                     evidence_mask,
-                    xs,
-                    hot_side=hot_side,
-                    max_extension=max(40, int(mask.shape[1] * 0.40)),
-                    vertical_radius=3,
-                    wrap_width=mask.shape[1] if wrap_enabled else None,
+                    guide=xs,
                 )
+                trace_runtime_diagnostics.update(skeleton_diagnostics)
             else:
                 # Snap the DP path toward obvious local maxima in the prob mask
                 xs = refine_trace_with_local_maxima(mask, xs, **refine_kwargs)
@@ -13196,7 +13545,11 @@ def digitize():
         # every coordinate-changing refinement and fallback has finished.
         if xs.size > 0 and not classic_black_cleanup:
             try:
-                if wrap_enabled and preserve_black_detail:
+                if high_excursion_black:
+                    # The graph walk already validated 2-D continuity,
+                    # including horizontal movement. Preserve its row gaps.
+                    xs = np.asarray(xs, dtype=np.float32).copy()
+                elif wrap_enabled and preserve_black_detail:
                     # The black-detail path may contain genuine unsupported
                     # rows.  Preserve them for the canonical trace rather
                     # than bridging them with a cyclic display coordinate.
@@ -13390,17 +13743,29 @@ def digitize():
             except Exception:
                 pass
 
-            try:
-                # This is intentionally the last coordinate-changing tracing
-                # operation before canonical conversion.
-                xs = enforce_local_trace_continuity(
-                    evidence_mask,
-                    xs,
-                    max_step=final_step,
-                    wrap_width=wrap_width,
-                )
-            except Exception:
-                pass
+            if not high_excursion_black:
+                try:
+                    # This is intentionally the last coordinate-changing tracing
+                    # operation before canonical conversion.
+                    xs = enforce_local_trace_continuity(
+                        evidence_mask,
+                        xs,
+                        max_step=final_step,
+                        wrap_width=wrap_width,
+                    )
+                except Exception:
+                    pass
+
+        trace_runtime_diagnostics.update({
+            'high_excursion_black': bool(high_excursion_black),
+            'curve_type': str(curve_type or ''),
+            'mode': str(mode or ''),
+            'preserve_wiggles': bool(preserve_wiggles),
+            'crest_boost': bool(crest_boost),
+            'hot_side': hot_side,
+            'finite_output_rows': int(np.count_nonzero(np.isfinite(xs))),
+        })
+        phase_metadata.update(trace_runtime_diagnostics)
 
         topology_scale_type = str(c.get('scale_type') or 'linear').lower().strip()
         if topology_scale_type not in {'linear', 'log', 'centered'}:
