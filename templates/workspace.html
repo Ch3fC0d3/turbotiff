@@ -2662,7 +2662,7 @@
             if (cancel) cancel.disabled = !pendingWrapTransition;
         }
 
-        function s5BeginAddWrapPair() {
+        function retiredLegacyWrapProposal() {
             const ctx = getSelectedWrapCurveContext();
             if (!ctx || !ctx.track || !ctx.curveKey) {
                 showStatus('Select a digitized curve before adding a wrap.', 'info');
@@ -2691,7 +2691,7 @@
             showStatus('Click the curve near either track edge to mark the wrap.', 'info');
         }
 
-        function s5AddWrapPairAtImageCoords(xImg, yImg) {
+        function retiredLegacyWrapProposalClick(xImg, yImg) {
             if (!pendingWrapPair || !pendingWrapPair.track) return false;
             const { curveKey, track } = pendingWrapPair;
             const depthIndex = getDepthIndexAtImageY(yImg);
@@ -2826,7 +2826,7 @@
             }
         }
 
-        function s5ConfirmWrapPair() {
+        function retiredLegacyWrapProposalConfirm() {
             if (!pendingWrapPair || !pendingWrapPair.candidate) return;
             if (pendingWrapPair.datasetGeneration !== committedDatasetGeneration ||
                 !isCurveLayerRevisionCurrent(pendingWrapPair.curveKey, 'main', pendingWrapPair.sourceRevision)) {

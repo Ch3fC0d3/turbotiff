@@ -2364,8 +2364,10 @@ def test_linked_wrap_pair_tool_validates_edges_and_preserves_render_breaks():
     evidence_start = source.index("function findBlackCurveEvidence(")
     evidence_end = source.index("function snapWrapClickToImageEvidence(", evidence_start)
     evidence_source = source[evidence_start:evidence_end]
-    add_wrap_source = _function_source(source, "s5AddWrapPairAtImageCoords", "s5ConfirmWrapPair")
-    begin_wrap_source = _function_source(source, "s5BeginAddWrapPair", "s5AddWrapPairAtImageCoords")
+    transition_begin_source = _function_source(source, "s5BeginAddWrapTransition", "cancelPendingWrapTransition")
+    transition_click_source = _function_source(source, "s5AddWrapTransitionAtImageCoords", "commitWrapTransition")
+    transition_commit_source = _function_source(source, "commitWrapTransition", "getWrapEvidencePoint")
+    mask_snap_source = _function_source(source, "snapWrapPointToMask", "s5BeginAddWrapTransition")
     cancel_wrap_source = _function_source(source, "s5CancelWrapPair", "cancelPendingWrapPair")
     restore_wrap_source = _function_source(source, "restorePendingWrapConfiguration", "cancelPendingWrapPair")
     undo_wrap_source = _function_source(source, "undoLastCurveEdit", "beginCurveEditInteraction")
@@ -2373,21 +2375,27 @@ def test_linked_wrap_pair_tool_validates_edges_and_preserves_render_breaks():
     renderer_source = _function_source(source, "renderCurveTraceOverlays", "clearDepthOverlays")
 
     assert "Add Wrap" in source
-    assert "Confirm" in source
+    assert 'id="s5ConfirmWrapBtn"' not in source
+    assert "function s5ConfirmWrapPair(" not in source
     assert "Cancel" in source
     assert "Delete Wrap" in source
     assert "wrap_pair_id" in source
     assert "Wrap points must be on opposite sides of the track." in validation_source
-    assert "s5AddWrapPairAtImageCoords(xImg, yImg)" in source
+    assert "s5AddWrapTransitionAtImageCoords(xImg, yImg)" in source
     assert "if (isScaleWrapBoundaryForPoints(curveId, prevPoint, currPoint)) return true;" in source
     assert "ctx.moveTo(xDom, yDom);" in renderer_source
     assert "lastCurveTraces" not in evidence_source
     assert "imagePreview" in evidence_source
-    assert "Could not find the opposite wrap point. Click where the curve resumes on the other side." in add_wrap_source
-    assert "await_second_click" in add_wrap_source
-    assert "snapWrapClickToImageEvidence" in add_wrap_source
-    assert "requestedWrappedState: true" in begin_wrap_source
-    assert "originalWrapLayer" in begin_wrap_source
+    assert "pendingWrapTransition" in transition_begin_source
+    assert "trackSnapshot" in transition_begin_source
+    assert "datasetGeneration" in transition_begin_source
+    assert "sourceRevision" in transition_begin_source
+    assert "Now click where the curve resumes on the opposite side." in transition_click_source
+    assert "The second point must be on the opposite side of the track." in transition_click_source
+    assert "snapWrapPointToMask" in transition_click_source
+    assert "lastCurveTraces" not in mask_snap_source
+    assert "commitWrapTransition(pending, point)" in transition_click_source
+    assert "wrap_transition" in transition_commit_source
     assert "cancelPendingWrapTransition('cancel_button');" in cancel_wrap_source
     assert "cancel_pending_wrap_remove_layer" in restore_wrap_source
     assert "cancel_pending_wrap_replace_layer" in restore_wrap_source
