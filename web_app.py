@@ -12910,6 +12910,21 @@ def digitize():
             except Exception:
                 pass
 
+            # A colored-mode path can still settle on a faint vertical grid
+            # column after colour extraction.  A true curve cannot occupy a
+            # large fraction of one column over the full track; reject those
+            # rails rather than painting a false vertical overlay.
+            try:
+                column_occupancy = np.mean(mask > 0, axis=0)
+                rail_columns = column_occupancy >= 0.45
+                finite_rows = np.where(np.isfinite(xs))[0]
+                for row in finite_rows:
+                    column = int(np.clip(round(float(xs[row])), 0, rail_columns.size - 1))
+                    if rail_columns[column]:
+                        xs[row] = np.nan
+            except Exception:
+                pass
+
             # Optional final local peak snap; kept disabled because it
             # quantizes to integer columns and can reintroduce zig-zags.
             do_final_peak_snap = False
