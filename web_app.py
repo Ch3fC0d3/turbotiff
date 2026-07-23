@@ -3975,13 +3975,20 @@ def trace_black_skeleton_graph(
         guide_arr = np.asarray(guide, dtype=np.float32).reshape(-1)
         if guide_arr.size == h and np.isfinite(guide_arr).any():
             finite = np.where(np.isfinite(guide_arr))[0]
-            guide_metric = guide_arr.copy()
-            # Guide filling is search-only. It never enters canonical output.
-            guide_metric[:] = np.interp(
-                np.arange(h, dtype=np.float32),
-                finite.astype(np.float32),
-                guide_arr[finite].astype(np.float32),
+            row_axis = np.arange(h, dtype=np.int32)
+            insertion = np.searchsorted(finite, row_axis)
+            left_position = np.clip(insertion - 1, 0, finite.size - 1)
+            right_position = np.clip(insertion, 0, finite.size - 1)
+            left_rows = finite[left_position]
+            right_rows = finite[right_position]
+            use_right = (
+                np.abs(right_rows - row_axis)
+                < np.abs(row_axis - left_rows)
             )
+            nearest_rows = np.where(use_right, right_rows, left_rows)
+            # Nearest guide filling is search-only. It never enters canonical
+            # output and cannot invent a sloped path across a missing section.
+            guide_metric = guide_arr[nearest_rows].astype(np.float32)
         else:
             guide_metric = np.full(h, float(w) / 2.0, dtype=np.float32)
     else:
@@ -6967,12 +6974,65 @@ def refine_black_sonic_trace_to_hot_ink(
             bool(wrap_enabled),
         )
         finite_fraction = float(np.mean(np.isfinite(candidate_path)))
-        if finite_fraction >= 0.60 and np.isfinite(candidate_path).all():
-            result[:n] = pd.Series(candidate_path).rolling(
-                5,
-                center=True,
-                min_periods=1,
-            ).median().to_numpy(dtype=np.float32)
+        if finite_fraction >= 0.60:
+            # The afternoon pipeline accepted a well-supported sonic path even
+            # when a few grid crossings were missing. Requiring every row to
+            # be finite disabled this refinement on real scans and left the
+            # original center-spine DP trace untouched. Smooth each supported
+            # section independently, then update only rows backed by candidate
+            # evidence; never fill or smooth across a missing row.
+            candidate_smoothed = smooth_trace_supported_sections(
+                candidate_path,
+                window=5,
+                wrap_width=w if wrap_enabled else None,
+            )
+            supported_candidate = (
+                np.isfinite(candidate_path)
+                & np.isfinite(candidate_smoothed)
+            )
+            result_view = result[:n]
+            result_view[supported_candidate] = candidate_smoothed[
+                supported_candidate
+            ]
+            # A missing hot-ink candidate may coincide with a valid incoming
+            # point, but it may also expose the stale center spine that this
+            # pass is intended to replace. Use neighboring candidates only to
+            # validate the incoming value, never to fill the missing row.
+            supported_rows = np.flatnonzero(supported_candidate)
+            if supported_rows.size >= 2:
+                row_axis = np.arange(n, dtype=np.int32)
+                insertion = np.searchsorted(supported_rows, row_axis)
+                left_position = np.clip(
+                    insertion - 1,
+                    0,
+                    supported_rows.size - 1,
+                )
+                right_position = np.clip(
+                    insertion,
+                    0,
+                    supported_rows.size - 1,
+                )
+                left_rows = supported_rows[left_position]
+                right_rows = supported_rows[right_position]
+                use_right = (
+                    np.abs(right_rows - row_axis)
+                    < np.abs(row_axis - left_rows)
+                )
+                nearest_rows = np.where(use_right, right_rows, left_rows)
+                candidate_reference = candidate_smoothed[nearest_rows]
+                maximum_hold_distance = max(
+                    12.0,
+                    min(24.0, float(w) * 0.20),
+                )
+                stale_spine = (
+                    ~supported_candidate
+                    & np.isfinite(result_view)
+                    & (
+                        np.abs(result_view - candidate_reference)
+                        > maximum_hold_distance
+                    )
+                )
+                result_view[stale_spine] = np.nan
     except Exception:
         pass
     return result
