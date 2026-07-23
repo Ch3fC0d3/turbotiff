@@ -6041,6 +6041,29 @@ def split_supported_trace_segments(xs, support_mask=None, explicit_breaks=None, 
     return segments
 
 
+def smooth_trace_supported_sections(xs, *, window=5, explicit_breaks=None,
+                                    wrap_width=None, wrap_cycle=None):
+    """Smooth only finite canonical sections and restore the original gap mask."""
+    source = np.asarray(xs, dtype=np.float32)
+    missing = ~np.isfinite(source)
+    continuous = _unwrap_trace_for_filtering(source, wrap_width) if wrap_width and wrap_width > 1 else source.copy()
+    result = np.full(source.shape, np.nan, dtype=np.float32)
+    cycles = None if wrap_cycle is None else np.asarray(wrap_cycle, dtype=np.int32)
+    breaks = set(explicit_breaks or [])
+    if cycles is not None:
+        breaks.update(row for row in range(1, source.size) if cycles[row] != cycles[row - 1])
+    for start, end in split_supported_trace_segments(continuous, explicit_breaks=breaks):
+        section = pd.Series(continuous[start:end + 1])
+        result[start:end + 1] = section.rolling(window=window, center=True, min_periods=1).mean().to_numpy(dtype=np.float32)
+    result[missing] = np.nan
+    if wrap_width and wrap_width > 1:
+        # Display projection occurs only after canonical/unwrapped smoothing.
+        projected = np.mod(result, float(wrap_width)).astype(np.float32)
+        projected[missing] = np.nan
+        return projected
+    return result
+
+
 def can_fill_trace_gap(start_row, end_row, probability, binary_mask=None,
                        explicit_breaks=None, wrap_events=None, max_gap_rows=0,
                        minimum_support=0.0):
@@ -6189,6 +6212,38 @@ def resample_values_by_continuous_sections(
                 inside = (target >= low) & (target <= high)
                 result[inside] = np.interp(target[inside], x[order], y[order]).astype(np.float32)
         start = end
+    return result
+
+
+def resample_canonical_trace_to_depth_grid(trace, source_depth, target_depth):
+    """Put canonical coordinates on the committed depth grid without bridging gaps."""
+    source = np.asarray(source_depth, dtype=np.float64)
+    target = np.asarray(target_depth, dtype=np.float64)
+    unwrapped = np.asarray([np.nan if value is None else value for value in trace.get("unwrapped_x", [])], dtype=np.float64)
+    if source.size != unwrapped.size:
+        raise ValueError("canonical trace and source depth must share one grid")
+    breaks = {int(row) for row in trace.get("explicit_breaks", []) if 0 < int(row) < unwrapped.size}
+    projected = resample_values_by_continuous_sections(source, unwrapped, target, explicit_breaks=breaks, null_value=np.nan)
+    width = int(trace.get("track_width") or 0)
+    cycles = np.zeros(projected.shape, dtype=np.int32)
+    valid = np.isfinite(projected)
+    if width > 1:
+        cycles[valid] = np.floor(projected[valid] / float(width)).astype(np.int32)
+    mapped_breaks = set()
+    for row in breaks:
+        nearest = int(np.argmin(np.abs(target - source[row])))
+        if 0 < nearest < target.size:
+            mapped_breaks.add(nearest)
+    for row in range(1, projected.size):
+        if not (np.isfinite(projected[row - 1]) and np.isfinite(projected[row])):
+            mapped_breaks.add(row)
+    result = build_canonical_trace(
+        projected, width, wrapped=bool(np.any(cycles)), unwrapped_x=projected,
+        wrap_cycle=cycles, explicit_breaks=sorted(mapped_breaks),
+    )
+    for key in ("track_left_px", "track_right_px", "source", "scale_type"):
+        if key in trace:
+            result[key] = trace[key]
     return result
 
 
@@ -12843,12 +12898,15 @@ def digitize():
                 prob_map = mask.astype(np.float32) / 255.0
                 xs = ensure_gr_peak_crests(xs, prob_map, hot_side=hot_side)
 
-            # To avoid staircases when DP tracks a jagged pixelated diagonal,
-            # apply a light moving average. This turns blocky steps into smooth diagonals.
+            # Smooth each supported canonical section only.  In particular,
+            # never average across missing rows or a visible wrap boundary.
             try:
                 if xs.size > 0:
-                    s = pd.Series(xs)
-                    xs = s.rolling(window=5, center=True, min_periods=1).mean().to_numpy(dtype=np.float32)
+                    xs = smooth_trace_supported_sections(
+                        xs,
+                        window=5,
+                        wrap_width=mask.shape[1] if wrap_enabled else None,
+                    )
             except Exception:
                 pass
 
@@ -13011,16 +13069,18 @@ def digitize():
 
         las_curve_data = {}
         for name, meta in curve_data.items():
-            vals = meta["values"].astype(np.float32)
             canonical = canonical_traces.get(name) or {}
-            source_values = np.where(vals == null_val, np.nan, vals)
-            new_vals = resample_values_by_continuous_sections(
-                base_depth,
-                source_values,
-                las_depth,
-                explicit_breaks=canonical.get('explicit_breaks') or [],
-                null_value=null_val,
+            # The editable/LAS depth grid is the authoritative canonical grid.
+            # Resample coordinates once, then derive values from those samples.
+            canonical = resample_canonical_trace_to_depth_grid(canonical, base_depth, las_depth)
+            canonical_traces[name] = canonical
+            new_vals = canonical_trace_to_values(
+                canonical,
+                left_value=float(next((c.get('left_value', 0) for c in curves if c.get('name') == name), 0)),
+                right_value=float(next((c.get('right_value', 100) for c in curves if c.get('name') == name), 100)),
+                scale_type=canonical.get('scale_type', 'linear'), track_width=int(canonical.get('track_width') or 1),
             )
+            new_vals = np.where(np.isfinite(new_vals), new_vals, null_val).astype(np.float32)
 
             las_curve_data[name] = {"unit": meta.get("unit", ""), "values": new_vals}
 
