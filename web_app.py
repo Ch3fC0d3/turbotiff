@@ -6531,6 +6531,15 @@ def build_canonical_trace(
         valid = np.isfinite(continuous)
         if wrapped:
             cycles[valid] = np.floor(continuous[valid] / width).astype(np.int32)
+            
+            # Normalize the unwrapped trace so that the most heavily populated cycle becomes cycle 0
+            if np.any(valid):
+                raw_cycles = cycles[valid]
+                counts = np.bincount(raw_cycles - raw_cycles.min())
+                mode_cycle = counts.argmax() + raw_cycles.min()
+                if mode_cycle != 0:
+                    continuous[valid] -= mode_cycle * width
+                    cycles[valid] -= mode_cycle
     else:
         cycles = np.asarray(wrap_cycle, dtype=np.int32).copy()
         if cycles.shape != continuous.shape:
