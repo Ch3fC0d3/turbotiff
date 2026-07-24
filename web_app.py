@@ -3614,7 +3614,11 @@ def trace_curve_with_dp(
 
     # Soft rail penalty: down-weight columns that stay on for many rows, without banning them
     if h >= 4 and w >= 2:
-        col_frac = bin_mask.mean(axis=0)
+        # BUGFIX: We cannot use `bin_mask` (which requires prob > 0.10) to find rails,
+        # because grid lines are suppressed down to ~0.001 by compute_prob_map!
+        # If we use bin_mask, the suppressed grid lines evade detection and the penalty entirely.
+        rail_detection_mask = prob >= 0.0005
+        col_frac = rail_detection_mask.mean(axis=0)
         # Lower threshold so we catch dashed or interrupted vertical grid lines.
         rail_thresh = 0.30 if curve_type_upper == 'GR' else 0.40
         rail_mask = col_frac > rail_thresh
