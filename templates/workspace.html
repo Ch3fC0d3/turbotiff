@@ -2145,7 +2145,11 @@
 
         function normalizeCanonicalTrace(trace, track = null) {
             if (!trace || !Array.isArray(trace.unwrapped_x)) return null;
-            const unwrapped = trace.unwrapped_x.map(value => Number.isFinite(Number(value)) ? Number(value) : null);
+            // JSON null is an unsupported trace row. Number(null) is 0 in
+            // JavaScript, which previously rendered every missing row on the
+            // track's left boundary as cyan dots or magenta blobs.
+            const unwrapped = trace.unwrapped_x.map(value =>
+                value == null ? null : (Number.isFinite(Number(value)) ? Number(value) : null));
             const width = Number(trace.track_width || (track && Math.abs(track.rightX - track.leftX)));
             if (!Number.isFinite(width) || width <= 1) return null;
             const cycles = Array.isArray(trace.wrap_cycle) ? trace.wrap_cycle : [];
@@ -15974,13 +15978,11 @@
                         };
 
                         let accumulatedWrapPhase = 0;
-                        if (wrapActive && trackMeta) {
-                            const left = Math.min(trackMeta.leftX, trackMeta.rightX);
-                            const width = Math.abs(trackMeta.rightX - trackMeta.leftX);
-                            if (width > 0) {
-                                accumulatedWrapPhase = Math.floor((firstRawX - left + 1e-5) / width);
-                            }
-                        }
+                        // BUGFIX: Do NOT initialize accumulatedWrapPhase from firstRawX!
+                        // The midRawX passed to onSegment already contains the absolute unwrapped position,
+                        // so baseCycle = Math.floor((midRawX - left) / width) already correctly captures the cycle of the first point.
+                        // If we initialize accumulatedWrapPhase to the same value, we double-count the cycle!
+                        // accumulatedWrapPhase is ONLY meant to accumulate explicit wrap jumps encountered during the loop.
 
                         const onSegment = wrapActive ? (midRawX, penX, penY, overridePhase) => {
                             const left = Math.min(trackMeta.leftX, trackMeta.rightX);
@@ -16002,7 +16004,7 @@
                             }
                         } : null;
 
-                        if (onSegment) onSegment(firstRawX, firstX, firstY, accumulatedWrapPhase);
+                        if (onSegment) onSegment(firstRawX, firstX, firstY);
                         ctx.moveTo(firstX, firstY);
                         const splitWrappedJumps = false;
                         const wrapJumpThreshold = Infinity;
