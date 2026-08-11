@@ -4806,10 +4806,21 @@
             const panel = document.getElementById('step5AdvancedPanel');
             if (!panel) return;
             if (i < 0) { panel.style.display = 'none'; return; }
+            // Repair an auto-filled card before showing it in Step 5. This
+            // prevents an old GR/API display identity from shadowing a DTC
+            // configuration selected in Step 4.
+            syncCurveTypeToLabels(i, { syncDisplay: true });
             panel.style.display = '';
             const nameLabel = document.getElementById('step5CurveName');
             const nameEl = document.getElementById(`name${i}`);
-            if (nameLabel) nameLabel.textContent = (nameEl ? nameEl.value : '') || `Curve ${i + 1}`;
+            const mnemonicEl = document.getElementById(`lasMnemonic${i}`);
+            const typeEl = document.getElementById(`type${i}`);
+            if (nameLabel) {
+                nameLabel.textContent = (mnemonicEl ? mnemonicEl.value : '')
+                    || (nameEl ? nameEl.value : '')
+                    || (typeEl ? typeEl.value : '')
+                    || `Curve ${i + 1}`;
+            }
             const textFields = ['xOffset', 'curveShift', 'curveShiftY', 'lasMnemonic', 'lasUnit', 'lineColor', 'pointColor'];
             textFields.forEach(f => {
                 const src = document.getElementById(`${f}${i}`);
@@ -6819,6 +6830,9 @@
             const numCurves = parseInt(document.getElementById('numCurves')?.value || '0', 10);
             const usedMnemonics = {};
             for (let i = 0; i < numCurves; i++) {
+                // Repair legacy/auto-filled cards whose Type was updated but
+                // whose generic Name or Unit still describes the prior curve.
+                syncCurveTypeToLabels(i, { syncDisplay: true });
                 const type = document.getElementById(`type${i}`)?.value || '';
                 const displayName = document.getElementById(`name${i}`)?.value || '';
                 const displayUnit = document.getElementById(`unit${i}`)?.value || '';
@@ -12156,6 +12170,8 @@
 
         function syncCurveTypeToLabels(curveIndex, options = {}) {
             const typeEl = document.getElementById(`type${curveIndex}`);
+            const nameEl = document.getElementById(`name${curveIndex}`);
+            const unitEl = document.getElementById(`unit${curveIndex}`);
             const lasMnemonicEl = document.getElementById(`lasMnemonic${curveIndex}`);
             const lasUnitEl = document.getElementById(`lasUnit${curveIndex}`);
             const leftValEl = document.getElementById(`leftVal${curveIndex}`);
@@ -12165,6 +12181,7 @@
             const typeVal = typeEl.value;
             const defaults = curveTypeDefaults[typeVal] || {};
             const syncScaleMode = options && options.syncScale ? String(options.syncScale).toLowerCase() : 'never';
+            const syncDisplay = !!(options && options.syncDisplay);
             
             // Only sync LAS mnemonic and unit - NOT display name
             // Display name should be determined independently by AI/OCR
@@ -12173,6 +12190,30 @@
             }
             if (defaults.unit) {
                 lasUnitEl.value = defaults.unit;
+            }
+
+            // A type change must not leave a prior generic identity behind
+            // (e.g. Type=DT while Name=GR and Unit=API). Preserve meaningful
+            // OCR/user labels, but repair empty or known default labels/units.
+            if (syncDisplay && defaults.mnemonic) {
+                const genericMnemonics = new Set(
+                    Object.values(curveTypeDefaults)
+                        .map((entry) => String(entry && entry.mnemonic || '').trim().toUpperCase())
+                        .filter(Boolean)
+                );
+                const genericUnits = new Set(
+                    Object.values(curveTypeDefaults)
+                        .map((entry) => String(entry && entry.unit || '').trim().toUpperCase())
+                        .filter(Boolean)
+                );
+                const currentName = String(nameEl && nameEl.value || '').trim();
+                const currentUnit = String(unitEl && unitEl.value || '').trim();
+                if (nameEl && (!currentName || genericMnemonics.has(currentName.toUpperCase()))) {
+                    nameEl.value = defaults.mnemonic;
+                }
+                if (unitEl && (!currentUnit || genericUnits.has(currentUnit.toUpperCase()))) {
+                    unitEl.value = defaults.unit || currentUnit;
+                }
             }
 
             if ((syncScaleMode === 'auto' || syncScaleMode === 'force') && leftValEl && rightValEl) {
@@ -14574,7 +14615,7 @@
                 // #1: Auto-sync type changes to LAS mnemonic/unit
                 if (typeEl) {
                     typeEl.addEventListener('change', () => {
-                        syncCurveTypeToLabels(i, { syncScale: 'auto' });
+                        syncCurveTypeToLabels(i, { syncScale: 'auto', syncDisplay: true });
                         // Default scale_type from the curve type
                         const scaleSel = document.getElementById(`scaleType${i}`);
                         if (scaleSel) {
