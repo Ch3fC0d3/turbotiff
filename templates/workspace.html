@@ -12721,9 +12721,10 @@
             const headerSourceWidth = originalImageWidth || imageWidth;
             const headerSourceHeight = originalImageHeight || imageHeight;
 
-            // Most log keys fit in the top 12%. A tighter band avoids treating
-            // calibration tables in the log body as curve labels.
-            let bottomBound = Math.floor(headerSourceHeight * 0.12);
+            // Headers can sit beneath a sizeable title block. Scan the upper
+            // third of the original page so the automatic path covers both
+            // title metadata and the curve-label row.
+            let bottomBound = Math.floor(headerSourceHeight * 0.30);
             
             // --- Scan top ---
             headerRegion = {
