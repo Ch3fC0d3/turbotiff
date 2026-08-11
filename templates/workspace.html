@@ -12197,8 +12197,15 @@
             // OCR/user labels, but repair empty or known default labels/units.
             if (syncDisplay && defaults.mnemonic) {
                 const genericMnemonics = new Set(
-                    Object.values(curveTypeDefaults)
-                        .map((entry) => String(entry && entry.mnemonic || '').trim().toUpperCase())
+                    [
+                        // Include both the LAS defaults (DTC) and the select
+                        // values (DT).  The DT/DTC control stores `DT`, so an
+                        // older card named `DT` must be treated as generic too.
+                        ...Object.keys(curveTypeDefaults),
+                        ...Object.values(curveTypeDefaults)
+                            .map((entry) => String(entry && entry.mnemonic || '').trim())
+                    ]
+                        .map((value) => String(value || '').trim().toUpperCase())
                         .filter(Boolean)
                 );
                 const genericUnits = new Set(
