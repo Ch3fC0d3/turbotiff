@@ -13823,8 +13823,8 @@ def digitize():
                     pass
 
             try:
-                # Rail rejection follows every operation that can select a
-                # different dark run.
+                # Keep the established classic ordering: reject a rail before
+                # continuity enforcement can reconnect it.
                 xs = suppress_black_grid_lock_runs(
                     roi,
                     xs,
@@ -13846,6 +13846,29 @@ def digitize():
                     )
                 except Exception:
                     pass
+
+        # Sonic/DTC traces preserve sharp local detail and therefore skip the
+        # generic black smoothing above. They still need this final rail guard:
+        # otherwise a full-width DTC ROI can settle onto a dark vertical grid
+        # line and render a convincing-but-false dotted trace.
+        black_trace_uses_rail_guard = (
+            mode not in colored_modes
+            and not phase2_active
+            and not topology_active
+            and preserve_black_detail
+        )
+        if black_trace_uses_rail_guard:
+            try:
+                # Rail rejection follows every operation that can select a
+                # different dark run, including the sonic-detail path.
+                xs = suppress_black_grid_lock_runs(
+                    roi,
+                    xs,
+                    curve_type=curve_type,
+                    wrap_width=width_px if wrap_enabled else None,
+                )
+            except Exception:
+                pass
 
         trace_runtime_diagnostics.update({
             'high_excursion_black': bool(high_excursion_black),
