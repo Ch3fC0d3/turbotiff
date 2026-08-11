@@ -9757,7 +9757,11 @@ def auto_layout_tracks():
         return jsonify({
             'success': True,
             'tracks': tracks_out,
-            'raw_layout': {'tracks': [], 'fallback': 'edge_detection'},
+            'raw_layout': {
+                'tracks': [],
+                'fallback': 'edge_detection_no_header_text',
+                'ocr_items': 0,
+            },
             'header_metadata': header_metadata,
         })
 
@@ -12053,9 +12057,13 @@ def download_log(log_id):
 @app.route('/api/logs/<log_id>/image', methods=['GET'])
 @login_required()
 def get_log_image(log_id):
-    """Serve the cropped image (if available) or original image for a saved log, regardless of how the
+    """Serve a saved image, regardless of how the
     image path was stored: inline data URL, /api/images/<file>
     server path, an absolute http(s) URL, or a GCS object key.
+
+    By default the cropped working image is preferred.  ``?variant=original``
+    is used by header extraction to retrieve the full scan after a saved log
+    has been reopened.
     """
     user = _current_user(require_access=True)
     if not user:
@@ -12065,8 +12073,12 @@ def get_log_image(log_id):
     if not log_data:
         return "Log not found", 404
 
-    # Prefer cropped_image_path if present, else original_image_path
-    path = (log_data.get('cropped_image_path') or log_data.get('original_image_path') or '').strip()
+    variant = str(request.args.get('variant', '')).strip().lower()
+    if variant == 'original':
+        path = (log_data.get('original_image_path') or '').strip()
+    else:
+        # Prefer cropped_image_path if present, else original_image_path
+        path = (log_data.get('cropped_image_path') or log_data.get('original_image_path') or '').strip()
     if not path:
         return "No image stored for this log", 404
 

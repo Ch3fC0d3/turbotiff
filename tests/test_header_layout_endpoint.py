@@ -104,6 +104,29 @@ class HeaderLayoutEndpointTests(unittest.TestCase):
         metadata = response.get_json()['header_metadata']
         self.assertEqual(metadata, {'well': 'MENDEL ESTATE NO 1'})
 
+    def test_empty_ocr_reports_header_text_missing_in_edge_fallback(self):
+        client = web_app.app.test_client()
+        detected = {'raw': [], 'full_text': '', 'numbers': [], 'suggestions': {}}
+
+        with patch.object(web_app, 'detect_text_vision_api', return_value=detected), \
+                patch.object(web_app, 'auto_detect_tracks', return_value=[(100, 300)]):
+            response = client.post('/api/auto_layout', json={
+                'image': self.image_data,
+                'region': {
+                    'left_px': 0,
+                    'right_px': 1000,
+                    'top_px': 0,
+                    'bottom_px': 120,
+                },
+                'treat_region_as_header': True,
+            })
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload['success'])
+        self.assertEqual(payload['raw_layout']['fallback'], 'edge_detection_no_header_text')
+        self.assertEqual(payload['raw_layout']['ocr_items'], 0)
+
     def test_permanently_rejected_gemini_key_is_skipped_after_first_failure(self):
         rejected = type('Response', (), {
             'status_code': 403,

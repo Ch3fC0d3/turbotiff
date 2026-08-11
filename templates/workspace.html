@@ -2055,6 +2055,12 @@
 
         let uploadedImage = null;
         let uploadedImagePath = null;
+        // Keep the uncropped source for header/key extraction.  The working
+        // image is intentionally replaced after a panel crop, which normally
+        // removes the well-log header from view.
+        let originalUploadedImage = null;
+        let originalImageWidth = 0;
+        let originalImageHeight = 0;
         let lastTrackAnalysis = null;
         let trackGuidanceByIndex = [];
         let originalUploadedImagePath = null;
@@ -12080,6 +12086,9 @@
                     originalUploadedImagePath = uploadedImagePath;
                     imageWidth = data.width;
                     imageHeight = data.height;
+                    originalUploadedImage = data.image;
+                    originalImageWidth = data.width;
+                    originalImageHeight = data.height;
                     allTracks = sanitizeTrackPairs(data.all_tracks || data.tracks || []);
                     detectedTracks = sanitizeTrackPairs(data.tracks || []);
                     // User requested to NOT auto-select the panel on upload ("confusing blue bar").
@@ -12391,6 +12400,9 @@
             const textAnalysisUnavailable = valid.some((result) =>
                 result.fallbackMode === 'edge_detection_no_ai_provider'
             );
+            const noHeaderTextDetected = valid.some((result) =>
+                result.fallbackMode === 'edge_detection_no_header_text'
+            );
 
             return {
                 metadata: mergedMetadata,
@@ -12400,6 +12412,7 @@
                 anyTracksDetected,
                 genericTrackCount,
                 textAnalysisUnavailable,
+                noHeaderTextDetected,
                 usedTrackFallback: !!(bestTrackResult && bestTrackResult.fallbackMode),
             };
         }
@@ -12449,7 +12462,9 @@
                 } else if (result.anyTracksDetected) {
                     summaryEl.textContent = result.textAnalysisUnavailable
                         ? 'Detected track geometry, but text analysis is not configured on this server. Existing Step 4 labels were left unchanged.'
-                        : 'Detected track geometry, but no reliable curve labels or scales were identified. Existing Step 4 labels were left unchanged.';
+                        : result.noHeaderTextDetected
+                            ? 'Detected track geometry, but no readable header text was found in the selected scan area. Existing Step 4 labels were left unchanged.'
+                            : 'Detected track geometry, but no reliable curve labels or scales were identified. Existing Step 4 labels were left unchanged.';
                 } else {
                     summaryEl.textContent = 'Header capture found no usable fields or labeled tracks. Try a clearer selection.';
                 }
@@ -12465,7 +12480,9 @@
                 showStatus(
                     result.textAnalysisUnavailable
                         ? 'Track geometry was detected, but text analysis is not configured on this server.'
-                        : 'Track geometry was detected, but no reliable curve labels or scales were identified.',
+                        : result.noHeaderTextDetected
+                            ? 'Track geometry was detected, but no readable header text was found in the selected scan area.'
+                            : 'Track geometry was detected, but no reliable curve labels or scales were identified.',
                     'warning'
                 );
             } else {
@@ -12477,8 +12494,8 @@
             return true;
         }
 
-        async function requestHeaderCaptureFromRegion(region) {
-            if (!uploadedImage || !imageWidth || !imageHeight || !region) {
+        async function requestHeaderCaptureFromRegion(region, sourceImage = uploadedImage) {
+            if (!sourceImage || !region) {
                 return { success: false, error: 'No header region selected.' };
             }
 
@@ -12496,7 +12513,7 @@
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    image: uploadedImage,
+                    image: sourceImage,
                     region: {
                         left_px: left,
                         right_px: right,
@@ -12696,22 +12713,22 @@
             const detailsEl = document.getElementById('headerMetadataDetails');
             if (detailsEl) detailsEl.open = true;
 
+            // Use the original scan when available. Cropping replaces
+            // uploadedImage with the body-only working panel, which otherwise
+            // makes a subsequent header extraction inspect grid/curve content
+            // instead of the actual log header.
+            const headerSourceImage = originalUploadedImage || uploadedImage;
+            const headerSourceWidth = originalImageWidth || imageWidth;
+            const headerSourceHeight = originalImageHeight || imageHeight;
+
             // Most log keys fit in the top 12%. A tighter band avoids treating
             // calibration tables in the log body as curve labels.
-            const topPxInput = document.getElementById('topPx');
-            let bottomBound = Math.floor(imageHeight * 0.12);
+            let bottomBound = Math.floor(headerSourceHeight * 0.12);
             
-            if (topPxInput && topPxInput.value) {
-                const topPxVal = parseFloat(topPxInput.value);
-                if (topPxVal > 50) {
-                    bottomBound = Math.min(bottomBound, topPxVal);
-                }
-            }
-
             // --- Scan top ---
             headerRegion = {
                 left_px: 0,
-                right_px: imageWidth,
+                right_px: headerSourceWidth,
                 top_px: 0,
                 bottom_px: bottomBound
             };
@@ -12722,21 +12739,21 @@
 
             try {
                 const captureResults = [];
-                const topResult = await requestHeaderCaptureFromRegion(headerRegion);
+                const topResult = await requestHeaderCaptureFromRegion(headerRegion, headerSourceImage);
                 if (topResult.success) {
                     captureResults.push(topResult);
                 }
 
                 // Scan a tighter footer band so OCR does not downsample readable labels into noise.
-                const bottomStart = Math.floor(imageHeight * 0.80);
-                if (bottomStart < imageHeight - 10) {
+                const bottomStart = Math.floor(headerSourceHeight * 0.80);
+                if (bottomStart < headerSourceHeight - 10) {
                     headerRegion = {
                         left_px: 0,
-                        right_px: imageWidth,
+                        right_px: headerSourceWidth,
                         top_px: bottomStart,
-                        bottom_px: imageHeight
+                        bottom_px: headerSourceHeight
                     };
-                    const bottomResult = await requestHeaderCaptureFromRegion(headerRegion);
+                    const bottomResult = await requestHeaderCaptureFromRegion(headerRegion, headerSourceImage);
                     if (bottomResult.success) {
                         captureResults.push(bottomResult);
                     }
@@ -18343,6 +18360,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         
         let imageLoadWarning = '';
         let dataUrl = null;
+        let originalDataUrl = null;
+        let originalSourceSize = null;
         try {
             if (!logData.original_image_path && !logData.cropped_image_path) {
                 throw new Error("No image stored for this log");
@@ -18357,6 +18376,31 @@ document.addEventListener('DOMContentLoaded', async () => {
                 reader.onload = () => resolve(reader.result);
                 reader.readAsDataURL(blob);
             });
+
+            // The visible image may be the cropped working panel. Keep the
+            // original scan available so automatic header capture remains
+            // useful after reopening a saved log.
+            const originalResponse = await fetch(`${imgPath}?variant=original`);
+            if (originalResponse.ok) {
+                const originalBlob = await originalResponse.blob();
+                originalDataUrl = await new Promise((resolve) => {
+                    const reader = new FileReader();
+                    reader.onload = () => resolve(reader.result);
+                    reader.onerror = () => resolve(null);
+                    reader.readAsDataURL(originalBlob);
+                });
+                if (originalDataUrl) {
+                    originalSourceSize = await new Promise((resolve) => {
+                        const originalImage = new Image();
+                        originalImage.onload = () => resolve({
+                            width: originalImage.naturalWidth,
+                            height: originalImage.naturalHeight,
+                        });
+                        originalImage.onerror = () => resolve(null);
+                        originalImage.src = originalDataUrl;
+                    });
+                }
+            }
         } catch (imageErr) {
             console.warn('Saved log image is unavailable; restoring LAS data only.', imageErr);
             imageLoadWarning = ' Saved image is missing, so LAS/header data was restored without the original image.';
@@ -18372,6 +18416,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         uploadedImage = dataUrl;
         uploadedImagePath = logData.cropped_image_path || logData.original_image_path;
         originalUploadedImagePath = logData.original_image_path;
+        originalUploadedImage = originalDataUrl || dataUrl;
+        originalImageWidth = originalSourceSize?.width || 0;
+        originalImageHeight = originalSourceSize?.height || 0;
         lastLasContent = logData.las_content || null;
         curveWrapMarkers = {};
         lastLasFilename = (logData.name || 'digitized_log').replace(/ /g, '_') + '.las';
