@@ -8588,7 +8588,9 @@ def _detect_text_paddleocr(image_bytes, preserve_detail=False):
             pages = list(reader.predict(
                 prepared_img,
                 text_rec_score_thresh=0.2,
-                use_textline_orientation=True,
+                # The reader is deliberately initialized without the optional
+                # orientation model, so do not request it at inference time.
+                use_textline_orientation=False,
             ))
 
         raw_text = []

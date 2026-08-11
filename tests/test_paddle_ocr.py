@@ -48,6 +48,7 @@ class PaddleOcrTests(unittest.TestCase):
         self.assertEqual(payload['raw'][0]['vertices'][0], {'x': 10, 'y': 20})
         self.assertEqual([entry['value'] for entry in payload['numbers']], [0.0, 150.0])
         self.assertIn('GAMMA RAY', payload['full_text'])
+        self.assertFalse(reader.predict.call_args.kwargs['use_textline_orientation'])
 
     def test_local_provider_uses_paddle_without_calling_google(self):
         paddle_result = {
