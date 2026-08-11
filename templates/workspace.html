@@ -13739,7 +13739,9 @@
             const typeRanges = [
                 { type: 'GR',   low: 0.0,   high: 200.0, label: 'GR (Gamma Ray, API)' },
                 { type: 'RHOB', low: 1.7,   high: 3.0,   label: 'RHOB (Density, g/cc)' },
-                { type: 'DT',   low: 40.0,  high: 200.0, label: 'DT/DTCO (Sonic, µs/ft)' },
+                // The DTC card defaults to 30–110. The previous broad
+                // 40–200 range tied 30–110 with GR, and GR won by order.
+                { type: 'DT',   low: 30.0,  high: 110.0, label: 'DT/DTCO (Sonic, µs/ft)' },
                 { type: 'NPHI', low: 0.0,   high: 0.5,   label: 'NPHI (Neutron, v/v)' }
             ];
 
