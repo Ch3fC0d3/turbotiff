@@ -14523,6 +14523,17 @@
                 const showTraceEl = document.getElementById(`showTrace${i}`);
                 const hideFillEl = document.getElementById(`hideTrackFill${i}`);
 
+                // Apply the type identity immediately for newly generated
+                // cards.  Previously this happened only after selecting the
+                // Type control or visiting Step 5, which left a fresh DTC
+                // card visibly labelled DT/API even though its export fields
+                // were already DTC/US/F.
+                syncCurveTypeToLabels(i, { syncDisplay: true });
+                const initialCardLabel = document.getElementById(`curveCardLabel${i}`);
+                if (initialCardLabel && nameEl && nameEl.value.trim()) {
+                    initialCardLabel.textContent = nameEl.value.trim();
+                }
+
                 // When a Left/Right pixel input gains focus, arm a one-click
                 // picker so the next click on the log sets that edge for this
                 // specific curve. This only updates X pixels for that curve;
