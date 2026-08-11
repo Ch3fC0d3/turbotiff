@@ -8899,7 +8899,13 @@ def _detect_text_google_vision(image_bytes):
 
 def detect_text_vision_api(image_bytes, preserve_detail=False):
     """Detect text with the configured provider and resilient local fallbacks."""
-    provider = str(os.getenv('OCR_PROVIDER', 'local')).strip().lower()
+    # Preserve the historic behavior for installations that already have
+    # working Google Vision credentials: use that higher-quality OCR service
+    # unless an operator explicitly chooses a local engine.  The previous
+    # default of ``local`` silently bypassed Vision even when it was available.
+    provider = str(os.getenv('OCR_PROVIDER', '')).strip().lower()
+    if not provider:
+        provider = 'google' if VISION_API_AVAILABLE and vision_client is not None else 'local'
 
     if provider in {'google', 'google_vision', 'vision'}:
         google_result = _detect_text_google_vision(image_bytes)

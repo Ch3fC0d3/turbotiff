@@ -67,6 +67,27 @@ class PaddleOcrTests(unittest.TestCase):
         google.assert_not_called()
         easy.assert_not_called()
 
+    def test_unset_provider_prefers_configured_google_vision(self):
+        google_result = {
+            'raw': [{'text': 'GAMMA RAY'}],
+            'numbers': [],
+            'suggestions': {},
+            'engine': 'google_vision',
+        }
+
+        with patch.dict(os.environ, {'OCR_PROVIDER': ''}):
+            with patch.object(web_app, 'VISION_API_AVAILABLE', True), \
+                    patch.object(web_app, 'vision_client', object()), \
+                    patch.object(web_app, '_detect_text_google_vision', return_value=google_result) as google, \
+                    patch.object(web_app, '_detect_text_paddleocr') as paddle, \
+                    patch.object(web_app, '_detect_text_easyocr') as easy:
+                payload = web_app.detect_text_vision_api(self.image_bytes, preserve_detail=True)
+
+        self.assertIs(payload, google_result)
+        google.assert_called_once_with(self.image_bytes)
+        paddle.assert_not_called()
+        easy.assert_not_called()
+
     def test_local_provider_falls_back_to_easyocr(self):
         paddle_result = {
             'raw': [],
@@ -82,7 +103,8 @@ class PaddleOcrTests(unittest.TestCase):
         }
 
         with patch.dict(os.environ, {'OCR_PROVIDER': 'local'}):
-            with patch.object(web_app, '_detect_text_paddleocr', return_value=paddle_result):
+            with patch.object(web_app, 'PADDLE_OCR_AVAILABLE', False), \
+                    patch.object(web_app, '_detect_text_paddleocr', return_value=paddle_result):
                 with patch.object(web_app, '_detect_text_easyocr', return_value=easy_result):
                     payload = web_app.detect_text_vision_api(self.image_bytes)
 
