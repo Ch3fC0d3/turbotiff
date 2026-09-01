@@ -2164,13 +2164,10 @@
                 : (value == null ? 0 : Math.floor(value / width)));
             const explicitBreaks = Array.from(new Set((Array.isArray(trace.explicit_breaks) ? trace.explicit_breaks : [])
                 .filter(row => Number.isInteger(row) && row > 0 && row < unwrapped.length))).sort((a, b) => a - b);
-            for (let row = 1; row < unwrapped.length; row++) {
-                if (unwrapped[row - 1] == null || unwrapped[row] == null) explicitBreaks.push(row);
-            }
             return {
                 unwrapped_x: unwrapped,
                 wrap_cycle: wrapCycle,
-                explicit_breaks: Array.from(new Set(explicitBreaks)).sort((a, b) => a - b),
+                explicit_breaks: explicitBreaks,
                 track_width: width,
                 track_left_px: Number.isFinite(Number(trace.track_left_px)) ? Number(trace.track_left_px) : (track ? Math.min(track.leftX, track.rightX) : 0),
             };
@@ -15941,9 +15938,11 @@
                             group = [];
                             return;
                         }
+                        const rawX = (manualPoint && manualPoint[5] != null) ? manualPoint[5] : (valid[0] && valid[0][5]);
+                        const cycle = (manualPoint && manualPoint[6] != null) ? manualPoint[6] : (valid[0] && valid[0][6]);
                         collapsed.push(Number.isInteger(depthIdx)
-                            ? [medianX, yCanonical, depthIdx]
-                            : [medianX, yCanonical]);
+                            ? [medianX, yCanonical, depthIdx, 'collapsed', Date.now(), rawX, cycle]
+                            : [medianX, yCanonical, null, 'collapsed', Date.now(), rawX, cycle]);
                         group = [];
                     };
                     for (const pt of pts) {
@@ -15988,6 +15987,13 @@
                         : Math.max(2.0, effectiveLineLength);
                     const halfStick = stickLen * 0.5;
                     const renderStickSegments = false;
+                    const allowShelfBridge = !isBlackLikeMode;
+                    const shouldBreakVisualBridge = (p0, p1, pts, leftIdx, rightIdx) => {
+                        if (!isImplausibleJump(p0, p1)) return false;
+                        if (!allowShelfBridge) return true;
+                        return !isShelfTransition(pts, leftIdx, rightIdx) &&
+                            !isSteppedPlateauTransition(pts, leftIdx, rightIdx);
+                    };
                     // First, draw a thin connecting polyline. Explicit scale-wrap
                     // jumps stay in the data, but are not drawn across the chart face.
                     if (sortedPoints.length >= 2) {
@@ -16052,7 +16058,7 @@
                             const previousRow = Array.isArray(previous) ? previous[2] : null;
                             const currentRow = Array.isArray(current) ? current[2] : null;
                             if (!Number.isInteger(previousRow) || !Number.isInteger(currentRow)) return false;
-                            if (canonicalBreakRows.has(currentRow)) return true;
+                            if (canonicalBreakRows.has(currentRow) && Math.abs(currentRow - previousRow) <= 1) return true;
                             return !!(canonicalCycles && canonicalCycles[previousRow] !== canonicalCycles[currentRow]);
                         };
 

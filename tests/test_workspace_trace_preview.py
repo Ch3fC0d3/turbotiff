@@ -2357,6 +2357,47 @@ def test_overlay_breaks_on_any_missing_trace_row():
     assert "const jumpBreakMaxRowGap = 1.0;" in overlay_source
 
 
+def test_canonical_overlay_preserves_null_rows_instead_of_drawing_them_at_zero():
+    source = WORKSPACE_TEMPLATE.read_text(encoding="utf-8")
+    normalize_source = _function_source(
+        source, "normalizeCanonicalTrace", "canonicalTraceToOverlayPoints"
+    )
+    overlay_source = _function_source(
+        source, "canonicalTraceToOverlayPoints", "getCanonicalTraceForCurve"
+    )
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required for the canonical overlay harness")
+    harness = r"""
+const assert = require('assert');
+function findTrackByCurveId() { return null; }
+function getPixelYForDepthIndex(row) { return 1000 + row; }
+const trace = {
+  unwrapped_x: [97, null, 101],
+  wrap_cycle: [0, 0, 1],
+  explicit_breaks: [],
+  track_width: 100,
+  track_left_px: 20,
+};
+const canonical = normalizeCanonicalTrace(trace);
+assert.deepStrictEqual(canonical.unwrapped_x, [97, null, 101]);
+assert.deepStrictEqual(canonical.explicit_breaks, []);
+const points = canonicalTraceToOverlayPoints(trace, 'DTC');
+assert.strictEqual(points.length, 2);
+assert.deepStrictEqual(points.map(point => point.slice(0, 3)), [
+  [117, 1000, 0],
+  [21, 1002, 2],
+]);
+"""
+    result = subprocess.run(
+        [node, "-"],
+        input="\n".join((normalize_source, overlay_source, harness)).encode("utf-8"),
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+
+
 def test_linked_wrap_pair_tool_validates_edges_and_preserves_render_breaks():
     source = WORKSPACE_TEMPLATE.read_text(encoding="utf-8")
     validation_start = source.index("function validateWrapPair(")
