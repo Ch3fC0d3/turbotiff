@@ -6846,14 +6846,17 @@ def should_preserve_black_trace_detail(mode, curve_type=None, curve_name=None, p
     assumption is wrong for DTC/DT-style curves, especially on wrapped tracks,
     where the printed line legitimately changes direction over only a few rows.
     """
-    if str(mode or "").strip().lower() != "black":
+    mode_str = str(mode or "").strip().lower()
+    if mode_str not in {"black", "classic", "dark", "auto"}:
         return False
     identifiers = {
         str(curve_type or "").strip().upper(),
         str(curve_name or "").strip().upper(),
     }
     sonic_names = {"DTC", "DT", "DTCO", "AC", "SONIC"}
-    return bool(preserve_wiggles or (identifiers & sonic_names))
+    return bool(preserve_wiggles or (identifiers & sonic_names) or any(
+        token in identifier for identifier in identifiers for token in ("DT", "SONIC", "CALIP", "SPAN")
+    ))
 
 
 def resolve_curve_hot_side(
@@ -12787,22 +12790,25 @@ def digitize():
             str(curve_type or '').strip().upper(),
             str(name or '').strip().upper(),
         }
+        mode_lower = str(mode or '').strip().lower()
+        is_black_like = mode_lower in {'black', 'classic', 'dark'}
         is_black_gr = (
-            str(mode or '').strip().lower() == 'black'
+            is_black_like
             and bool(black_gr_names & {'GR', 'GAMMA', 'GAMMA RAY'})
         )
         high_excursion_names = {
             'GR', 'GAMMA', 'GAMMA RAY',
             'CALI', 'CAL', 'CALIPER', 'HCAL', 'DCAL',
             'SPAN', 'C1', 'C2', 'C3', 'C4',
+            'DTC', 'DT', 'DTCO', 'AC', 'SONIC',
         }
         named_high_excursion = bool(black_gr_names & high_excursion_names) or any(
             token in identifier
             for identifier in black_gr_names
-            for token in ('CALIP', 'SPAN')
+            for token in ('CALIP', 'SPAN', 'DT', 'SONIC')
         )
         high_excursion_black = (
-            str(mode or '').strip().lower() == 'black'
+            is_black_like
             and (named_high_excursion or preserve_wiggles or crest_boost)
         )
         trace_runtime_diagnostics = {
@@ -13043,7 +13049,7 @@ def digitize():
                 max_step_dp = 200  # Allow unlimited movement to follow gamma ray spikes
             else:
                 curve_type_upper = curve_type.upper()
-                if curve_type_upper == "GR":
+                if curve_type_upper in {"GR", "DTC", "DT", "DTCO", "AC", "SONIC"} or wrap_enabled or preserve_black_detail or high_excursion_black:
                     dp_smooth_lambda = 0.001
                     dp_curv_lambda = 0.001
                     max_step_dp = 150
@@ -13057,11 +13063,7 @@ def digitize():
                 analysis_guidance,
                 mask.shape[1],
             )
-            # A curve cannot physically jump hundreds of pixels between adjacent
-            # raster rows. The previous 150-200px setting made Viterbi work
-            # proportional to billions of transitions on tall logs and caused
-            # Railway to return 502 while the worker continued for 20 minutes.
-            default_step_cap = 28 if high_excursion_black else 10
+            default_step_cap = 64 if (high_excursion_black or wrap_enabled or preserve_black_detail) else 28
             try:
                 configured_cap = int(
                     os.environ.get(
@@ -13071,7 +13073,7 @@ def digitize():
                 )
             except (TypeError, ValueError):
                 configured_cap = default_step_cap
-            max_step_cap = max(3, min(32, configured_cap))
+            max_step_cap = max(3, min(128, configured_cap))
             max_step_dp = min(max_step_dp, max_step_cap)
             print(
                 f"[digitize-curve-start] curve={name} mode={mode} "
